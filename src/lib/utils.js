@@ -24,9 +24,42 @@ export const statusLabel = s => s === "critical" ? "bg-red-500/20 text-red-400" 
 
 // === CORE CALCS ===
 export const cAI = c => (c.raw || 0) + (c.inb || 0) + (c.pp || 0) + (c.jfn || 0) + (c.pq || 0) + (c.ji || 0) + (c.fba || 0);
-export const cNQ = (c, td) => Math.ceil(Math.max(0, td * c.dsr - cAI(c)));
-export const cOQ = (nq, moq) => nq <= 0 ? 0 : Math.max(nq, moq || 0);
+
+// Spike detection: if 7D DSR is 25%+ higher than DSR, use 7D DSR
+export const effectiveDSR = c => {
+  if (c.d7 > 0 && c.dsr > 0 && c.d7 >= c.dsr * 1.25) return c.d7;
+  return c.dsr;
+};
+
+// Round up to next multiple of case pack
+export const roundToCasePack = (qty, casePack) => {
+  if (!casePack || casePack <= 1) return qty;
+  return Math.ceil(qty / casePack) * casePack;
+};
+
+// Core need qty with spike detection + case pack rounding
+export const cNQ = (c, td, casePack) => {
+  const dsr = effectiveDSR(c);
+  const raw = Math.ceil(Math.max(0, td * dsr - cAI(c)));
+  return raw;
+};
+
+// Order qty: round up to MOQ, then to case pack
+export const cOQ = (nq, moq, casePack) => {
+  if (nq <= 0) return 0;
+  let oq = Math.max(nq, moq || 0);
+  return roundToCasePack(oq, casePack);
+};
+
 export const cDA = (c, oq) => oq <= 0 ? Math.round(c.doc) : c.dsr > 0 ? Math.round((cAI(c) + oq) / c.dsr) : 999;
+
+// Bundle need qty (for bundle-only or mix mode)
+export const bNQ = (b, td) => {
+  const dsr = b.cd || 0;
+  const inv = b.fibInv || 0;
+  return Math.ceil(Math.max(0, td * dsr - inv));
+};
+
 export const isD = co => DOM.includes((co || "").toLowerCase().trim());
 export const gTD = (v, s) => isD(v?.country) ? s.domesticDoc : s.intlDoc;
 
@@ -36,6 +69,8 @@ export const fE = s => { if (!s) return ""; try { const p = s.split("-"); return
 export const fD = s => { if (!s) return ""; try { const p = s.split("-"); return MN[parseInt(p[1]) - 1] + " " + parseInt(p[2]) } catch { return s } };
 export const td = () => new Date().toISOString().split('T')[0];
 export const fSl = s => { if (!s) return ""; try { const p = s.split("-"); return p[1] + "/" + p[2] + "/" + p[0] } catch { return s } };
+// MM/YY format for LastPO
+export const fMY = s => { if (!s) return ""; try { const p = s.split("-"); return p[1] + "/" + p[0].slice(2) } catch { return s } };
 export const cMo = () => { const d = new Date(); return { y: d.getFullYear(), m: d.getMonth() + 1 } };
 export const gY = h => [...new Set(h.map(x => x.y))].filter(y => y >= 2024).sort();
 
