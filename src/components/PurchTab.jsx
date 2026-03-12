@@ -1,8 +1,8 @@
 import React, { useState, useMemo, useCallback, useEffect, Fragment } from "react";
 import { R, D1, $, $2, $4, P, gS, cAI, cNQ, cOQ, cDA, bNQ, isD, gTD, dc, cSeas, fSl, fMY, fE, effectiveDSR, roundToCasePack, genPO, genRFQ, cp7f, cp7g } from "../lib/utils";
-import { Dot, Toast, TH, SS } from "./Shared";
+import { Dot, Toast, TH, SS, WorkflowChip } from "./Shared";
 
-export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, setOv, initV, clearIV }) {
+export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, setOv, initV, clearIV, saveWorkflow, deleteWorkflow }) {
   const [vm, setVm] = useState(initV ? "vendor" : "core");
   const [sort, setSort] = useState("status");
   const [vf, setVf] = useState(initV || "");
@@ -207,6 +207,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
         <button onClick={() => togDismiss(c.id)} className="text-gray-400 hover:text-red-400 text-xs px-0.5">✕</button>
         {pcMap[c.id] && <button onClick={() => togPH(c.id)} className={`text-xs px-0.5 rounded ${showPH[c.id] ? "text-amber-300" : "text-gray-500"}`}>$</button>}
         <button onClick={() => goCore(c.id)} className="text-blue-400 px-0.5 bg-blue-400/10 rounded text-xs">V</button>
+        <div className="relative"><WorkflowChip id={c.id} type="core" workflow={data.workflow} onSave={saveWorkflow} onDelete={deleteWorkflow} buyer={stg.buyer} /></div>
       </td>
     </tr>
     {showPH[c.id] && pcMap[c.id] && <tr><td colSpan={40} className="p-0"><div className="bg-gray-800/50 px-4 py-2"><table className="w-full text-xs"><thead><tr className="text-gray-500"><th className="py-1 text-left">Date</th><th className="py-1 text-right">Pcs</th><th className="py-1 text-right">Material</th><th className="py-1 text-right">Inb Ship</th><th className="py-1 text-right">Tariffs</th><th className="py-1 text-right">Total</th><th className="py-1 text-right">CPP</th></tr></thead><tbody>{pcMap[c.id].map((r, i) => <tr key={i} className="border-t border-gray-700/30"><td className="py-1 text-gray-300">{fSl(r.date)}</td><td className="py-1 text-right">{R(r.pcs)}</td><td className="py-1 text-right">{$2(r.matPrice)}</td><td className="py-1 text-right text-gray-400">{$2(r.inbShip)}</td><td className="py-1 text-right text-gray-400">{$2(r.tariffs)}</td><td className="py-1 text-right">{$2(r.totalCost)}</td><td className="py-1 text-right text-amber-300">{$2(r.cpp)}</td></tr>)}</tbody></table></div></td></tr>}
@@ -299,6 +300,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
         <div className="bg-gray-900 px-4 py-3">
           <div className="flex flex-wrap items-center gap-3 mb-2">
             <span className="text-white font-semibold">{v.name}</span>
+            <div className="relative"><WorkflowChip id={v.name} type="vendor" workflow={data.workflow} onSave={saveWorkflow} onDelete={deleteWorkflow} buyer={stg.buyer} /></div>
             {v.country && <span className="text-xs text-gray-500">{v.country}</span>}
             <span className="text-xs text-gray-400">LT:{v.lt}d</span>
             <span className="text-xs text-gray-400">Buf:{grp.cores[0]?.buf || 14}d</span>
