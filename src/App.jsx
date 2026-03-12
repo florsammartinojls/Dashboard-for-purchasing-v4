@@ -93,16 +93,21 @@ function GlossTab() {
 const TABS = [{ id: "purchasing", l: "Purchasing" }, { id: "core", l: "Core Detail" }, { id: "bundle", l: "Bundle Detail" }, { id: "vendors", l: "Vendors" }, { id: "glossary", l: "Glossary" }];
 
 export default function App() {
-  const [tab, setTab] = useState("purchasing");
+  // Read URL params for deep linking (new tab support)
+  const urlParams = useMemo(() => new URLSearchParams(window.location.search), []);
+  const initCore = urlParams.get('core');
+  const initBundle = urlParams.get('bundle');
+  const initVendorParam = urlParams.get('vendor');
+  const [tab, setTab] = useState(initCore ? "core" : initBundle ? "bundle" : "purchasing");
   const [showS, setShowS] = useState(false);
   const [stg, setStg] = useState({ buyer: '', domesticDoc: 90, intlDoc: 180, fA: "yes", fI: "blank", fV: "yes" });
-  const [coreId, setCoreId] = useState(null);
-  const [bundleId, setBundleId] = useState(null);
+  const [coreId, setCoreId] = useState(initCore || null);
+  const [bundleId, setBundleId] = useState(initBundle || null);
   const [data, setData] = useState({ cores: [], bundles: [], vendors: [], sales: [], fees: [], inbound: [], abcA: [], abcT: [], abcSub: '', restock: [], priceComp: [], agedInv: [], killMgmt: [] });
   const [hist, setHist] = useState({ bundleSales: [], coreInv: [], bundleInv: [], priceHist: [] });
   const [daily, setDaily] = useState({ coreDays: [], bundleDays: [] });
   const [ov, setOv] = useState({});
-  const [initV, setInitV] = useState(null);
+  const [initV, setInitV] = useState(initVendorParam || null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [ts, setTs] = useState("");
