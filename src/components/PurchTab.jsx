@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useCallback, useEffect, Fragment } from "react";
-import { R, D1, $, $2, $4, P, gS, cAI, cNQ, cOQ, cDA, isD, gTD, dc, cSeas, fSl, fE, genPO, genRFQ, cp7f, cp7g } from "../lib/utils";
+import { R, D1, $, $2, $4, P, gS, cAI, cNQ, cOQ, cDA, bNQ, isD, gTD, dc, cSeas, fSl, fMY, fE, effectiveDSR, roundToCasePack, genPO, genRFQ, cp7f, cp7g } from "../lib/utils";
 import { Dot, Toast, TH, SS } from "./Shared";
 
 export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, setOv, initV, clearIV }) {
@@ -18,7 +18,6 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
   const [showPH, setShowPH] = useState({});
   const [collapsed, setCollapsed] = useState({});
   const [dismissed, setDismissed] = useState({});
-  const [phSearch, setPhSearch] = useState("");
 
   useEffect(() => { if (initV) { setVm("vendor"); setVf(initV); clearIV() } }, [initV, clearIV]);
 
@@ -49,9 +48,9 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
     const v = vMap[c.ven] || {}; const lt = v.lt || 30; const tg = gTD(v, stg);
     const cd = lt; const wd = lt + (c.buf || 14);
     const st = gS(c.doc, lt, c.buf, { critDays: cd, warnDays: wd });
-    const ai = cAI(c); const nq = cNQ(c, tg); const oq = cOQ(nq, c.moq);
+    const ai = cAI(c); const nq = cNQ(c, tg); const oq = cOQ(nq, c.moq, c.casePack);
     const seas = cSeas(c.id, (data._coreInv || []));
-    return { ...c, status: st, allIn: ai, needQty: nq, orderQty: oq, needDollar: +(oq * c.cost).toFixed(2), docAfter: cDA(c, oq), lt, critDays: cd, warnDays: wd, targetDoc: tg, vc: v.country || "", seas, isDom: isD(v.country) };
+    return { ...c, status: st, allIn: ai, needQty: nq, orderQty: oq, needDollar: +(oq * c.cost).toFixed(2), docAfter: cDA(c, oq), lt, critDays: cd, warnDays: wd, targetDoc: tg, vc: v.country || "", seas, isDom: isD(v.country), spike: c.d7 > 0 && c.dsr > 0 && c.d7 >= c.dsr * 1.25 };
   }).filter(c => {
     if (vf && c.ven !== vf) return false;
     if (sf && c.status !== sf) return false;
@@ -111,7 +110,44 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
     return items;
   };
 
-  const fillR = cores => { const u = { ...ov }; cores.filter(c => c.needQty > 0).forEach(c => { u[c.id] = { ...(u[c.id] || {}), pcs: cOQ(c.needQty, c.moq) } }); setOv(u) };
+  const fillR = (cores, bundles, mode) => {
+    const u = { ...ov };
+    if (mode === "bundles") {
+      // Bundles only: fill bundles by FIB DOC target
+      (bundles || []).forEach(b => {
+        const need = bNQ(b, cores[0]?.targetDoc || 90);
+        if (need > 0) u[b.j] = { ...(u[b.j] || {}), pcs: need };
+      });
+    } else if (mode === "mix") {
+      // Mix: fill bundles first, small ones go to core
+      const coreExtras = {};
+      (bundles || []).forEach(b => {
+        const tg = cores[0]?.targetDoc || 90;
+        const need = bNQ(b, tg);
+        if (need <= 0) return;
+        // Find vendor MOQ for this bundle's core
+        const parentCore = cores.find(c => c.id === b.core1);
+        const moq = parentCore?.moq || 0;
+        if (need < moq && parentCore) {
+          // Too small → add to core extras
+          coreExtras[parentCore.id] = (coreExtras[parentCore.id] || 0) + need;
+        } else {
+          u[b.j] = { ...(u[b.j] || {}), pcs: need };
+        }
+      });
+      // Fill cores with their own need + extras from small bundles
+      cores.filter(c => c.needQty > 0 || coreExtras[c.id]).forEach(c => {
+        const totalNeed = (c.needQty > 0 ? c.needQty : 0) + (coreExtras[c.id] || 0);
+        u[c.id] = { ...(u[c.id] || {}), pcs: cOQ(totalNeed, c.moq, c.casePack) };
+      });
+    } else {
+      // Cores only (default)
+      cores.filter(c => c.needQty > 0).forEach(c => {
+        u[c.id] = { ...(u[c.id] || {}), pcs: cOQ(c.needQty, c.moq, c.casePack) };
+      });
+    }
+    setOv(u);
+  };
   const clrV = (cores, bundles) => { const u = { ...ov }; cores.forEach(c => { delete u[c.id] }); (bundles || []).forEach(b => { delete u[b.j] }); setOv(u) };
   const getRS = id => (rsMap[id] || [])[0];
   const togPH = id => setShowPH(p => ({ ...p, [id]: !p[id] }));
@@ -120,18 +156,6 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
 
   // Last purchase info for a core
   const lastPurch = id => { const rows = pcMap[id]; if (!rows || !rows.length) return null; return rows[0] };
-
-  // Price history rows for search
-  const phResults = useMemo(() => {
-    if (!phSearch || phSearch.length < 3) return [];
-    const q = phSearch.toLowerCase();
-    const matched = {};
-    (data.priceComp || []).forEach(r => {
-      if (r.core.toLowerCase().includes(q)) { if (!matched[r.core]) matched[r.core] = []; matched[r.core].push(r) }
-    });
-    Object.keys(matched).forEach(k => { matched[k].sort((a, b) => (b.date || "").localeCompare(a.date || "")); matched[k] = matched[k].slice(0, 4) });
-    return Object.entries(matched).slice(0, 5);
-  }, [phSearch, data.priceComp]);
 
   // === CORE ROW ===
   const CoreRow = ({ c, mixAdj }) => {
@@ -148,12 +172,12 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
       <td className="py-1 px-1 text-gray-200 truncate max-w-[140px]">{c.ti}</td>
       <td className="py-1 px-1 text-right">{D1(c.dsr)}</td>
       <td className="py-1 px-1 text-right">{D1(c.d7)}</td>
-      <td className="py-1 px-1 text-center">{c.d7 > c.dsr ? <span className="text-emerald-400">▲</span> : c.d7 < c.dsr ? <span className="text-red-400">▼</span> : "—"}</td>
+      <td className="py-1 px-1 text-center">{c.d7 > c.dsr ? <span className={c.spike ? "text-orange-400 font-bold" : "text-emerald-400"}>▲</span> : c.d7 < c.dsr ? <span className="text-red-400">▼</span> : "—"}{c.spike && <span className="text-orange-400 text-xs ml-0.5" title="Spike: 7D DSR 25%+ above DSR">⚡</span>}</td>
       <td className={`py-1 px-1 text-right font-semibold ${dc(c.doc, c.critDays, c.warnDays)}`}>{R(c.doc)}</td>
       <td className="py-1 px-1 text-right">{R(c.allIn)}{adj > 0 && <span className="text-teal-400 ml-0.5">+{adj}</span>}</td>
       <td className="py-1 px-1 text-right text-gray-400">{c.moq > 0 ? R(c.moq) : "—"}</td>
       <td className="py-1 px-1 text-right text-gray-400">{c.casePack > 0 ? R(c.casePack) : "—"}</td>
-      <td className="py-1 px-1 text-right text-gray-500 text-xs">{lp ? fSl(lp.date) : "—"}</td>
+      <td className="py-1 px-1 text-right text-gray-500 text-xs">{lp ? fMY(lp.date) : "—"}</td>
       <td className="py-1 px-1 text-center">{c.seas && <span className="text-purple-400 font-bold">{c.seas.peak}</span>}</td>
       <td className="py-1 px-1 text-right text-gray-400">{c.orderQty > 0 ? R(c.orderQty) : "—"}</td>
       {!isCol && <>
@@ -185,7 +209,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
         <button onClick={() => goCore(c.id)} className="text-blue-400 px-0.5 bg-blue-400/10 rounded text-xs">V</button>
       </td>
     </tr>
-    {showPH[c.id] && pcMap[c.id] && <tr><td colSpan={40} className="p-0"><div className="bg-gray-800/50 px-4 py-2"><table className="w-full text-xs"><thead><tr className="text-gray-500"><th className="py-1 text-left">Date</th><th className="py-1 text-right">Pcs</th><th className="py-1 text-right">Material</th><th className="py-1 text-right">Inb Ship</th><th className="py-1 text-right">Tariffs</th><th className="py-1 text-right">Total</th><th className="py-1 text-right">CPP</th><th className="py-1 text-right">%Chg</th><th className="py-1 text-left">Note</th></tr></thead><tbody>{pcMap[c.id].map((r, i) => <tr key={i} className="border-t border-gray-700/30"><td className="py-1 text-gray-300">{fSl(r.date)}</td><td className="py-1 text-right">{R(r.pcs)}</td><td className="py-1 text-right">{$2(r.matPrice)}</td><td className="py-1 text-right text-gray-400">{$2(r.inbShip)}</td><td className="py-1 text-right text-gray-400">{$2(r.tariffs)}</td><td className="py-1 text-right">{$2(r.totalCost)}</td><td className="py-1 text-right text-amber-300">{$2(r.cpp)}</td><td className={`py-1 text-right ${r.pctChg < 0 ? "text-emerald-400" : r.pctChg > 0 ? "text-red-400" : "text-gray-500"}`}>{r.pctChg ? P(r.pctChg * 100) : "—"}</td><td className="py-1 text-gray-400 truncate max-w-[120px]">{r.note || "—"}</td></tr>)}</tbody></table></div></td></tr>}
+    {showPH[c.id] && pcMap[c.id] && <tr><td colSpan={40} className="p-0"><div className="bg-gray-800/50 px-4 py-2"><table className="w-full text-xs"><thead><tr className="text-gray-500"><th className="py-1 text-left">Date</th><th className="py-1 text-right">Pcs</th><th className="py-1 text-right">Material</th><th className="py-1 text-right">Inb Ship</th><th className="py-1 text-right">Tariffs</th><th className="py-1 text-right">Total</th><th className="py-1 text-right">CPP</th></tr></thead><tbody>{pcMap[c.id].map((r, i) => <tr key={i} className="border-t border-gray-700/30"><td className="py-1 text-gray-300">{fSl(r.date)}</td><td className="py-1 text-right">{R(r.pcs)}</td><td className="py-1 text-right">{$2(r.matPrice)}</td><td className="py-1 text-right text-gray-400">{$2(r.inbShip)}</td><td className="py-1 text-right text-gray-400">{$2(r.tariffs)}</td><td className="py-1 text-right">{$2(r.totalCost)}</td><td className="py-1 text-right text-amber-300">{$2(r.cpp)}</td></tr>)}</tbody></table></div></td></tr>}
     </>;
   };
 
@@ -239,7 +263,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
     {showRS && <><TH tip="FIB Pieces (Restocker)" className="py-2 px-1 text-right text-cyan-400">rFIB</TH><TH tip="Raw Pieces (Restocker)" className="py-2 px-1 text-right text-cyan-400">rRaw</TH><TH tip="Inbound (Restocker)" className="py-2 px-1 text-right text-cyan-400">rInb</TH><TH tip="Case Pack" className="py-2 px-1 text-right text-cyan-400">CPk</TH><TH tip="MOQ Pieces to Order" className="py-2 px-1 text-right text-cyan-400">MOQPcs</TH></>}
     <th className="py-2 border-l-2 border-gray-600 px-1" />
     <TH tip="Pieces to Order" className="py-2 px-1 text-center">Pcs</TH><TH tip="Cases to Order" className="py-2 px-1 text-center">Cas</TH><TH tip="Inbound Shipping Cost" className="py-2 px-1 text-center">InbS</TH><TH tip="Cost per Piece" className="py-2 px-1 text-center">CogP</TH><TH tip="Cost per Case" className="py-2 px-1 text-center">CogC</TH>
-    <th className="py-2 px-1 text-right">Cost</th><TH tip="DOC After Order" className="py-2 px-1 text-right">After</TH><th className="py-2 px-1 w-16">{rsToggle}</th>
+    <th className="py-2 px-1 text-right">Cost</th><TH tip="DOC After Order" className="py-2 px-1 text-right">After DOC</TH><th className="py-2 px-1 w-16">{rsToggle}</th>
   </tr>;
 
   // === RENDER ===
@@ -284,7 +308,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
             {poI.length === 0 ? <span className="ml-auto text-xs text-gray-400 bg-gray-700 px-2 py-0.5 rounded">—</span> : <span className={`ml-auto text-xs font-semibold px-2 py-0.5 rounded ${meets ? "text-emerald-400 bg-emerald-400/10" : "text-red-400 bg-red-400/10"}`}>{meets ? "✓" : "!"} {$(poT)}{poC > 0 ? " / " + poC + "cs" : ""}</span>}
           </div>
           <div className="flex flex-wrap gap-2 items-center">
-            <button onClick={() => fillR(grp.cores)} className="text-xs bg-blue-600/80 text-white px-2.5 py-1 rounded">Fill Rec</button>
+            <button onClick={() => fillR(grp.cores, grp.bundles, vendorSub)} className="text-xs bg-blue-600/80 text-white px-2.5 py-1 rounded">Fill Rec</button>
             <button onClick={() => clrV(grp.cores, grp.bundles)} className="text-xs bg-gray-700 text-gray-300 px-2.5 py-1 rounded">Clear</button>
             <button onClick={() => setDismissed({})} className="text-xs bg-gray-700 text-gray-300 px-2 py-1 rounded">Show All</button>
             <div className="ml-auto flex gap-2">
@@ -304,19 +328,6 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
             })}</>
               : <>{grp.cores.map(c => <CoreRow key={c.id} c={c} />)}</>}
         </tbody></table></div>
-
-        {/* Price History Search */}
-        <div className="bg-gray-900/60 border-t border-gray-800 px-4 py-3">
-          <div className="flex items-center gap-3">
-            <span className="text-gray-500 text-xs">Purchase History:</span>
-            <input type="text" value={phSearch} onChange={e => setPhSearch(e.target.value)} placeholder="Search Core #..." className="bg-gray-800 border border-gray-700 text-white rounded px-2 py-1 text-xs w-40" />
-          </div>
-          {phResults.length > 0 && <div className="mt-2 space-y-2">{phResults.map(([core, rows]) => <div key={core} className="bg-gray-800/50 rounded p-2">
-            <div className="text-blue-400 font-mono text-xs font-semibold mb-1">{core}</div>
-            <table className="w-full text-xs"><thead><tr className="text-gray-500"><th className="py-0.5 text-left">Date</th><th className="py-0.5 text-right">Pcs</th><th className="py-0.5 text-right">Material</th><th className="py-0.5 text-right">Inb Ship</th><th className="py-0.5 text-right">Total</th><th className="py-0.5 text-right">CPP</th><th className="py-0.5 text-right">%Chg</th></tr></thead>
-              <tbody>{rows.map((r, i) => <tr key={i} className="border-t border-gray-700/30"><td className="py-0.5 text-gray-300">{fSl(r.date)}</td><td className="py-0.5 text-right">{R(r.pcs)}</td><td className="py-0.5 text-right">{$2(r.matPrice)}</td><td className="py-0.5 text-right text-gray-400">{$2(r.inbShip)}</td><td className="py-0.5 text-right">{$2(r.totalCost)}</td><td className="py-0.5 text-right text-amber-300">{$2(r.cpp)}</td><td className={`py-0.5 text-right ${r.pctChg < 0 ? "text-emerald-400" : r.pctChg > 0 ? "text-red-400" : ""}`}>{r.pctChg ? P(r.pctChg * 100) : "—"}</td></tr>)}</tbody></table>
-          </div>)}</div>}
-        </div>
       </div>;
     })}
   </div>;
