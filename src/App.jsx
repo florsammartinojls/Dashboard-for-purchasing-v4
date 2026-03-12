@@ -1,4 +1,4 @@
-import{useState,useMemo,useCallback,useEffect,useRef}from"react";
+import React,{useState,useMemo,useCallback,useEffect,useRef,Fragment}from"react";
 import{BarChart,Bar,LineChart,Line,XAxis,YAxis,CartesianGrid,Tooltip,Legend,ResponsiveContainer}from"recharts";
 
 const API='https://script.google.com/macros/s/AKfycbzt83RC7YYrE59ATSs8E5g9724bMdZPwepFHXDU-mM6IJ4g719ixQDj7x6wVoYg_grk9Q/exec';
@@ -176,7 +176,7 @@ function PurchTab({data,stg,goCore,goBundle,ov,setOv,initV,clearIV}){
           <button disabled={!poI.length} onClick={()=>{cp7g(v,poI,poN,stg.buyer);setToast("7g copied!")}} className={`text-xs px-3 py-1.5 rounded font-medium ${poI.length?"bg-purple-600 text-white":"bg-gray-700 text-gray-500 cursor-not-allowed"}`}>7g</button></div></div></div>
         <div className="overflow-x-auto"><table className="w-full text-xs">
           {vendorSub==="bundles"?<><thead><BundleTHead/></thead><tbody>{grp.bundles.map(b=><BundleRow key={b.j} b={b}/>)}{grp.bundles.length===0&&<tr><td colSpan={21} className="py-4 text-center text-gray-500">No bundles for this vendor</td></tr>}</tbody></>
-          :vendorSub==="mix"?<><thead><CoreTHead/></thead><tbody>{grp.cores.map(c=>{const cBundles=(data.bundles||[]).filter(b=>b.core1===c.id&&b.active==="Yes").map(b=>({...b,fee:feMap[b.j],sale:saMap[b.j],margin:feMap[b.j]&&feMap[b.j].pr>0?((feMap[b.j].gp/feMap[b.j].pr)*100):0}));return<React.Fragment key={c.id}><CoreRow c={c}/>{cBundles.map(b=><BundleRow key={b.j} b={b} indent/>)}</React.Fragment>})}</tbody></>
+          :vendorSub==="mix"?<><thead><CoreTHead/></thead><tbody>{grp.cores.map(c=>{const cBundles=(data.bundles||[]).filter(b=>b.core1===c.id&&b.active==="Yes").map(b=>({...b,fee:feMap[b.j],sale:saMap[b.j],margin:feMap[b.j]&&feMap[b.j].pr>0?((feMap[b.j].gp/feMap[b.j].pr)*100):0}));return<Fragment key={c.id}><CoreRow c={c}/>{cBundles.map(b=><BundleRow key={b.j} b={b} indent/>)}</Fragment>})}</tbody></>
           :<><thead><CoreTHead/></thead><tbody>{grp.cores.map(c=><CoreRow key={c.id} c={c}/>)}
         <tr className="bg-gray-900/60 font-semibold border-t-2 border-gray-700"><td colSpan={4} className="py-2 px-1 text-gray-300">{grp.cores.length}</td><td className="py-2 px-1 text-right">{R(grp.cores.reduce((s,c)=>s+c.dsr,0))}</td><td colSpan={3}/><td className="py-2 px-1 text-right">{R(grp.cores.reduce((s,c)=>s+c.allIn,0))}</td><td colSpan={3}/><td className="border-l-2 border-gray-600"/><td className="py-2 px-1 text-center text-white">{R(grp.cores.reduce((s,c)=>s+gPcs(c),0))}</td><td className="py-2 px-1 text-center text-white">{R(grp.cores.reduce((s,c)=>s+gCas(c),0))}</td><td colSpan={3}/><td className="py-2 px-1 text-right text-amber-300">{$(grp.cores.reduce((s,c)=>s+effQ(c)*c.cost,0))}</td><td colSpan={2}/></tr></tbody></>}
         </table></div></div>})}</div>}
