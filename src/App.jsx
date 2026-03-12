@@ -1,327 +1,195 @@
-import React,{useState,useMemo,useCallback,useEffect,useRef,Fragment}from"react";
-import{BarChart,Bar,LineChart,Line,XAxis,YAxis,CartesianGrid,Tooltip,Legend,ResponsiveContainer}from"recharts";
+import React, { useState, useMemo, useCallback, useEffect } from "react";
+import { api } from "./lib/api";
+import { R, D1, gS, fTs } from "./lib/utils";
+import { Loader, Stg, QuickSum, SumCtx, SlidePanel, Dot } from "./components/Shared";
+import PurchTab from "./components/PurchTab";
+import CoreTab from "./components/CoreTab";
+import BundleTab from "./components/BundleTab";
 
-const API='https://script.google.com/macros/s/AKfycbzt83RC7YYrE59ATSs8E5g9724bMdZPwepFHXDU-mM6IJ4g719ixQDj7x6wVoYg_grk9Q/exec';
-let _jid=0;
-function jp(u,t=90000){return new Promise((rs,rj)=>{const cb='__jp'+(++_jid)+'_'+Date.now();const tm=setTimeout(()=>{cl();rj(new Error('Timeout'))},t);const s=document.createElement('script');function cl(){clearTimeout(tm);delete window[cb];s.parentNode&&s.parentNode.removeChild(s)}window[cb]=d=>{cl();rs(d)};s.src=u+(u.includes('?')?'&':'?')+'callback='+cb;s.onerror=()=>{cl();rj(new Error('Network'))};document.head.appendChild(s)})}
-function api(a){return jp(API+'?action='+a+'&_t='+Date.now())}
+// === Vendors Tab ===
+function VendorsTab({ data, stg, goVendor }) {
+  const vMap = useMemo(() => { const m = {}; (data.vendors || []).forEach(v => m[v.name] = v); return m }, [data.vendors]);
+  const vS = useMemo(() => {
+    const g = {};
+    (data.cores || []).filter(c => c.active === "Yes").forEach(c => {
+      if (!g[c.ven]) g[c.ven] = { name: c.ven, cr: 0, wa: 0, he: 0, cores: 0, dsr: 0 };
+      const v = vMap[c.ven] || {};
+      const st = gS(c.doc, v.lt || 30, c.buf || 14, stg);
+      g[c.ven][st === "critical" ? "cr" : st === "warning" ? "wa" : "he"]++;
+      g[c.ven].cores++; g[c.ven].dsr += c.dsr;
+    });
+    return Object.values(g).sort((a, b) => b.cr - a.cr || b.wa - a.wa);
+  }, [data.cores, vMap, stg]);
+  return <div className="p-4 max-w-4xl mx-auto"><h2 className="text-xl font-bold text-white mb-4">Vendor Overview</h2><div className="space-y-1">{vS.map(v => <button key={v.name} onClick={() => goVendor(v.name)} className="w-full text-left px-4 py-3 rounded-lg bg-gray-900/50 hover:bg-gray-800 flex items-center gap-4"><div className="flex gap-1 min-w-[80px]">{v.cr > 0 && <span className="text-xs bg-red-500/20 text-red-400 px-1.5 py-0.5 rounded font-semibold">{v.cr}</span>}{v.wa > 0 && <span className="text-xs bg-amber-500/20 text-amber-400 px-1.5 py-0.5 rounded font-semibold">{v.wa}</span>}<span className="text-xs bg-emerald-500/20 text-emerald-400 px-1.5 py-0.5 rounded">{v.he}</span></div><span className="text-white font-medium flex-1">{v.name}</span><span className="text-gray-500 text-xs">{v.cores} · DSR:{D1(v.dsr)}</span></button>)}</div></div>;
+}
 
-// Formatters
-const R=n=>n==null?"\u2014":Math.round(n).toLocaleString("en-US");
-const D1=n=>n==null||n===0?"\u2014":n.toFixed(1); // DSR 1 decimal
-const $=n=>n==null?"\u2014":"$"+Math.round(n).toLocaleString("en-US");
-const $2=n=>n==null?"\u2014":"$"+n.toLocaleString("en-US",{maximumFractionDigits:2});
-const $4=n=>"$"+n.toFixed(4);
-const P=n=>n==null?"\u2014":n.toFixed(1)+"%";
-const MN=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-const YC={2024:"#3b82f6",2025:"#22c55e",2026:"#f59e0b"};
-const BL="#3b82f6",TL="#2dd4bf";
-const TTP={contentStyle:{backgroundColor:"#1f2937",border:"1px solid #374151",borderRadius:"8px"}};
-const DOM=["us","usa","united states",""];
-const JC="704-345-4660 | Purchasing@JLSTradingCo.com";
-const gS=(d,lt,buf,th)=>{const c=th?.critDays||lt,w=th?.warnDays||(lt+buf);return d<=c?"critical":d<=w?"warning":"healthy"};
-const cAI=c=>(c.raw||0)+(c.inb||0)+(c.pp||0)+(c.jfn||0)+(c.pq||0)+(c.ji||0)+(c.fba||0);
-const cNQ=(c,td)=>Math.ceil(Math.max(0,td*c.dsr-cAI(c)));
-const cOQ=(nq,moq)=>nq<=0?0:Math.max(nq,moq||0);
-const cDA=(c,oq)=>oq<=0?Math.round(c.doc):c.dsr>0?Math.round((cAI(c)+oq)/c.dsr):999;
-const isD=co=>DOM.includes((co||"").toLowerCase().trim());
-const gTD=(v,s)=>isD(v?.country)?s.domesticDoc:s.intlDoc;
-const fTs=ts=>{if(!ts)return"";try{const d=new Date(ts);return isNaN(d.getTime())?"":d.toLocaleTimeString()}catch{return""}};
-const fE=s=>{if(!s)return"";try{const p=s.split("-");return p.length===3?MN[parseInt(p[1])-1]+" "+parseInt(p[2])+", "+p[0]:s}catch{return s}};
-const fD=s=>{if(!s)return"";try{const p=s.split("-");return MN[parseInt(p[1])-1]+" "+parseInt(p[2])}catch{return s}};
-const td=()=>new Date().toISOString().split('T')[0];
-const fSl=s=>{if(!s)return"";try{const p=s.split("-");return p[1]+"/"+p[2]+"/"+p[0]}catch{return s}};
-const cMo=()=>{const d=new Date();return{y:d.getFullYear(),m:d.getMonth()+1}};
-const dc=(d,c,w)=>d<=c?"text-red-400":d<=w?"text-amber-400":"text-emerald-400";
-const gY=h=>[...new Set(h.map(x=>x.y))].filter(y=>y>=2024).sort();
+// === Glossary Tab — editable ===
+const DEFAULT_GL = [
+  { term: "C.DSR", desc: "Composite Daily Sales Rate (1 decimal)." },
+  { term: "DOC", desc: "Days of Coverage — how many days current inventory will last at current sales rate." },
+  { term: "Critical", desc: "DOC ≤ Lead Time. Needs immediate action — you may run out before new stock arrives." },
+  { term: "Warning", desc: "DOC ≤ Lead Time + Buffer Days. Monitor closely — tight but not yet critical." },
+  { term: "Healthy", desc: "DOC > Lead Time + Buffer. Sufficient inventory." },
+  { term: "Buffer Days", desc: "Extra safety margin days per core (set in source sheet). Default ~14 days." },
+  { term: "FIBDOC", desc: "FBA Inbound Days of Coverage." },
+  { term: "PFIBDOC", desc: "Projected FIB DOC after restock." },
+  { term: "7f", desc: "Receiving Ledger (clipboard copy for spreadsheet)." },
+  { term: "7g", desc: "COGS Ledger (clipboard copy for spreadsheet)." },
+  { term: "RFQ", desc: "Request for Quote — like PO but without pricing columns." },
+  { term: "AICOGS", desc: "All-In Cost of Goods Sold." },
+  { term: "InbS", desc: "Inbound Shipping cost." },
+  { term: "CogP", desc: "Cost per Piece." },
+  { term: "CogC", desc: "Cost per Case." },
+  { term: "+RS", desc: "Toggle Restocker columns: FIB Pcs, Raw Pcs, Inbound Pcs, Case Pack, MOQ Pcs." },
+  { term: "$", desc: "Toggle purchase history (last 4 orders) for a core." },
+  { term: "%28d", desc: "Bundle % weight = units sold L28d for this bundle / total L28d units for all bundles of the same core." },
+  { term: "FBA Health", desc: "From Aged Inventory sheet — Healthy, At Risk, or Unhealthy." },
+  { term: "LTSF", desc: "Long-Term Storage Fee — charges for aged inventory at FBA." },
+  { term: "KILL", desc: "ASIN flagged for discontinuation in Kill Management sheet." },
+  { term: "ST", desc: "Sell-Through — ASIN in sell-through evaluation mode." },
+  { term: "+/−", desc: "Expand or collapse detail columns per core row." },
+  { term: "✕", desc: "Dismiss a core row (hide it temporarily while reviewing). 'Show All' brings them back." },
+];
 
-// Hide spinner arrows globally
-const NOSTYLE=document.createElement('style');
-NOSTYLE.textContent='input[type=number]::-webkit-inner-spin-button,input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}input[type=number]{-moz-appearance:textfield}';
-document.head.appendChild(NOSTYLE);
+function GlossTab() {
+  const [gl, setGl] = useState(() => {
+    try { const s = localStorage.getItem('fba_glossary'); if (s) return JSON.parse(s) } catch { }
+    return DEFAULT_GL;
+  });
+  const [editing, setEditing] = useState(null);
+  const [nT, setNT] = useState(""); const [nD, setND] = useState("");
+  const save = (arr) => { setGl(arr); try { localStorage.setItem('fba_glossary', JSON.stringify(arr)) } catch { } };
+  const add = () => { if (nT.trim()) { save([...gl, { term: nT.trim(), desc: nD.trim() }]); setNT(""); setND("") } };
+  const del = i => save(gl.filter((_, j) => j !== i));
+  const upd = (i, field, val) => { const n = [...gl]; n[i] = { ...n[i], [field]: val }; save(n) };
+  const reset = () => save(DEFAULT_GL);
 
-function cSeas(id,h){const ms=(h||[]).filter(x=>x.core===id);if(ms.length<6)return null;const byM={};ms.forEach(x=>{if(!byM[x.m])byM[x.m]=[];byM[x.m].push(x.avgDsr)});const aM={};Object.entries(byM).forEach(([m,v])=>{aM[m]=v.reduce((a,b)=>a+b,0)/v.length});const vs=Object.values(aM);const mn=vs.reduce((a,b)=>a+b,0)/vs.length;if(mn===0)return null;const cv=Math.sqrt(vs.reduce((a,b)=>a+Math.pow(b-mn,2),0)/vs.length)/mn;if(cv<=0.3)return null;const qA={Q1:0,Q2:0,Q3:0,Q4:0},qN={Q1:0,Q2:0,Q3:0,Q4:0};Object.entries(aM).forEach(([m,v])=>{const mi=parseInt(m);const q=mi<=3?"Q1":mi<=6?"Q2":mi<=9?"Q3":"Q4";qA[q]+=v;qN[q]++});Object.keys(qA).forEach(q=>{if(qN[q]>0)qA[q]/=qN[q]});return{cv:cv.toFixed(2),peak:Object.entries(qA).sort((a,b)=>b[1]-a[1])[0][0]}}
+  return <div className="p-4 max-w-4xl mx-auto">
+    <div className="flex items-center justify-between mb-4">
+      <h2 className="text-xl font-bold text-white">Glossary</h2>
+      <button onClick={reset} className="text-xs text-gray-500 hover:text-white">Reset to defaults</button>
+    </div>
+    {gl.map((g, i) => <div key={i} className={`flex gap-4 py-3 px-4 rounded-lg ${i % 2 === 0 ? "bg-gray-900/50" : ""}`}>
+      {editing === i ? <>
+        <input value={g.term} onChange={e => upd(i, 'term', e.target.value)} className="bg-gray-800 text-blue-400 font-mono text-sm rounded px-2 py-1 w-28" />
+        <input value={g.desc} onChange={e => upd(i, 'desc', e.target.value)} className="bg-gray-800 text-gray-300 text-sm rounded px-2 py-1 flex-1" />
+        <button onClick={() => setEditing(null)} className="text-emerald-400 text-xs">✓</button>
+      </> : <>
+        <span className="text-blue-400 font-mono font-semibold text-sm min-w-[100px]">{g.term}</span>
+        <span className="text-gray-300 text-sm flex-1">{g.desc}</span>
+        <button onClick={() => setEditing(i)} className="text-gray-500 hover:text-white text-xs">✎</button>
+        <button onClick={() => del(i)} className="text-gray-500 hover:text-red-400 text-xs">✕</button>
+      </>}
+    </div>)}
+    <div className="flex gap-2 mt-4">
+      <input value={nT} onChange={e => setNT(e.target.value)} placeholder="Term" className="bg-gray-800 border border-gray-700 text-white text-sm rounded px-2 py-1.5 w-28" />
+      <input value={nD} onChange={e => setND(e.target.value)} placeholder="Description" className="bg-gray-800 border border-gray-700 text-white text-sm rounded px-2 py-1.5 flex-1" />
+      <button onClick={add} className="bg-blue-600 text-white text-sm px-3 py-1.5 rounded">Add</button>
+    </div>
+  </div>;
+}
 
-// PO PDF
-function genPO(v,items,po,buyer,dt){const addr=v.address||[v.address1,v.address2,v.city,v.state,v.zip].filter(Boolean).join(', ');const uc=v.vou==='Cases';let rows='',sub=0;items.forEach(i=>{const dq=uc&&i.isCoreItem?Math.ceil(i.qty/(i.cp||1)):i.qty;const pp=uc&&i.isCoreItem?(i.cost*(i.cp||1)):i.cost;const t=dq*pp;sub+=t;rows+=`<tr><td>${i.vsku||i.id}</td><td>${i.ti||''}</td><td style="text-align:right">${dq}</td><td style="text-align:right">$${pp.toFixed(2)}</td><td style="text-align:right">$${t.toFixed(2)}</td></tr>`});for(let i=items.length;i<20;i++)rows+='<tr><td>&nbsp;</td><td></td><td></td><td></td><td></td></tr>';const h=`<!DOCTYPE html><html><head><title>PO ${po||''}</title><style>body{font-family:Arial,sans-serif;margin:40px;font-size:12px}h1{font-size:20px;margin:0 0 30px}table.i{width:100%;margin-bottom:10px}table.i td{padding:2px 8px;vertical-align:top}table.t{width:100%;border-collapse:collapse;margin-top:20px}table.t th,table.t td{border:1px solid #999;padding:6px 8px}table.t th{background:#f0f0f0;text-align:left}.a{display:flex;gap:40px}.a div{flex:1}@media print{body{margin:20px}}</style></head><body><h1>JLS Trading Co. Purchase Order</h1><table class="i"><tr><td><b>Date:</b> ${fSl(dt||td())}</td><td><b>Order #:</b> ${po||''}</td></tr><tr><td><b>Buyer:</b> ${buyer||''}</td></tr><tr><td><b>Contact:</b> ${JC}</td></tr></table><table class="i"><tr><td><b>Seller:</b> ${v.name}</td></tr><tr><td><b>Rep:</b> ${v.contactName||'N/A'}</td></tr><tr><td><b>Address:</b> ${addr}</td></tr><tr><td><b>Email:</b> ${v.contactEmail||''}</td></tr></table><div class="a"><div><b>Ship To</b><br>JLS Trading Co.<br>ATTN: Receiving<br>5301 Terminal St<br>Charlotte, NC 28208</div><div><b>Bill To</b><br>JLS Trading Co.<br>ATTN: Accounts Payable<br>2198 Argentum Ave<br>Indian Land, SC 29707</div></div><table class="i"><tr><td><b>Payment:</b> ${v.payment||''}</td></tr></table><table class="t"><thead><tr><th>SKU</th><th>Item</th><th style="text-align:right">${uc?'Cases':'Qty'}</th><th style="text-align:right">Price Per</th><th style="text-align:right">Total</th></tr></thead><tbody>${rows}<tr style="font-weight:bold"><td colspan="4" style="text-align:right">Sub-Total</td><td style="text-align:right">$${sub.toFixed(2)}</td></tr></tbody></table><script>window.onload=function(){window.print()}<\/script></body></html>`;const w=window.open('','_blank');w.document.write(h);w.document.close()}
-function genRFQ(v,items,buyer,dt){const addr=v.address||[v.address1,v.address2,v.city,v.state,v.zip].filter(Boolean).join(', ');const uc=v.vou==='Cases';let rows='';items.forEach(i=>{const dq=uc&&i.isCoreItem?Math.ceil(i.qty/(i.cp||1)):i.qty;rows+=`<tr><td>${i.vsku||i.id}</td><td>${i.ti||''}</td><td style="text-align:right">${dq}</td></tr>`});for(let i=items.length;i<20;i++)rows+='<tr><td>&nbsp;</td><td></td><td></td></tr>';const h=`<!DOCTYPE html><html><head><title>RFQ - ${v.name}</title><style>body{font-family:Arial,sans-serif;margin:40px;font-size:12px}h1{font-size:20px;margin:0 0 30px}table.i{width:100%;margin-bottom:10px}table.i td{padding:2px 8px;vertical-align:top}table.t{width:100%;border-collapse:collapse;margin-top:20px}table.t th,table.t td{border:1px solid #999;padding:6px 8px}table.t th{background:#f0f0f0;text-align:left}@media print{body{margin:20px}}</style></head><body><h1>JLS Trading Co. — Request for Quote</h1><table class="i"><tr><td><b>Date:</b> ${fSl(dt||td())}</td></tr><tr><td><b>Buyer:</b> ${buyer||''}</td></tr><tr><td><b>Contact:</b> ${JC}</td></tr></table><table class="i"><tr><td><b>Vendor:</b> ${v.name}</td></tr><tr><td><b>Rep:</b> ${v.contactName||'N/A'}</td></tr><tr><td><b>Email:</b> ${v.contactEmail||''}</td></tr></table><table class="t"><thead><tr><th>SKU</th><th>Item</th><th style="text-align:right">${uc?'Cases':'Qty'}</th></tr></thead><tbody>${rows}</tbody></table><p style="margin-top:30px"><b>Please provide pricing and lead time for the above items.</b></p><script>window.onload=function(){window.print()}<\/script></body></html>`;const w=window.open('','_blank');w.document.write(h);w.document.close()}
-function cp7f(v,it,po,b,eta){const d=fSl(td());const e=eta?fSl(eta):'';const r=it.map(i=>{const cs=v.vou==='Cases'&&i.isCoreItem?Math.ceil(i.qty/(i.cp||1)):'';return[d,v.name,i.ti||'',i.vsku||'',i.qty,cs,i.id,b||'',$4(i.cost),v.country||'',v.terms||'',e,po||'','-'].join('\t')});navigator.clipboard.writeText(r.join('\n'))}
-function cp7g(v,it,po,b){const d=fSl(td());const r=it.map(i=>[d,b||'',i.id,i.qty,$2(i.qty*i.cost),i.inbS?'$'+i.inbS.toFixed(2):'$0.00','$0.00','$0.00',v.name].join('\t'));navigator.clipboard.writeText(r.join('\n'))}
+// === MAIN APP ===
+const TABS = [{ id: "purchasing", l: "Purchasing" }, { id: "core", l: "Core Detail" }, { id: "bundle", l: "Bundle Detail" }, { id: "vendors", l: "Vendors" }, { id: "glossary", l: "Glossary" }];
 
-// Components
-function Dot({status}){return<span className={`inline-block w-3 h-3 rounded-full flex-shrink-0 ${status==="critical"?"bg-red-500 animate-pulse":status==="warning"?"bg-amber-500":"bg-emerald-500"}`}/>}
-function Loader({text}){return<div className="flex items-center justify-center py-20"><div className="text-center"><div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-3"/><p className="text-gray-400 text-sm">{text}</p></div></div>}
-function Toast({msg,onClose}){useEffect(()=>{const t=setTimeout(onClose,2500);return()=>clearTimeout(t)},[onClose]);return<div className="fixed bottom-4 right-4 bg-emerald-600 text-white px-4 py-3 rounded-lg shadow-xl z-50">✅ {msg}</div>}
-// Tooltip header cell
-function TH({children,tip,className}){return<th className={className} title={tip}>{children}</th>}
+export default function App() {
+  const [tab, setTab] = useState("purchasing");
+  const [showS, setShowS] = useState(false);
+  const [stg, setStg] = useState({ buyer: '', domesticDoc: 90, intlDoc: 180, fA: "yes", fI: "blank", fV: "yes" });
+  const [coreId, setCoreId] = useState(null);
+  const [bundleId, setBundleId] = useState(null);
+  const [data, setData] = useState({ cores: [], bundles: [], vendors: [], sales: [], fees: [], inbound: [], abcA: [], abcT: [], abcSub: '', restock: [], priceComp: [], agedInv: [], killMgmt: [] });
+  const [hist, setHist] = useState({ bundleSales: [], coreInv: [], bundleInv: [], priceHist: [] });
+  const [daily, setDaily] = useState({ coreDays: [], bundleDays: [] });
+  const [ov, setOv] = useState({});
+  const [initV, setInitV] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [ts, setTs] = useState("");
+  const [rdy, setRdy] = useState({ h: false, d: false });
+  const [prevTab, setPrevTab] = useState(null);
+  // Slide panel for core detail from vendor view
+  const [panelCoreId, setPanelCoreId] = useState(null);
+  // Quick sum
+  const [sumCells, setSumCells] = useState([]);
+  const addCell = useCallback((v, remove) => { if (remove) setSumCells(p => p.filter(x => x !== v)); else setSumCells(p => [...p, v]) }, []);
+  const clearSum = useCallback(() => setSumCells([]), []);
 
-// Quick Sum Bar
-function QuickSum({cells,onClear}){if(!cells.length)return null;const sum=cells.reduce((a,b)=>a+b,0);const avg=sum/cells.length;
-  return<div className="fixed bottom-4 left-1/2 -translate-x-1/2 bg-gray-800 border border-gray-600 rounded-lg px-5 py-2.5 shadow-xl z-50 flex items-center gap-5 text-sm">
-    <span className="text-gray-400">Selected: <span className="text-white font-semibold">{cells.length}</span></span>
-    <span className="text-gray-400">Sum: <span className="text-emerald-400 font-semibold">{sum.toLocaleString("en-US",{maximumFractionDigits:2})}</span></span>
-    <span className="text-gray-400">Avg: <span className="text-blue-400 font-semibold">{avg.toLocaleString("en-US",{maximumFractionDigits:2})}</span></span>
-    <button onClick={onClear} className="text-gray-500 hover:text-white text-xs ml-2">✕</button></div>}
+  const load = useCallback(() => {
+    setLoading(true); setError(null);
+    api('live').then(d => {
+      setData({ cores: d.cores || [], bundles: d.bundles || [], vendors: d.vendors || [], sales: d.sales || [], fees: d.fees || [], inbound: d.inbound || [], abcA: d.abcA || [], abcT: d.abcT || [], abcSub: d.abcSub || '', restock: d.restock || [], priceComp: d.priceComp || [], agedInv: d.agedInv || [], killMgmt: d.killMgmt || [] });
+      setTs(d.timestamp || ""); setLoading(false);
+      api('history').then(h => { setHist(h); setRdy(r => ({ ...r, h: true })) }).catch(() => setRdy(r => ({ ...r, h: true })));
+      api('daily').then(d => { setDaily(d); setRdy(r => ({ ...r, d: true })) }).catch(() => setRdy(r => ({ ...r, d: true })));
+    }).catch(e => { setError(e.message); setLoading(false) });
+  }, []);
+  useEffect(() => { load() }, [load]);
 
-// Selectable numeric cell
-function NC({v,fmt,className}){const{addCell}=React.useContext(SumCtx);const[sel,setSel]=useState(false);
-  const raw=typeof v==="number"?v:parseFloat(v);const valid=!isNaN(raw)&&raw!==0;
-  const toggle=()=>{if(!valid)return;if(sel){addCell(raw,true);setSel(false)}else{addCell(raw,false);setSel(true)}};
-  return<td className={`${className} ${sel?"bg-blue-500/20 ring-1 ring-blue-500":""} ${valid?"cursor-pointer":""}`} onClick={toggle}>{fmt?fmt(v):v}</td>}
+  const dataH = useMemo(() => ({ ...data, _coreInv: hist.coreInv }), [data, hist]);
+  const sc = useMemo(() => {
+    const c = { critical: 0, warning: 0, healthy: 0 };
+    (data.cores || []).forEach(x => { if (x.active !== "Yes") return; const v = (data.vendors || []).find(v => v.name === x.ven); c[gS(x.doc, v?.lt || 30, x.buf || 14, stg)]++ });
+    return c;
+  }, [data, stg]);
 
-const SumCtx=React.createContext({addCell:()=>{}});
+  // Navigation: goCore opens slide panel if in vendor view, otherwise switches tab
+  const goCore = useCallback(id => {
+    if (tab === "purchasing") { setPanelCoreId(id) }
+    else { setPrevTab(tab); setCoreId(id); setTab("core") }
+  }, [tab]);
+  const goBundle = useCallback(id => { setPrevTab(tab); setBundleId(id); setTab("bundle") }, [tab]);
+  const goVendor = useCallback(n => { setInitV(n); setTab("purchasing") }, []);
+  const clearIV = useCallback(() => setInitV(null), []);
+  const handleBackFromCore = useCallback(() => setTab("purchasing"), []);
+  const handleBackFromBundle = useCallback(() => { if (prevTab === "core" && coreId) setTab("core"); else setTab("purchasing") }, [prevTab, coreId]);
 
-function SS({value,onChange,options,placeholder}){const[o,setO]=useState(false);const[q,setQ]=useState("");const ref=useRef(null);useEffect(()=>{function h(e){if(ref.current&&!ref.current.contains(e.target))setO(false)}document.addEventListener("mousedown",h);return()=>document.removeEventListener("mousedown",h)},[]);const f=options.filter(x=>x.toLowerCase().includes(q.toLowerCase()));return<div ref={ref} className="relative"><input type="text" value={o?q:(value||"")} placeholder={placeholder||"All Vendors"} onFocus={()=>{setO(true);setQ("")}} onChange={e=>{setQ(e.target.value);setO(true)}} className="bg-gray-800 border border-gray-700 text-gray-300 text-sm rounded-lg px-2 py-1.5 w-48"/>{o&&<div className="absolute z-40 mt-1 bg-gray-800 border border-gray-700 rounded-lg shadow-xl max-h-80 overflow-auto w-56"><button onClick={()=>{onChange("");setO(false)}} className="w-full text-left px-3 py-1.5 text-sm text-gray-400 hover:bg-gray-700">All</button>{f.map(x=><button key={x} onClick={()=>{onChange(x);setO(false);setQ("")}} className={`w-full text-left px-3 py-1.5 text-sm hover:bg-gray-700 ${x===value?"text-blue-400":"text-gray-300"}`}>{x}</button>)}</div>}</div>}
+  if (loading) return <div className="min-h-screen bg-gray-950"><Loader text="Loading..." /></div>;
+  if (error) return <div className="min-h-screen bg-gray-950 flex items-center justify-center"><div className="text-center"><p className="text-red-400 mb-4">{error}</p><button onClick={load} className="bg-blue-600 text-white px-6 py-2 rounded-lg">Retry</button></div></div>;
 
-function Stg({s,setS,onClose}){const[l,setL]=useState({...s});return<div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center" onClick={onClose}><div className="bg-gray-900 border border-gray-700 rounded-xl p-6 w-full max-w-md" onClick={e=>e.stopPropagation()}><h2 className="text-lg font-semibold text-white mb-4">Settings</h2><div className="space-y-4"><div><label className="text-sm text-gray-400 block mb-1">Buyer Initials</label><input type="text" value={l.buyer||''} onChange={e=>setL({...l,buyer:e.target.value})} placeholder="TG" className="bg-gray-800 border border-gray-600 text-white rounded px-3 py-2 w-full"/></div><div className="grid grid-cols-2 gap-3"><div><label className="text-sm text-gray-400 block mb-1">Domestic DOC</label><input type="number" value={l.domesticDoc} onChange={e=>setL({...l,domesticDoc:+e.target.value})} className="bg-gray-800 border border-gray-600 text-white rounded px-3 py-2 w-full"/></div><div><label className="text-sm text-gray-400 block mb-1">Intl DOC</label><input type="number" value={l.intlDoc} onChange={e=>setL({...l,intlDoc:+e.target.value})} className="bg-gray-800 border border-gray-600 text-white rounded px-3 py-2 w-full"/></div></div><div className="border-t border-gray-700 pt-4 space-y-3">{[["Active","fA"],["Visible","fV"]].map(([lb,k])=><div key={k} className="flex items-center justify-between"><span className="text-sm text-gray-300">{lb}</span><select value={l[k]} onChange={e=>setL({...l,[k]:e.target.value})} className="bg-gray-800 border border-gray-600 text-white rounded px-2 py-1 text-sm w-28"><option value="yes">Yes</option><option value="no">No</option><option value="all">All</option></select></div>)}<div className="flex items-center justify-between"><span className="text-sm text-gray-300">Ignored</span><select value={l.fI} onChange={e=>setL({...l,fI:e.target.value})} className="bg-gray-800 border border-gray-600 text-white rounded px-2 py-1 text-sm w-28"><option value="blank">Blank</option><option value="set">Set</option><option value="all">All</option></select></div></div></div><div className="flex gap-3 mt-6"><button onClick={()=>{setS(l);onClose()}} className="flex-1 bg-blue-600 text-white rounded-lg py-2 font-medium">Save</button><button onClick={onClose} className="flex-1 bg-gray-700 text-white rounded-lg py-2 font-medium">Cancel</button></div></div></div>}
-
-// 7g Price History for a core (last 4 purchases)
-function PriceHist({rows}){if(!rows||!rows.length)return<tr><td colSpan={30} className="py-2 px-4 text-gray-500 text-xs">No purchase history</td></tr>;
-  return<>{rows.map((r,i)=><tr key={i} className="bg-gray-800/40 text-xs"><td colSpan={4} className="py-1 px-2 text-gray-400">{fSl(r.date)||"—"}</td><td className="py-1 px-1 text-right">{R(r.pcs)}</td><td className="py-1 px-1 text-right">{$2(r.matPrice)}</td><td className="py-1 px-1 text-right text-gray-400">{$2(r.inbShip)}</td><td className="py-1 px-1 text-right text-gray-400">{$2(r.tariffs)}</td><td className="py-1 px-1"/><td className="py-1 px-1 text-right text-amber-300">{$2(r.cpp)}</td><td className="py-1 px-1"/><td className={`py-1 px-1 text-right ${r.pctChg<0?"text-emerald-400":r.pctChg>0?"text-red-400":"text-gray-500"}`}>{r.pctChg?P(r.pctChg*100):"—"}</td><td colSpan={20}/></tr>)}</>}
-
-// Purchasing Tab
-function PurchTab({data,stg,goCore,goBundle,ov,setOv,initV,clearIV}){
-  const[vm,setVm]=useState(initV?"vendor":"core");const[sort,setSort]=useState("status");const[vf,setVf]=useState(initV||"");const[sf,setSf]=useState("");const[nf,setNf]=useState("all");const[minD,setMinD]=useState(0);const[locF,setLocF]=useState("all");
-  const[toast,setToast]=useState(null);const[poN,setPoN]=useState("");const[poD,setPoD]=useState("");
-  const[vendorSub,setVendorSub]=useState("cores");
-  const[showRS,setShowRS]=useState(false);
-  const[showPH,setShowPH]=useState({}); // price history expand per core
-  useEffect(()=>{if(initV){setVm("vendor");setVf(initV);clearIV()}},[initV,clearIV]);
-  const vMap=useMemo(()=>{const m={};(data.vendors||[]).forEach(v=>m[v.name]=v);return m},[data.vendors]);
-  const vNames=useMemo(()=>(data.vendors||[]).map(v=>v.name).sort(),[data.vendors]);
-  const rsMap=useMemo(()=>{const m={};(data.restock||[]).forEach(r=>{if(!m[r.core])m[r.core]=[];m[r.core].push(r)});return m},[data.restock]);
-  const feMap=useMemo(()=>{const m={};(data.fees||[]).forEach(f=>m[f.j]=f);return m},[data.fees]);
-  const saMap=useMemo(()=>{const m={};(data.sales||[]).forEach(s=>m[s.j]=s);return m},[data.sales]);
-  // Price comparison: group by core, sorted newest first, take last 4
-  const pcMap=useMemo(()=>{const m={};(data.priceComp||[]).forEach(r=>{if(!m[r.core])m[r.core]=[];m[r.core].push(r)});Object.keys(m).forEach(k=>{m[k].sort((a,b)=>(b.date||"").localeCompare(a.date||""));m[k]=m[k].slice(0,4)});return m},[data.priceComp]);
-
-  const enr=useMemo(()=>(data.cores||[]).filter(c=>{
-    if(stg.fA==="yes"&&c.active!=="Yes")return false;if(stg.fA==="no"&&c.active==="Yes")return false;
-    if(stg.fV==="yes"&&c.visible!=="Yes")return false;if(stg.fV==="no"&&c.visible==="Yes")return false;
-    if(stg.fI==="blank"&&!!c.ignoreUntil)return false;if(stg.fI==="set"&&!c.ignoreUntil)return false;return true;
-  }).map(c=>{const v=vMap[c.ven]||{};const lt=v.lt||30;const tg=gTD(v,stg);const cd=lt;const wd=lt+(c.buf||14);const st=gS(c.doc,lt,c.buf,{critDays:cd,warnDays:wd});const ai=cAI(c);const nq=cNQ(c,tg);const oq=cOQ(nq,c.moq);const seas=cSeas(c.id,(data._coreInv||[]));
-    return{...c,status:st,allIn:ai,needQty:nq,orderQty:oq,needDollar:+(oq*c.cost).toFixed(2),docAfter:cDA(c,oq),lt,critDays:cd,warnDays:wd,targetDoc:tg,vc:v.country||"",seas,isDom:isD(v.country)};
-  }).filter(c=>{if(vf&&c.ven!==vf)return false;if(sf&&c.status!==sf)return false;if(minD>0&&c.doc<minD)return false;if(nf==="need"&&c.needQty<=0)return false;if(nf==="ok"&&c.needQty>0)return false;if(locF==="us"&&!c.isDom)return false;if(locF==="intl"&&c.isDom)return false;return true})
-  .sort((a,b)=>{const so={critical:0,warning:1,healthy:2};if(sort==="status")return so[a.status]-so[b.status];if(sort==="doc")return a.doc-b.doc;if(sort==="dsr")return b.dsr-a.dsr;if(sort==="need$")return b.needDollar-a.needDollar;return 0}),[data,stg,vf,sf,sort,vMap,nf,minD,locF]);
-
-  const venBundles=useMemo(()=>(data.bundles||[]).filter(b=>{if(b.active!=="Yes")return false;if(vf&&(b.vendors||"").indexOf(vf)<0)return false;return true}).map(b=>{const f=feMap[b.j];const margin=f&&f.pr>0?((f.gp/f.pr)*100):0;return{...b,fee:f,margin}}),[data.bundles,vf,feMap]);
-
-  const sc=useMemo(()=>{const c={critical:0,warning:0,healthy:0};enr.forEach(x=>c[x.status]++);return c},[enr]);
-  const gO=id=>ov[id]||{};const setF=(id,f,v)=>setOv(p=>({...p,[id]:{...(p[id]||{}),[f]:v}}));
-  const gPcs=id=>(gO(id).pcs??0);const gCas=id=>(gO(id).cas??0);const gInbS=id=>(gO(id).inbS??0);const gCogP=id=>(gO(id).cogP??0);const gCogC=id=>(gO(id).cogC??0);
-  const hasCoreOrd=c=>(gPcs(c.id)>0||gCas(c.id)>0);const coreEffQ=c=>gPcs(c.id)||gCas(c.id)*(c.casePack||1);
-  const hasBundleOrd=b=>(gPcs(b.j)>0||gCas(b.j)>0);const bundleEffQ=b=>gPcs(b.j)||gCas(b.j)*1;
-  const aftD=(allIn,q,dsr)=>q>0&&dsr>0?Math.round((allIn+q)/dsr):null;
-  const tot=useMemo(()=>{let d=0,a=0,n=0,o=0,co=0;enr.forEach(c=>{d+=c.dsr;a+=c.allIn;n+=c.needQty;o+=c.orderQty;co+=c.needDollar});return{d,a,n,o,co}},[enr]);
-  const vG=useMemo(()=>{if(vm!=="vendor")return[];const g={};enr.forEach(c=>{if(!g[c.ven])g[c.ven]={v:vMap[c.ven]||{name:c.ven},cores:[],bundles:[]};g[c.ven].cores.push(c)});Object.keys(g).forEach(vn=>{g[vn].bundles=venBundles.filter(b=>(b.vendors||"").indexOf(vn)>=0)});return Object.values(g).sort((a,b)=>b.cores.filter(c=>c.status==="critical").length-a.cores.filter(c=>c.status==="critical").length)},[enr,vm,vMap,venBundles]);
-  const getPOI=(cores,bundles)=>{const items=[];cores.filter(c=>hasCoreOrd(c)).forEach(c=>items.push({id:c.id,ti:c.ti,vsku:c.vsku,qty:coreEffQ(c),cost:c.cost,cp:c.casePack||1,inbS:gInbS(c.id),isCoreItem:true}));(bundles||[]).filter(b=>hasBundleOrd(b)).forEach(b=>{const f=feMap[b.j];items.push({id:b.j,ti:b.t,vsku:b.asin||b.bundleCode,qty:bundleEffQ(b),cost:f?.aicogs||b.aicogs||0,cp:1,inbS:0,isCoreItem:false})});return items};
-  const fillR=cores=>{const u={...ov};cores.filter(c=>c.needQty>0).forEach(c=>{u[c.id]={...(u[c.id]||{}),pcs:cOQ(c.needQty,c.moq)}});setOv(u)};
-  const clrV=(cores,bundles)=>{const u={...ov};cores.forEach(c=>{delete u[c.id]});(bundles||[]).forEach(b=>{delete u[b.j]});setOv(u)};
-  const getRS=id=>(rsMap[id]||[])[0];
-  const togPH=id=>setShowPH(p=>({...p,[id]:!p[id]}));
-
-  const CoreRow=({c,mixAdj})=>{const p=gPcs(c.id);const ca=gCas(c.id);const eq=coreEffQ(c);const cost=eq*c.cost;const adj=mixAdj||0;const ad=aftD(c.allIn+adj,eq,c.dsr);const rs=getRS(c.id);const hasPH=!!pcMap[c.id];
-    return<><tr className={`border-t border-gray-800/30 hover:bg-gray-800/20 text-xs ${hasCoreOrd(c)?"bg-emerald-900/10":""}`}>
-      <td className="py-1 px-1"><Dot status={c.status}/></td>
-      <td className="py-1 px-1 text-blue-400 font-mono">{c.id}</td>
-      <td className="py-1 px-1 text-gray-400">{c.vsku||"—"}</td>
-      <td className="py-1 px-1 text-gray-200 truncate max-w-[110px]">{c.ti}</td>
-      <td className="py-1 px-1 text-right">{D1(c.dsr)}</td>
-      <td className="py-1 px-1 text-right">{D1(c.d7)}</td>
-      <td className="py-1 px-1 text-center">{c.d7>c.dsr?<span className="text-emerald-400">▲</span>:c.d7<c.dsr?<span className="text-red-400">▼</span>:"—"}</td>
-      <td className={`py-1 px-1 text-right font-semibold ${dc(c.doc,c.critDays,c.warnDays)}`}>{R(c.doc)}</td>
-      <td className="py-1 px-1 text-right">{R(c.allIn)}{adj>0&&<span className="text-teal-400 ml-0.5">+{adj}</span>}</td>
-      <td className="py-1 px-1 text-right text-gray-400">{c.moq>0?R(c.moq):"—"}</td>
-      <td className="py-1 px-1 text-center">{c.seas&&<span className="text-purple-400 font-bold">{c.seas.peak}</span>}</td>
-      <td className="py-1 px-1 text-right text-gray-400">{c.orderQty>0?R(c.orderQty):"—"}</td>
-      {showRS&&<><td className="py-1 px-1 text-right text-cyan-300">{rs?R(rs.fibPcs):"—"}</td><td className="py-1 px-1 text-right">{rs?R(rs.rawPcs):"—"}</td><td className="py-1 px-1 text-right">{rs?R(rs.inbPcs):"—"}</td><td className="py-1 px-1 text-right text-gray-400">{rs?R(rs.casePack):"—"}</td><td className="py-1 px-1 text-right text-amber-300">{rs?R(rs.finalPcsToOrder):"—"}</td></>}
-      <td className="py-1 border-l-2 border-gray-600 px-1"/>
-      <td className="py-0.5 px-0.5"><input type="number" value={p||''} onChange={e=>setF(c.id,'pcs',Math.max(0,+e.target.value||0))} placeholder="0" className="bg-gray-800 border border-gray-600 text-white rounded px-1 py-0.5 w-14 text-center text-xs"/></td>
-      <td className="py-0.5 px-0.5"><input type="number" value={ca||''} onChange={e=>setF(c.id,'cas',Math.max(0,+e.target.value||0))} placeholder="0" className="bg-gray-800 border border-gray-600 text-white rounded px-1 py-0.5 w-14 text-center text-xs"/></td>
-      <TH tip="Inbound Shipping Cost" className="py-0.5 px-0.5"><input type="number" value={gInbS(c.id)||''} onChange={e=>setF(c.id,'inbS',Math.max(0,+e.target.value||0))} placeholder="0" className="bg-gray-800 border border-gray-600 text-white rounded px-1 py-0.5 w-14 text-center text-xs"/></TH>
-      <td className="py-0.5 px-0.5"><input type="number" value={gCogP(c.id)||''} onChange={e=>setF(c.id,'cogP',Math.max(0,+e.target.value||0))} placeholder="0" className="bg-gray-800 border border-gray-600 text-white rounded px-1 py-0.5 w-14 text-center text-xs"/></td>
-      <td className="py-0.5 px-0.5"><input type="number" value={gCogC(c.id)||''} onChange={e=>setF(c.id,'cogC',Math.max(0,+e.target.value||0))} placeholder="0" className="bg-gray-800 border border-gray-600 text-white rounded px-1 py-0.5 w-14 text-center text-xs"/></td>
-      <td className="py-1 px-1 text-right text-amber-300">{cost>0?$(cost):"—"}</td>
-      <td className={`py-1 px-1 text-right ${ad?dc(ad,c.critDays,c.warnDays):"text-gray-500"}`}>{ad?R(ad):"—"}</td>
-      <td className="py-1 px-1 flex gap-0.5">{hasPH&&<button onClick={()=>togPH(c.id)} className={`text-xs px-1 py-0.5 rounded ${showPH[c.id]?"bg-amber-500/30 text-amber-300":"bg-gray-700 text-gray-400"}`}>$</button>}<button onClick={()=>goCore(c.id)} className="text-blue-400 px-1 py-0.5 bg-blue-400/10 rounded">V</button></td>
-    </tr>{showPH[c.id]&&<PriceHist rows={pcMap[c.id]}/>}</>};
-
-  const BundleRow=({b,indent})=>{const f=b.fee||feMap[b.j];const p=gPcs(b.j);const ca=gCas(b.j);const eq=bundleEffQ(b);const cost=f?(eq*(f.aicogs||0)):0;
-    return<tr className={`border-t border-gray-800/20 hover:bg-gray-800/10 text-xs ${indent?"bg-indigo-900/5":""} ${hasBundleOrd(b)?"bg-emerald-900/10":""}`}>
-      <td className="py-1 px-1"/><td className="py-1 px-1 text-indigo-400 font-mono">{indent?"└ ":""}{b.j}</td><td className="py-1 px-1 text-gray-400">{b.asin||"—"}</td><td className="py-1 px-1 text-gray-200 truncate max-w-[110px]">{b.t}</td>
-      <td className="py-1 px-1 text-right">{D1(b.cd)}</td><td className="py-1 px-1 text-right">{D1(b.d7comp)}</td><td className="py-1 px-1 text-center">{b.d7comp>b.cd?<span className="text-emerald-400">▲</span>:b.d7comp<b.cd?<span className="text-red-400">▼</span>:"—"}</td>
-      <td className="py-1 px-1 text-right">{R(b.fibDoc)}</td><td className="py-1 px-1 text-right">{R(b.fibInv)}</td><td className="py-1 px-1 text-right text-emerald-400">{f?$2(f.gp):"—"}</td><td className="py-1 px-1 text-center">{b.replenTag||"—"}</td><td className="py-1 px-1 text-right">{b.margin>0?P(b.margin):"—"}</td>
-      {showRS&&<td colSpan={5}/>}<td className="py-1 border-l-2 border-gray-600 px-1"/>
-      <td className="py-0.5 px-0.5"><input type="number" value={p||''} onChange={e=>setF(b.j,'pcs',Math.max(0,+e.target.value||0))} placeholder="0" className="bg-gray-800 border border-gray-600 text-white rounded px-1 py-0.5 w-14 text-center text-xs"/></td>
-      <td className="py-0.5 px-0.5"><input type="number" value={ca||''} onChange={e=>setF(b.j,'cas',Math.max(0,+e.target.value||0))} placeholder="0" className="bg-gray-800 border border-gray-600 text-white rounded px-1 py-0.5 w-14 text-center text-xs"/></td>
-      <td colSpan={3}/><td className="py-1 px-1 text-right text-amber-300">{cost>0?$(cost):"—"}</td><td className="py-1 px-1 text-right">{R(b.doc)}</td>
-      <td className="py-1 px-1"><button onClick={()=>goBundle(b.j)} className="text-indigo-400 px-1 py-0.5 bg-indigo-400/10 rounded">V</button></td></tr>};
-
-  const rsToggle=<button onClick={()=>setShowRS(!showRS)} className={`text-xs px-1.5 py-0.5 rounded font-bold ${showRS?"bg-purple-600 text-white":"bg-gray-700 text-gray-400"}`} title="Toggle Restocker columns">{showRS?"−":"+"}RS</button>;
-  const VTH=()=><tr className="text-gray-500 uppercase bg-gray-900/40">
-    <th className="py-2 px-1 w-6"/><TH tip="Core or JLS Number" className="py-2 px-1 text-left">ID</TH><TH tip="Vendor SKU or ASIN" className="py-2 px-1 text-left">SKU</TH><th className="py-2 px-1 text-left">Title</th>
-    <TH tip="Composite Daily Sales Rate" className="py-2 px-1 text-right">DSR</TH><TH tip="7-Day DSR" className="py-2 px-1 text-right">7D</TH><TH tip="Trend" className="py-2 px-1 text-center">T</TH><TH tip="Days of Coverage" className="py-2 px-1 text-right">DOC</TH>
-    <TH tip="All-In Owned Inventory" className="py-2 px-1 text-right">Inv</TH><TH tip="MOQ or Gross Profit" className="py-2 px-1 text-right">MOQ/GP</TH><TH tip="Seasonal Peak or Replen Tag" className="py-2 px-1 text-center">S/Rep</TH><TH tip="Recommended Order or Margin" className="py-2 px-1 text-right">Rec/Mrg</TH>
-    {showRS&&<><TH tip="FIB Pieces (Restocker)" className="py-2 px-1 text-right text-cyan-400">FIB</TH><TH tip="Raw Pieces" className="py-2 px-1 text-right text-cyan-400">Raw</TH><TH tip="Inbound Pieces" className="py-2 px-1 text-right text-cyan-400">Inb</TH><TH tip="Vendor Case Pack" className="py-2 px-1 text-right text-cyan-400">CPk</TH><TH tip="MOQ Pieces to Order" className="py-2 px-1 text-right text-cyan-400">MOQPcs</TH></>}
-    <th className="py-2 border-l-2 border-gray-600 px-1"/>
-    <TH tip="Pieces to Order" className="py-2 px-1 text-center">Pcs</TH><TH tip="Cases to Order" className="py-2 px-1 text-center">Cas</TH><TH tip="Inbound Shipping Cost" className="py-2 px-1 text-center">InbS</TH><TH tip="Cost per Piece" className="py-2 px-1 text-center">CogP</TH><TH tip="Cost per Case" className="py-2 px-1 text-center">CogC</TH>
-    <th className="py-2 px-1 text-right">Cost</th><TH tip="DOC After Order" className="py-2 px-1 text-right">After</TH><th className="py-2 px-1 w-12">{rsToggle}</th></tr>;
-
-  return<div className="p-4">{toast&&<Toast msg={toast} onClose={()=>setToast(null)}/>}
-    <div className="flex flex-wrap gap-2 items-center mb-4">
-      <div className="flex bg-gray-800 rounded-lg p-0.5">{["core","vendor"].map(m=><button key={m} onClick={()=>setVm(m)} className={`px-3 py-1.5 rounded-md text-sm font-medium ${vm===m?"bg-blue-600 text-white":"text-gray-400"}`}>{m==="core"?"By Core":"By Vendor"}</button>)}</div>
-      <SS value={vf} onChange={setVf} options={vNames}/><select value={sf} onChange={e=>setSf(e.target.value)} className="bg-gray-800 border border-gray-700 text-gray-300 text-sm rounded-lg px-2 py-1.5"><option value="">All Status</option><option value="critical">Critical</option><option value="warning">Warning</option><option value="healthy">Healthy</option></select>
-      <select value={locF} onChange={e=>setLocF(e.target.value)} className="bg-gray-800 border border-gray-700 text-gray-300 text-sm rounded-lg px-2 py-1.5"><option value="all">All</option><option value="us">US Only</option><option value="intl">International</option></select>
-      <select value={nf} onChange={e=>setNf(e.target.value)} className="bg-gray-800 border border-gray-700 text-gray-300 text-sm rounded-lg px-2 py-1.5"><option value="all">All</option><option value="need">Needs Buy</option><option value="ok">No Need</option></select>
-      {vm==="core"&&<><select value={sort} onChange={e=>setSort(e.target.value)} className="bg-gray-800 border border-gray-700 text-gray-300 text-sm rounded-lg px-2 py-1.5"><option value="status">Priority</option><option value="doc">DOC</option><option value="dsr">DSR</option><option value="need$">$</option></select><span className="text-gray-500 text-xs">Min:</span><input type="number" value={minD} onChange={e=>setMinD(+e.target.value)} className="bg-gray-800 border border-gray-700 text-white text-sm rounded px-2 py-1 w-14"/></>}
-      {vm==="vendor"&&<div className="flex bg-gray-800 rounded-lg p-0.5">{[["cores","Cores"],["bundles","Bundles"],["mix","Mix"]].map(([k,l])=><button key={k} onClick={()=>setVendorSub(k)} className={`px-2.5 py-1 rounded-md text-xs font-medium ${vendorSub===k?"bg-indigo-600 text-white":"text-gray-400"}`}>{l}</button>)}</div>}
-      <div className="flex gap-2 ml-auto text-xs"><span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-500"/>{sc.critical}</span><span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-500"/>{sc.warning}</span><span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500"/>{sc.healthy}</span><span className="text-gray-500">|</span><span className="text-gray-300 font-semibold">{enr.length}</span></div></div>
-    {vm==="vendor"&&<div className="flex flex-wrap gap-3 mb-4 items-center text-sm"><span className="text-gray-500 text-xs">PO#:</span><input type="text" value={poN} onChange={e=>setPoN(e.target.value)} placeholder="2637" className="bg-gray-800 border border-gray-700 text-white rounded px-2 py-1 w-20 text-sm"/><span className="text-gray-500 text-xs">Date:</span><input type="date" value={poD} onChange={e=>setPoD(e.target.value)} className="bg-gray-800 border border-gray-700 text-white rounded px-2 py-1 text-sm"/><span className="text-gray-500 text-xs">Buyer:</span><span className="text-white font-semibold">{stg.buyer||<span className="text-red-400">Set in ⚙️</span>}</span></div>}
-    {vm==="core"&&<div className="overflow-x-auto rounded-xl border border-gray-800"><table className="w-full"><thead><tr className="bg-gray-900/80 text-xs text-gray-400 uppercase"><th className="py-3 px-2 w-8"/><th className="py-3 px-2 text-left">Core</th><th className="py-3 px-2 text-left">Vendor</th><th className="py-3 px-2 text-left">Title</th><TH tip="Composite DSR" className="py-3 px-2 text-right">DSR</TH><TH tip="7-Day DSR" className="py-3 px-2 text-right">7D</TH><th className="py-3 px-2 text-center">T</th><TH tip="Days of Coverage" className="py-3 px-2 text-right">DOC</TH><th className="py-3 px-2 text-right">All-In</th><th className="py-3 px-2 text-right">MOQ</th><th className="py-3 px-2 text-center">S</th><th className="py-3 px-1 border-l-2 border-gray-600"/><th className="py-3 px-2 text-right">Need</th><th className="py-3 px-2 text-right">Order</th><th className="py-3 px-2 text-right">Cost</th><TH tip="DOC After Order" className="py-3 px-2 text-right">After</TH><th className="py-3 px-2 w-10"/></tr></thead><tbody>{enr.map(c=><tr key={c.id} className="border-b border-gray-800/50 hover:bg-gray-800/30 text-sm"><td className="py-2 px-2"><Dot status={c.status}/></td><td className="py-2 px-2 text-blue-400 font-mono text-xs">{c.id}</td><td className="py-2 px-2 text-gray-400 text-xs truncate max-w-[100px]">{c.ven}</td><td className="py-2 px-2 text-gray-200 truncate max-w-[180px]">{c.ti}</td><td className="py-2 px-2 text-right">{D1(c.dsr)}</td><td className="py-2 px-2 text-right">{D1(c.d7)}</td><td className="py-2 px-2 text-center">{c.d7>c.dsr?<span className="text-emerald-400">▲</span>:c.d7<c.dsr?<span className="text-red-400">▼</span>:"—"}</td><td className={`py-2 px-2 text-right font-semibold ${dc(c.doc,c.critDays,c.warnDays)}`}>{R(c.doc)}</td><td className="py-2 px-2 text-right">{R(c.allIn)}</td><td className="py-2 px-2 text-right text-gray-400 text-xs">{c.moq>0?R(c.moq):"—"}</td><td className="py-2 px-2 text-center">{c.seas&&<span className="text-purple-400 text-xs font-bold">{c.seas.peak}</span>}</td><td className="py-2 px-1 border-l-2 border-gray-600"/><td className="py-2 px-2 text-right text-gray-300">{c.needQty>0?R(c.needQty):"—"}</td><td className="py-2 px-2 text-right text-white font-semibold">{c.orderQty>0?R(c.orderQty):"—"}</td><td className="py-2 px-2 text-right text-amber-300">{c.needDollar>0?$(c.needDollar):"—"}</td><td className={`py-2 px-2 text-right ${c.orderQty>0?dc(c.docAfter,c.critDays,c.warnDays):"text-gray-500"}`}>{c.orderQty>0?R(c.docAfter):"—"}</td><td className="py-2 px-2"><button onClick={()=>goCore(c.id)} className="text-blue-400 text-xs px-1.5 py-0.5 bg-blue-400/10 rounded">V</button></td></tr>)}</tbody>
-      <tfoot><tr className="bg-gray-900 border-t-2 border-gray-700 text-sm font-semibold"><td colSpan={4} className="py-3 px-2 text-gray-300">{enr.length}</td><td className="py-3 px-2 text-right text-white">{D1(tot.d)}</td><td colSpan={3}/><td className="py-3 px-2 text-right text-white">{R(tot.a)}</td><td colSpan={2}/><td className="border-l-2 border-gray-600"/><td className="py-3 px-2 text-right">{R(tot.n)}</td><td className="py-3 px-2 text-right text-white">{R(tot.o)}</td><td className="py-3 px-2 text-right text-amber-300">{$(tot.co)}</td><td colSpan={2}/></tr></tfoot></table></div>}
-    {vm==="vendor"&&vG.map(grp=>{const v=grp.v;const tg=gTD(v,stg);const poI=getPOI(grp.cores,vendorSub!=="cores"?grp.bundles:[]);const poT=poI.reduce((s,i)=>s+i.qty*i.cost,0);const poC=poI.reduce((s,i)=>s+(v.vou==='Cases'&&i.isCoreItem?Math.ceil(i.qty/(i.cp||1)):0),0);const meets=poT>=(v.moqDollar||0);
-      return<div key={v.name} className="mb-5 border border-gray-800 rounded-xl overflow-hidden"><div className="bg-gray-900 px-4 py-3"><div className="flex flex-wrap items-center gap-3 mb-2"><span className="text-white font-semibold">{v.name}</span>{v.country&&<span className="text-xs text-gray-500">{v.country}</span>}<span className="text-xs text-gray-400">LT:{v.lt}d</span><span className="text-xs text-gray-400">MOQ:{$(v.moqDollar)}</span><span className="text-xs text-gray-400">Tgt:{tg}d</span><span className="text-xs text-gray-400">{v.payment}</span>{poI.length===0?<span className="ml-auto text-xs text-gray-400 bg-gray-700 px-2 py-0.5 rounded">—</span>:<span className={`ml-auto text-xs font-semibold px-2 py-0.5 rounded ${meets?"text-emerald-400 bg-emerald-400/10":"text-red-400 bg-red-400/10"}`}>{meets?"✓":"!"} {$(poT)}{poC>0?" / "+poC+"cs":""}</span>}</div>
-        <div className="flex flex-wrap gap-2 items-center"><button onClick={()=>fillR(grp.cores)} className="text-xs bg-blue-600/80 text-white px-2.5 py-1 rounded">Fill Rec</button><button onClick={()=>clrV(grp.cores,grp.bundles)} className="text-xs bg-gray-700 text-gray-300 px-2.5 py-1 rounded">Clear</button><div className="ml-auto flex gap-2">
-          <button disabled={!poI.length} onClick={()=>{genRFQ(v,poI,stg.buyer,poD);setToast("RFQ "+v.name)}} className={`text-xs px-3 py-1.5 rounded font-medium ${poI.length?"bg-orange-600 text-white":"bg-gray-700 text-gray-500 cursor-not-allowed"}`}>RFQ</button>
-          <button disabled={!poI.length} onClick={()=>{genPO(v,poI,poN,stg.buyer,poD);setToast("PO "+v.name)}} className={`text-xs px-3 py-1.5 rounded font-medium ${poI.length?"bg-emerald-600 text-white":"bg-gray-700 text-gray-500 cursor-not-allowed"}`}>PO</button>
-          <button disabled={!poI.length} onClick={()=>{cp7f(v,poI,poN,stg.buyer,poD);setToast("7f copied!")}} className={`text-xs px-3 py-1.5 rounded font-medium ${poI.length?"bg-teal-600 text-white":"bg-gray-700 text-gray-500 cursor-not-allowed"}`}>7f</button>
-          <button disabled={!poI.length} onClick={()=>{cp7g(v,poI,poN,stg.buyer);setToast("7g copied!")}} className={`text-xs px-3 py-1.5 rounded font-medium ${poI.length?"bg-purple-600 text-white":"bg-gray-700 text-gray-500 cursor-not-allowed"}`}>7g</button></div></div></div>
-        <div className="overflow-x-auto"><table className="w-full text-xs"><thead><VTH/></thead><tbody>
-          {vendorSub==="bundles"?<>{grp.bundles.map(b=><BundleRow key={b.j} b={b}/>)}{grp.bundles.length===0&&<tr><td colSpan={showRS?26:21} className="py-4 text-center text-gray-500">No bundles</td></tr>}</>
-          :vendorSub==="mix"?<>{grp.cores.map(c=>{const cBs=(data.bundles||[]).filter(b=>b.core1===c.id&&b.active==="Yes").map(b=>({...b,fee:feMap[b.j],margin:feMap[b.j]&&feMap[b.j].pr>0?((feMap[b.j].gp/feMap[b.j].pr)*100):0}));const bAdj=cBs.reduce((s,b)=>s+bundleEffQ(b),0);return<Fragment key={c.id}><CoreRow c={c} mixAdj={bAdj}/>{cBs.map(b=><BundleRow key={b.j} b={b} indent/>)}</Fragment>})}</>
-          :<>{grp.cores.map(c=><CoreRow key={c.id} c={c}/>)}<tr className="bg-gray-900/60 font-semibold border-t-2 border-gray-700"><td colSpan={4} className="py-2 px-1 text-gray-300">{grp.cores.length}</td><td className="py-2 px-1 text-right">{D1(grp.cores.reduce((s,c)=>s+c.dsr,0))}</td><td colSpan={3}/><td className="py-2 px-1 text-right">{R(grp.cores.reduce((s,c)=>s+c.allIn,0))}</td><td colSpan={showRS?8:3}/><td className="border-l-2 border-gray-600"/><td className="py-2 px-1 text-center text-white">{R(grp.cores.reduce((s,c)=>s+gPcs(c.id),0))}</td><td className="py-2 px-1 text-center text-white">{R(grp.cores.reduce((s,c)=>s+gCas(c.id),0))}</td><td colSpan={3}/><td className="py-2 px-1 text-right text-amber-300">{$(grp.cores.reduce((s,c)=>s+coreEffQ(c)*c.cost,0))}</td><td colSpan={2}/></tr></>}
-        </tbody></table></div></div>})}</div>}
-
-// Core Detail
-function CoreTab({data,stg,hist,daily,coreId,onBack,goBundle}){
-  const[s,setS]=useState("");const[sel,setSel]=useState(coreId||null);
-  useEffect(()=>{if(coreId)setSel(coreId)},[coreId]);
-  const core=sel?(data.cores||[]).find(c=>c.id===sel):null;
-  const ven=core?(data.vendors||[]).find(v=>v.name===core.ven):null;
-  const lt=ven?.lt||30;const tg=gTD(ven,stg);
-  const feM=useMemo(()=>{const m={};(data.fees||[]).forEach(f=>m[f.j]=f);return m},[data.fees]);
-  const saM=useMemo(()=>{const m={};(data.sales||[]).forEach(s=>m[s.j]=s);return m},[data.sales]);
-  const cH=useMemo(()=>(hist?.coreInv||[]).filter(h=>h.core===sel),[hist,sel]);
-  const cm2=cMo();const cHF=useMemo(()=>cH.filter(h=>!(h.y===cm2.y&&h.m===cm2.m)),[cH,cm2]);
-  const yrs=useMemo(()=>gY(cHF),[cHF]);
-  const dsrCh=useMemo(()=>MN.map((m,i)=>{const r={month:m};yrs.forEach(y=>{const h=cHF.find(x=>x.y===y&&x.m===i+1);r["d_"+y]=h?.avgDsr??null});return r}),[cHF,yrs]);
-  const yTot=useMemo(()=>{const t={};yrs.forEach(y=>{t[y]=Math.round(cHF.filter(h=>h.y===y).reduce((s,x)=>s+x.avgDsr,0))});return t},[cHF,yrs]);
-  const cBA=useMemo(()=>{if(!core)return[];const b1=(data.bundles||[]).filter(b=>b.core1===sel);if(b1.length>0)return b1;const jls=(core.jlsList||"").split(/[,\n]/).filter(Boolean).map(j=>j.trim());return(data.bundles||[]).filter(b=>jls.includes(b.j))},[core,sel,data.bundles]);
-  const bIds=useMemo(()=>cBA.map(b=>b.j),[cBA]);
-  const inbS=useMemo(()=>{if(!sel||!data.inbound)return[];const ids=new Set([sel,...bIds].map(x=>(x||"").trim().toLowerCase()));return data.inbound.filter(s=>ids.has((s.core||"").trim().toLowerCase()))},[data.inbound,sel,bIds]);
-  const bSH=useMemo(()=>(hist?.bundleSales||[]).filter(h=>bIds.includes(h.j)),[hist,bIds]);
-  const bSHF=useMemo(()=>bSH.filter(h=>!(h.y===cm2.y&&h.m===cm2.m)),[bSH,cm2]);
-  const uYrs=useMemo(()=>gY(bSHF),[bSHF]);
-  const uCh=useMemo(()=>{const byMY={};bSHF.forEach(h=>{const k=h.y+"-"+h.m;if(!byMY[k])byMY[k]={y:h.y,m:h.m,u:0};byMY[k].u+=h.units});return MN.map((m,i)=>{const r={month:m};uYrs.forEach(y=>{const x=byMY[y+"-"+(i+1)];r["u_"+y]=x?.u??null});return r})},[bSHF,uYrs]);
-  const uYTot=useMemo(()=>{const t={};uYrs.forEach(y=>{const byMY={};bSHF.filter(h=>h.y===y).forEach(h=>{const k=h.m;if(!byMY[k])byMY[k]=0;byMY[k]+=h.units});t[y]=Object.values(byMY).reduce((a,b)=>a+b,0)});return t},[bSHF,uYrs]);
-  const ai=core?cAI(core):0;const status=core?gS(core.doc,lt,core.buf||14,stg):"healthy";
-  const nq=core?cNQ(core,tg):0;const oq=core?cOQ(nq,core.moq):0;const da=core?cDA(core,oq):0;
-  const seas=core?cSeas(core.id,hist?.coreInv||[]):null;
-  const pipe=core?[{l:"Raw",v:core.raw},{l:"Inb",v:core.inb},{l:"PP",v:core.pp},{l:"JFN",v:core.jfn},{l:"PQ",v:core.pq},{l:"JI",v:core.ji},{l:"FBA",v:core.fba}]:[];const mxP=Math.max(...pipe.map(p=>p.v),1);
-  const tBD=useMemo(()=>cBA.reduce((s,b)=>s+(b.cd||0),0),[cBA]);
-  const tPR=useMemo(()=>(data.sales||[]).reduce((s,x)=>s+(x.ltR||0),0),[data.sales]);
-  const tPP=useMemo(()=>(data.sales||[]).reduce((s,x)=>s+(x.ltP||0),0),[data.sales]);
-  // Bundle % by L30d sales
-  const cB=useMemo(()=>{const totL28=cBA.reduce((s,b)=>{const sa=saM[b.j];return s+(sa?.l28U||0)},0);return cBA.map(b=>{const sa=saM[b.j];const f=feM[b.j];const l28=sa?.l28U||0;return{...b,fee:f,sale:sa,pct:tBD>0?+((b.cd/tBD)*100).toFixed(1):0,l28pct:totL28>0?+((l28/totL28)*100).toFixed(1):0,l28}}).sort((a,b)=>(b.cd||0)-(a.cd||0))},[cBA,feM,saM,tBD]);
-  const etaT=useMemo(()=>inbS.filter(s=>s.eta).map(s=>fE(s.eta)).join(", "),[inbS]);
-  const cDays=useMemo(()=>(daily?.coreDays||[]).filter(d=>d.core===sel).sort((a,b)=>b.date.localeCompare(a.date)).slice(0,14),[daily,sel]);
-  const bT=useMemo(()=>{let d=0,lr=0,lp=0;cB.forEach(b=>{d+=b.cd||0;if(b.sale){lr+=b.sale.ltR||0;lp+=b.sale.ltP||0}});return{d,lr,lp}},[cB]);
-
-  if(!core)return<div className="p-4 max-w-4xl mx-auto"><div className="flex items-center gap-3 mb-4"><button onClick={onBack} className="text-gray-400 hover:text-white text-sm">← Back</button><input type="text" placeholder="Search core..." value={s} onChange={e=>setS(e.target.value)} className="bg-gray-800 border border-gray-700 text-white rounded-lg px-4 py-2.5 flex-1 max-w-md text-sm"/></div>{s.length>=2?<div className="space-y-1">{(data.cores||[]).filter(c=>{const q=s.toLowerCase();return c.id.toLowerCase().includes(q)||c.ti.toLowerCase().includes(q)}).slice(0,12).map(c=><button key={c.id} onClick={()=>setSel(c.id)} className="w-full text-left px-4 py-2.5 rounded-lg bg-gray-900/50 hover:bg-gray-800 flex items-center gap-3"><Dot status={gS(c.doc,(data.vendors||[]).find(v=>v.name===c.ven)?.lt||30,c.buf,stg)}/><span className="text-blue-400 font-mono text-sm">{c.id}</span><span className="text-gray-300 text-sm truncate">{c.ti}</span></button>)}</div>:<p className="text-gray-500 text-sm">Type 2+ chars</p>}</div>;
-
-  return<div className="p-4 max-w-7xl mx-auto">
-    <button onClick={()=>{setSel(null);onBack()}} className="text-gray-400 hover:text-white text-sm mb-4">← Back</button>
-    <div className="bg-gray-900 rounded-xl p-4 mb-4 border border-gray-800"><div className="flex flex-wrap items-center gap-3 mb-2"><span className="text-xl font-bold text-white">{core.id}</span><Dot status={status}/><span className={`text-xs px-2 py-0.5 rounded font-semibold ${status==="critical"?"bg-red-500/20 text-red-400":status==="warning"?"bg-amber-500/20 text-amber-400":"bg-emerald-500/20 text-emerald-400"}`}>{status.toUpperCase()}</span>{seas&&<span className="text-xs px-2 py-0.5 rounded bg-purple-500/20 text-purple-400 font-semibold">SEASONAL {seas.peak}</span>}</div><p className="text-gray-300 text-sm mb-1">{core.ti}</p><p className="text-gray-500 text-xs">{core.ven} · VSKU:{core.vsku||"—"} · {$2(core.cost)} · LT:{lt}d · Tgt:{tg}d</p></div>
-    <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-4">{[{l:"C.DSR",v:D1(core.dsr)},{l:"7D",v:D1(core.d7)},{l:"DOC",v:R(core.doc),c:dc(core.doc,lt,lt+(core.buf||14))},{l:"All-In Own Pcs",v:R(ai)},{l:"Inbound",v:R(core.inb),sub:etaT}].map(k=><div key={k.l} className="bg-gray-900 rounded-lg p-3 border border-gray-800"><div className="text-gray-500 text-xs mb-1">{k.l}</div><div className={`text-lg font-bold ${k.c||"text-white"}`}>{k.v}</div>{k.sub&&<div className="text-emerald-400 text-xs mt-1">ETA: {k.sub}</div>}</div>)}</div>
-    {inbS.length>0&&<div className="bg-gray-900 rounded-xl p-4 mb-4 border border-gray-800"><h3 className="text-white font-semibold text-sm mb-3">Inbound Shipments</h3><table className="w-full text-xs"><thead><tr className="text-gray-500 uppercase"><th className="py-1 px-2 text-left">Order#</th><th className="py-1 px-2 text-left">Core#</th><th className="py-1 px-2 text-left">Title</th><th className="py-1 px-2 text-left">Vendor</th><th className="py-1 px-2 text-right">Pcs</th><th className="py-1 px-2 text-right">Missing</th><th className="py-1 px-2 text-right">ETA</th></tr></thead><tbody>{inbS.map((s,i)=><tr key={i}><td className="py-1.5 px-2 text-gray-300">{s.orderNum}</td><td className="py-1.5 px-2 text-blue-400 font-mono">{s.core}</td><td className="py-1.5 px-2 text-gray-300 truncate max-w-[140px]">{s.shortTitle||"—"}</td><td className="py-1.5 px-2">{s.vendor}</td><td className="py-1.5 px-2 text-right text-white">{R(s.pieces)}</td><td className="py-1.5 px-2 text-right text-red-400">{s.piecesMissing>0?R(s.piecesMissing):"—"}</td><td className="py-1.5 px-2 text-right text-emerald-400">{s.eta?fE(s.eta):"—"}</td></tr>)}</tbody></table></div>}
-    {cDays.length>0&&<div className="bg-gray-900 rounded-xl p-4 mb-4 border border-gray-800"><h3 className="text-white font-semibold text-sm mb-3">Daily ({cDays.length}d)</h3><div className="overflow-x-auto"><table className="w-full text-xs"><thead><tr className="text-gray-500 uppercase"><th className="py-1 px-1 text-left">Date</th><th className="py-1 px-1 text-right">DSR</th><th className="py-1 px-1 text-right">1D</th><th className="py-1 px-1 text-right">3D</th><th className="py-1 px-1 text-right">7D</th><th className="py-1 px-1 text-right">DOC</th><th className="py-1 px-1 text-right">Δ#</th><th className="py-1 px-1 text-right">Δ%</th><th className="py-1 px-1 text-right">Cash</th><th className="py-1 px-1 text-right">Own</th><th className="py-1 px-1 text-right">Raw</th><th className="py-1 px-1 text-right">Inb</th><th className="py-1 px-1 text-right">PP</th><th className="py-1 px-1 text-right">JFN</th><th className="py-1 px-1 text-right">PQ</th><th className="py-1 px-1 text-right">JI</th><th className="py-1 px-1 text-right">FBA</th></tr></thead><tbody>{cDays.map((d,i)=>{const p=cDays[i+1];const dC=p?d.doc-p.doc:null;const dP=p&&p.doc>0?((d.doc-p.doc)/p.doc*100):null;return<tr key={d.date} className={i%2===0?"bg-gray-800/30":""}><td className="py-1 px-1 text-gray-300 whitespace-nowrap">{fD(d.date)}</td><td className="py-1 px-1 text-right text-white font-semibold">{D1(d.dsr)}</td><td className="py-1 px-1 text-right">{D1(d.d1)}</td><td className="py-1 px-1 text-right">{D1(d.d3)}</td><td className="py-1 px-1 text-right">{D1(d.d7)}</td><td className={`py-1 px-1 text-right font-semibold ${dc(d.doc,lt,lt+(core.buf||14))}`}>{R(d.doc)}</td><td className={`py-1 px-1 text-right ${dC>0?"text-emerald-400":dC<0?"text-red-400":"text-gray-500"}`}>{dC!=null?(dC>0?"+":"")+Math.round(dC):"—"}</td><td className={`py-1 px-1 text-right ${dP>0?"text-emerald-400":dP<0?"text-red-400":"text-gray-500"}`}>{dP!=null?(dP>0?"+":"")+dP.toFixed(1)+"%":"—"}</td><td className="py-1 px-1 text-right">{$(d.cash)}</td><td className="py-1 px-1 text-right">{R(d.own)}</td><td className="py-1 px-1 text-right">{R(d.raw)}</td><td className="py-1 px-1 text-right">{R(d.inb)}</td><td className="py-1 px-1 text-right">{R(d.pp)}</td><td className="py-1 px-1 text-right">{R(d.jfn)}</td><td className="py-1 px-1 text-right">{R(d.pq)}</td><td className="py-1 px-1 text-right">{R(d.ji)}</td><td className="py-1 px-1 text-right">{R(d.fba)}</td></tr>})}</tbody></table></div></div>}
-    {/* Monthly DSR as LINE chart */}
-    {cHF.length>0&&<div className="bg-gray-900 rounded-xl p-4 mb-4 border border-gray-800"><h3 className="text-white font-semibold text-sm mb-2">Monthly DSR (YoY)</h3><ResponsiveContainer width="100%" height={200}><LineChart data={dsrCh}><CartesianGrid strokeDasharray="3 3" stroke="#374151"/><XAxis dataKey="month" tick={{fill:"#9ca3af",fontSize:10}}/><YAxis tick={{fill:"#9ca3af",fontSize:10}}/><Tooltip {...TTP}/><Legend/>{yrs.map(y=><Line key={y} dataKey={"d_"+y} stroke={YC[y]||"#6b7280"} strokeWidth={2} dot={{r:2}} connectNulls name={""+y}/>)}</LineChart></ResponsiveContainer></div>}
-    {/* Monthly Units as BAR chart + table with year totals */}
-    {bSHF.length>0&&<div className="bg-gray-900 rounded-xl p-4 mb-4 border border-gray-800"><h3 className="text-white font-semibold text-sm mb-2">Monthly Units (YoY) <span className="text-gray-500 text-xs font-normal">excl. current</span></h3><div className="flex flex-col lg:flex-row gap-4"><div className="flex-1 min-w-0"><ResponsiveContainer width="100%" height={200}><BarChart data={uCh}><CartesianGrid strokeDasharray="3 3" stroke="#374151"/><XAxis dataKey="month" tick={{fill:"#9ca3af",fontSize:10}}/><YAxis tick={{fill:"#9ca3af",fontSize:10}}/><Tooltip {...TTP}/><Legend/>{uYrs.map(y=><Bar key={y} dataKey={"u_"+y} fill={YC[y]||"#6b7280"} opacity={0.85} radius={[2,2,0,0]} name={""+y}/>)}</BarChart></ResponsiveContainer></div><div className="lg:w-72 overflow-x-auto"><table className="w-full text-xs"><thead><tr className="text-gray-500"><th className="py-1 px-1 text-left">Mo</th>{uYrs.map(y=><th key={y} className="py-1 px-1 text-right" style={{color:YC[y]||"#6b7280"}}>{y}</th>)}</tr></thead><tbody>{uCh.map((r,i)=><tr key={i} className={i%2===0?"bg-gray-800/20":""}><td className="py-0.5 px-1 text-gray-300">{r.month}</td>{uYrs.map(y=><td key={y} className="py-0.5 px-1 text-right text-white">{r["u_"+y]!=null?R(r["u_"+y]):""}</td>)}</tr>)}<tr className="border-t border-gray-700 font-semibold"><td className="py-1 px-1">Total</td>{uYrs.map(y=><td key={y} className="py-1 px-1 text-right text-white">{R(uYTot[y])}</td>)}</tr></tbody></table></div></div></div>}
-    <div className="bg-gray-900 rounded-xl p-4 mb-4 border border-gray-800"><h3 className="text-white font-semibold text-sm mb-3">Pipeline</h3><div className="flex items-end gap-2 h-28">{pipe.map((p,i)=><div key={p.l} className="flex-1 flex flex-col items-center"><span className="text-white text-xs font-semibold mb-1">{R(p.v)}</span><div className="w-full rounded-t-md" style={{height:Math.max((p.v/mxP)*70,4)+"px",backgroundColor:i===pipe.length-1?BL:i===0?TL:"#6b7280"}}/><span className="text-gray-500 text-xs mt-1">{p.l}</span></div>)}</div></div>
-    {/* Bundles with extra columns + L28d % */}
-    <div className="bg-gray-900 rounded-xl p-4 mb-4 border border-gray-800 overflow-x-auto"><h3 className="text-white font-semibold text-sm mb-3">Bundles ({cB.length}) <span className="text-gray-500 text-xs font-normal">% = L28d unit weight</span></h3>{cB.length>0?<table className="w-full text-xs"><thead><tr className="text-gray-500 uppercase"><th className="py-2 px-1 text-left">JLS</th><th className="py-2 px-1 text-left">Title</th><TH tip="Complete DSR" className="py-2 px-1 text-right">C.DSR</TH><TH tip="L28d unit %" className="py-2 px-1 text-right">%28d</TH><TH tip="FIB DOC" className="py-2 px-1 text-right">FIB DOC</TH><TH tip="Complete DOC" className="py-2 px-1 text-right">C.DOC</TH><th className="py-2 px-1 border-l border-gray-700"/><TH tip="Price" className="py-2 px-1 text-right">Price</TH><TH tip="Gross Profit" className="py-2 px-1 text-right">GP</TH><TH tip="All-In COGS" className="py-2 px-1 text-right">AICOGS</TH><TH tip="Margin %" className="py-2 px-1 text-right">Margin</TH><TH tip="FBA Inventory" className="py-2 px-1 text-right">FBA</TH><TH tip="SC Inventory" className="py-2 px-1 text-right">SC</TH><th className="py-2 px-1 border-l border-gray-700"/><TH tip="Lifetime Revenue" className="py-2 px-1 text-right">LT Rev</TH><TH tip="Lifetime Profit" className="py-2 px-1 text-right">LT Prof</TH><th className="py-2 px-1 w-8"/></tr></thead><tbody>{cB.map(b=>{const f=b.fee;const sa=b.sale;const margin=f&&f.pr>0?((f.gp/f.pr)*100):0;return<tr key={b.j} className="border-t border-gray-800/50 hover:bg-gray-800/20"><td className="py-1.5 px-1 text-blue-400 font-mono">{b.j}</td><td className="py-1.5 px-1 text-gray-200 truncate max-w-[130px]">{b.t}</td><td className="py-1.5 px-1 text-right">{D1(b.cd)}</td><td className="py-1.5 px-1 text-right text-teal-400">{b.l28pct}%</td><td className="py-1.5 px-1 text-right">{R(b.fibDoc)}</td><td className="py-1.5 px-1 text-right">{R(b.doc)}</td><td className="py-1.5 px-1 border-l border-gray-700"/><td className="py-1.5 px-1 text-right">{f?$2(f.pr):"—"}</td><td className="py-1.5 px-1 text-right text-emerald-400">{f?$2(f.gp):"—"}</td><td className="py-1.5 px-1 text-right">{f?$2(f.aicogs):"—"}</td><td className="py-1.5 px-1 text-right">{margin>0?P(margin):"—"}</td><td className="py-1.5 px-1 text-right">{R(b.fibInv)}</td><td className="py-1.5 px-1 text-right">{R(b.scInv)}</td><td className="py-1.5 px-1 border-l border-gray-700"/><td className="py-1.5 px-1 text-right">{sa?$(sa.ltR):"—"}</td><td className="py-1.5 px-1 text-right text-emerald-400">{sa?$(sa.ltP):"—"}</td><td className="py-1.5 px-1"><button onClick={()=>goBundle(b.j)} className="text-blue-400 px-1 py-0.5 bg-blue-400/10 rounded">V</button></td></tr>})}<tr className="bg-gray-900/60 border-t-2 border-gray-700 font-semibold"><td colSpan={2} className="py-2 px-1 text-gray-300">Tot</td><td className="py-2 px-1 text-right text-white">{D1(bT.d)}</td><td colSpan={3}/><td className="border-l border-gray-700"/><td colSpan={6}/><td className="border-l border-gray-700"/><td className="py-2 px-1 text-right text-white">{$(bT.lr)}</td><td className="py-2 px-1 text-right text-emerald-400">{$(bT.lp)}</td><td/></tr></tbody></table>:<p className="text-gray-500 text-sm">No bundles.</p>}</div>
-    <div className="bg-gray-900 rounded-xl p-4 border border-gray-800"><h3 className="text-white font-semibold text-sm mb-3">Purchase Rec</h3><div className="grid grid-cols-2 sm:grid-cols-5 gap-4">{[{l:"DOC",v:R(core.doc),c:dc(core.doc,lt,lt+(core.buf||14))},{l:"Need "+tg+"d",v:R(nq)},{l:"Order(MOQ:"+R(core.moq)+")",v:R(oq)},{l:"Cost",v:$(oq*core.cost),c:"text-amber-300"},{l:"After DOC",v:oq>0?R(da):"—",c:"text-emerald-400"}].map(k=><div key={k.l}><div className="text-gray-500 text-xs">{k.l}</div><div className={`text-lg font-bold ${k.c||"text-white"}`}>{k.v}</div></div>)}</div></div></div>}
-
-// Bundle Detail
-function BundleTab({data,stg,hist,daily,bundleId,onBack,goCore}){
-  const[s,setS]=useState("");const[sel,setSel]=useState(bundleId||null);const[abcSort,setAbcSort]=useState("rev");const[abcFilter,setAbcFilter]=useState("");const[abcSF,setAbcSF]=useState("");
-  useEffect(()=>{if(bundleId)setSel(bundleId)},[bundleId]);
-  const b=sel?(data.bundles||[]).find(x=>x.j===sel):null;
-  const fee=b?(data.fees||[]).find(f=>f.j===b.j):null;
-  const sale=b?(data.sales||[]).find(s=>s.j===b.j):null;
-  const core=b?(data.cores||[]).find(c=>c.id===b.core1):null;
-  const abcA=useMemo(()=>data.abcA||[],[data.abcA]);const abcT=useMemo(()=>data.abcT||[],[data.abcT]);
-  const bAbc=sel?abcA.find(a=>a.j===sel):null;const bTrend=sel?abcT.find(t=>t.j===sel):null;
-  // Bundle inventory status
-  const bStatus=b?gS(b.doc,60,30,{critDays:30,warnDays:60}):"healthy";
-  const sH=useMemo(()=>(hist?.bundleSales||[]).filter(h=>h.j===sel).sort((a,b)=>a.y===b.y?a.m-b.m:a.y-b.y),[hist,sel]);
-  const curMo=cMo();const sHF=useMemo(()=>sH.filter(h=>!(h.y===curMo.y&&h.m===curMo.m)),[sH,curMo]);
-  const yrs=useMemo(()=>gY(sHF),[sHF]);
-  const yD=useMemo(()=>MN.map((m,i)=>{const r={month:m};yrs.forEach(y=>{const x=sHF.find(h=>h.y===y&&h.m===i+1);r["u_"+y]=x?.units??null});return r}),[sHF,yrs]);
-  const bDays=useMemo(()=>(daily?.bundleDays||[]).filter(d=>d.j===sel).sort((a,x)=>x.date.localeCompare(a.date)).slice(0,14),[daily,sel]);
-  const abcSorted=useMemo(()=>{let arr=[...abcA];if(abcFilter)arr=arr.filter(a=>a.profABC===abcFilter);if(abcSF)arr=arr.filter(a=>a.t.toLowerCase().includes(abcSF.toLowerCase())||a.j.toLowerCase().includes(abcSF.toLowerCase()));return arr.sort((a,b)=>abcSort==="rev"?(b.rev-a.rev):abcSort==="profit"?(b.profit-a.profit):(b.units-a.units))},[abcA,abcSort,abcFilter,abcSF]);
-
-  if(!b)return<div className="p-4 max-w-5xl mx-auto"><div className="flex items-center gap-3 mb-4"><button onClick={onBack} className="text-gray-400 hover:text-white text-sm">← Back</button><input type="text" placeholder="Search bundle..." value={s} onChange={e=>setS(e.target.value)} className="bg-gray-800 border border-gray-700 text-white rounded-lg px-4 py-2.5 flex-1 max-w-md text-sm"/></div>{s.length>=2?<div className="space-y-1">{(data.bundles||[]).filter(x=>{const q=s.toLowerCase();return x.j.toLowerCase().includes(q)||x.t.toLowerCase().includes(q)}).slice(0,12).map(x=>{const xS=gS(x.doc,60,30,{critDays:30,warnDays:60});return<button key={x.j} onClick={()=>setSel(x.j)} className="w-full text-left px-4 py-2.5 rounded-lg bg-gray-900/50 hover:bg-gray-800 flex items-center gap-3"><Dot status={xS}/><span className="text-blue-400 font-mono text-sm">{x.j}</span><span className="text-gray-300 text-sm truncate">{x.t}</span></button>})}</div>:<div>{abcA.length>0&&<div className="mt-4"><div className="flex flex-wrap items-center justify-between gap-2 mb-2"><h3 className="text-white font-semibold text-sm">ABC Analysis</h3><div className="flex gap-2"><input type="text" placeholder="Filter..." value={abcSF} onChange={e=>setAbcSF(e.target.value)} className="bg-gray-800 border border-gray-700 text-white text-xs rounded px-2 py-1 w-32"/><select value={abcFilter} onChange={e=>setAbcFilter(e.target.value)} className="bg-gray-800 border border-gray-700 text-gray-300 text-xs rounded px-2 py-1"><option value="">All ABC</option><option value="A">A</option><option value="B">B</option><option value="C">C</option></select><select value={abcSort} onChange={e=>setAbcSort(e.target.value)} className="bg-gray-800 border border-gray-700 text-gray-300 text-xs rounded px-2 py-1"><option value="rev">Revenue ↓</option><option value="profit">Profit ↓</option><option value="units">Units ↓</option></select></div></div>{data.abcSub&&<p className="text-gray-400 text-xs mb-3">{data.abcSub}</p>}<div className="overflow-x-auto"><table className="w-full text-xs"><thead><tr className="text-gray-500 uppercase"><th className="py-1 px-2 w-6"/><th className="py-1 px-2 text-left">JLS</th><th className="py-1 px-2 text-left">Title</th><th className="py-1 px-2 text-right">Revenue</th><th className="py-1 px-2 text-right">Profit</th><th className="py-1 px-2 text-right">Units</th><th className="py-1 px-2 text-center">ABC</th></tr></thead><tbody>{abcSorted.slice(0,50).map((a,i)=>{const bs=gS(((data.bundles||[]).find(x=>x.j===a.j)||{}).doc||999,60,30,{critDays:30,warnDays:60});return<tr key={a.j+"-"+i} className="border-t border-gray-800/30 hover:bg-gray-800/20 cursor-pointer" onClick={()=>setSel(a.j)}><td className="py-1.5 px-2"><Dot status={bs}/></td><td className="py-1.5 px-2 text-blue-400 font-mono">{a.j}</td><td className="py-1.5 px-2 text-gray-200 truncate max-w-[200px]">{a.t}</td><td className="py-1.5 px-2 text-right">{$(a.rev)}</td><td className="py-1.5 px-2 text-right text-emerald-400">{$(a.profit)}</td><td className="py-1.5 px-2 text-right">{R(a.units)}</td><td className="py-1.5 px-2 text-center"><span className={`px-1.5 py-0.5 rounded text-xs font-bold ${a.profABC==="A"?"bg-emerald-500/20 text-emerald-400":a.profABC==="B"?"bg-blue-500/20 text-blue-400":"bg-gray-500/20 text-gray-400"}`}>{a.profABC}</span></td></tr>})}</tbody></table></div></div>}</div>}</div>;
-
-  const pct=core?.dsr>0?((b.cd/core.dsr)*100).toFixed(1):"—";
-  return<div className="p-4 max-w-7xl mx-auto">
-    <button onClick={()=>{setSel(null);onBack()}} className="text-gray-400 hover:text-white text-sm mb-4">← Back</button>
-    <div className="bg-gray-900 rounded-xl p-4 mb-4 border border-gray-800"><div className="flex flex-wrap items-center gap-3 mb-2"><span className="text-xl font-bold text-white">{b.j}</span><Dot status={bStatus}/>{core&&<button onClick={()=>goCore(core.id)} className="text-blue-400 text-xs bg-blue-400/10 px-2 py-0.5 rounded">→{core.id}</button>}{bAbc&&<span className={`text-xs px-2 py-0.5 rounded font-bold ${bAbc.profABC==="A"?"bg-emerald-500/20 text-emerald-400":bAbc.profABC==="B"?"bg-blue-500/20 text-blue-400":"bg-gray-500/20 text-gray-400"}`}>ABC: {bAbc.profABC}</span>}{bTrend&&<><span className="text-xs text-gray-400">Q1'26: {bTrend.q1_26||"—"}</span><span className="text-xs text-gray-400">Trend: {bTrend.movement||"—"}</span></>}</div><p className="text-gray-300 text-sm">{b.t}</p><p className="text-gray-500 text-xs">ASIN:{b.asin} · {b.vendors}</p></div>
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-      <div className="bg-gray-900 rounded-xl p-4 border border-gray-800"><h4 className="text-gray-500 text-xs uppercase mb-3">Sales & Inventory</h4><div className="grid grid-cols-3 gap-y-4">{[{l:"C.DSR",v:D1(b.cd)},{l:"% Core",v:pct+"%"},{l:"DOC",v:R(b.doc)},{l:"FIB DOC",v:R(b.fibDoc)},{l:"FBA",v:R(b.fibInv)},{l:"Res",v:R(b.reserved)}].map(k=><div key={k.l}><div className="text-gray-500 text-xs">{k.l}</div><div className="text-white font-bold text-lg">{k.v}</div></div>)}</div></div>
-      <div className="bg-gray-900 rounded-xl p-4 border border-gray-800"><h4 className="text-gray-500 text-xs uppercase mb-3">Profitability</h4><div className="grid grid-cols-3 gap-y-4">{[{l:"Price",v:fee?.pr},{l:"COGS",v:fee?.pdmtCogs},{l:"AICOGS",v:fee?.aicogs},{l:"Fee",v:fee?.totalFee},{l:"GP",v:fee?.gp,c:"text-emerald-400"},{l:"Net",v:fee?.netRev}].map(k=><div key={k.l}><div className="text-gray-500 text-xs">{k.l}</div><div className={`font-bold text-lg ${k.c||"text-white"}`}>{k.v!=null?$2(k.v):"—"}</div></div>)}</div></div></div>
-    {sale&&<div className="bg-gray-900 rounded-xl p-4 mb-4 border border-gray-800"><h3 className="text-white font-semibold text-sm mb-3">Revenue</h3><table className="w-full text-sm"><thead><tr className="text-gray-500 text-xs uppercase"><th className="py-2 text-left"/><th className="py-2 text-right">Lifetime</th><th className="py-2 text-right">Last Year</th><th className="py-2 text-right">%LT</th><th className="py-2 text-right">This Year</th><th className="py-2 text-right">%LT</th></tr></thead><tbody><tr className="border-t border-gray-800"><td className="py-2 text-gray-400">Revenue</td><td className="py-2 text-right text-white">{$(sale.ltR)}</td><td className="py-2 text-right">{$(sale.lyR)}</td><td className="py-2 text-right text-gray-400 text-xs">{sale.ltR>0?P(sale.lyR/sale.ltR*100):""}</td><td className="py-2 text-right">{$(sale.tyR)}</td><td className="py-2 text-right text-gray-400 text-xs">{sale.ltR>0?P(sale.tyR/sale.ltR*100):""}</td></tr><tr className="border-t border-gray-800"><td className="py-2 text-gray-400">Profit</td><td className="py-2 text-right text-emerald-400">{$(sale.ltP)}</td><td className="py-2 text-right text-emerald-400">{$(sale.lyP)}</td><td className="py-2 text-right text-gray-400 text-xs">{sale.ltP>0?P(sale.lyP/sale.ltP*100):""}</td><td className="py-2 text-right text-emerald-400">{$(sale.tyP)}</td><td className="py-2 text-right text-gray-400 text-xs">{sale.ltP>0?P(sale.tyP/sale.ltP*100):""}</td></tr></tbody></table></div>}
-    {bDays.length>0&&<div className="bg-gray-900 rounded-xl p-4 mb-4 border border-gray-800"><h3 className="text-white font-semibold text-sm mb-3">Daily ({bDays.length}d)</h3><div className="overflow-x-auto"><table className="w-full text-xs"><thead><tr className="text-gray-500 uppercase"><th className="py-1 px-1 text-left">Date</th><th className="py-1 px-1 text-right">DSR</th><th className="py-1 px-1 text-right">1D</th><th className="py-1 px-1 text-right">3D</th><th className="py-1 px-1 text-right">7D</th><th className="py-1 px-1 text-right">DOC</th><th className="py-1 px-1 text-right">FIB</th><th className="py-1 px-1 text-right">SC</th><th className="py-1 px-1 text-right">Res</th><th className="py-1 px-1 text-right">Inb</th><th className="py-1 px-1 text-right">Cash</th></tr></thead><tbody>{bDays.map((d,i)=><tr key={d.date} className={i%2===0?"bg-gray-800/30":""}><td className="py-1 px-1 text-gray-300 whitespace-nowrap">{fD(d.date)}</td><td className="py-1 px-1 text-right text-white font-semibold">{D1(d.dsr)}</td><td className="py-1 px-1 text-right">{D1(d.d1)}</td><td className="py-1 px-1 text-right">{D1(d.d3)}</td><td className="py-1 px-1 text-right">{D1(d.d7)}</td><td className="py-1 px-1 text-right">{R(d.doc)}</td><td className="py-1 px-1 text-right">{R(d.fib)}</td><td className="py-1 px-1 text-right">{R(d.sc)}</td><td className="py-1 px-1 text-right">{R(d.res)}</td><td className="py-1 px-1 text-right">{R(d.inb)}</td><td className="py-1 px-1 text-right">{$(d.cash)}</td></tr>)}</tbody></table></div></div>}
-    {sale&&<div className="bg-gray-900 rounded-xl p-4 mb-4 border border-gray-800"><h3 className="text-white font-semibold text-sm mb-3">Recent</h3><div className="grid grid-cols-2 sm:grid-cols-4 gap-4">{[{l:"This Mo",u:sale.tmU,r:sale.tmR,p:sale.tmP},{l:"Last Mo",u:sale.lmU,r:sale.lmR,p:sale.lmP},{l:"7d",u:sale.l7U,r:sale.l7R,p:sale.l7P},{l:"28d",u:sale.l28U,r:sale.l28R,p:sale.l28P}].map(x=><div key={x.l}><div className="text-gray-500 text-xs">{x.l}</div><div className="text-white font-semibold">{R(x.u)} u</div><div className="text-gray-400 text-xs">{$(x.r)}</div><div className="text-emerald-400 text-xs">{$(x.p)}</div></div>)}</div></div>}
-    {sHF.length>0&&<div className="bg-gray-900 rounded-xl p-4 mb-4 border border-gray-800"><h3 className="text-white font-semibold text-sm mb-2">YoY Units <span className="text-gray-500 text-xs font-normal">excl. current</span></h3><ResponsiveContainer width="100%" height={200}><BarChart data={yD}><CartesianGrid strokeDasharray="3 3" stroke="#374151"/><XAxis dataKey="month" tick={{fill:"#9ca3af",fontSize:10}}/><YAxis tick={{fill:"#9ca3af",fontSize:10}}/><Tooltip {...TTP}/><Legend/>{yrs.map(y=><Bar key={y} dataKey={"u_"+y} fill={YC[y]||"#6b7280"} opacity={0.85} radius={[2,2,0,0]} name={""+y}/>)}</BarChart></ResponsiveContainer></div>}</div>}
-
-// Vendors Tab
-function VendorsTab({data,stg,goVendor}){const vMap=useMemo(()=>{const m={};(data.vendors||[]).forEach(v=>m[v.name]=v);return m},[data.vendors]);const vS=useMemo(()=>{const g={};(data.cores||[]).filter(c=>c.active==="Yes").forEach(c=>{if(!g[c.ven])g[c.ven]={name:c.ven,cr:0,wa:0,he:0,cores:0,dsr:0};const v=vMap[c.ven]||{};const st=gS(c.doc,v.lt||30,c.buf||14,stg);g[c.ven][st==="critical"?"cr":st==="warning"?"wa":"he"]++;g[c.ven].cores++;g[c.ven].dsr+=c.dsr});return Object.values(g).sort((a,b)=>b.cr-a.cr||b.wa-a.wa)},[data.cores,vMap,stg]);return<div className="p-4 max-w-4xl mx-auto"><h2 className="text-xl font-bold text-white mb-4">Vendor Overview</h2><div className="space-y-1">{vS.map(v=><button key={v.name} onClick={()=>goVendor(v.name)} className="w-full text-left px-4 py-3 rounded-lg bg-gray-900/50 hover:bg-gray-800 flex items-center gap-4"><div className="flex gap-1 min-w-[80px]">{v.cr>0&&<span className="text-xs bg-red-500/20 text-red-400 px-1.5 py-0.5 rounded font-semibold">{v.cr}</span>}{v.wa>0&&<span className="text-xs bg-amber-500/20 text-amber-400 px-1.5 py-0.5 rounded font-semibold">{v.wa}</span>}<span className="text-xs bg-emerald-500/20 text-emerald-400 px-1.5 py-0.5 rounded">{v.he}</span></div><span className="text-white font-medium flex-1">{v.name}</span><span className="text-gray-500 text-xs">{v.cores} · DSR:{D1(v.dsr)}</span></button>)}</div></div>}
-
-const DEF_GL=[{term:"C.DSR",desc:"Composite Daily Sales Rate (1 decimal)."},{term:"DOC",desc:"Days of Coverage — how many days current inventory will last at current sales rate."},{term:"Critical",desc:"DOC ≤ Lead Time. Needs immediate action."},{term:"Warning",desc:"DOC ≤ Lead Time + Buffer Days. Monitor closely."},{term:"Healthy",desc:"DOC > Lead Time + Buffer. Sufficient inventory."},{term:"FIBDOC",desc:"FBA Inbound DOC."},{term:"PFIBDOC",desc:"Projected FIB DOC after restock."},{term:"7f",desc:"Receiving Ledger (clipboard copy)."},{term:"7g",desc:"COGS Ledger (clipboard copy)."},{term:"RFQ",desc:"Request for Quote — PO without pricing."},{term:"AICOGS",desc:"All-In Cost of Goods Sold."},{term:"InbS",desc:"Inbound Shipping cost."},{term:"CogP",desc:"Cost per Piece."},{term:"CogC",desc:"Cost per Case."},{term:"+RS",desc:"Toggle Restocker columns: FIB Pcs, Raw Pcs, Inbound Pcs, Case Pack, MOQ Pcs."},{term:"$",desc:"Toggle purchase history (last 4 orders) for a core."},{term:"%28d",desc:"Bundle % weight of core units sold in last 28 days."}];
-function GlossTab({gl}){return<div className="p-4 max-w-4xl mx-auto"><h2 className="text-xl font-bold text-white mb-4">Glossary</h2>{gl.map((g,i)=><div key={i} className={`flex gap-4 py-3 px-4 rounded-lg ${i%2===0?"bg-gray-900/50":""}`}><span className="text-blue-400 font-mono font-semibold text-sm min-w-[100px]">{g.term}</span><span className="text-gray-300 text-sm">{g.desc}</span></div>)}</div>}
-
-// MAIN
-const TABS=[{id:"purchasing",l:"Purchasing"},{id:"core",l:"Core Detail"},{id:"bundle",l:"Bundle Detail"},{id:"vendors",l:"Vendors"},{id:"glossary",l:"Glossary"}];
-export default function App(){
-  const[tab,setTab]=useState("purchasing");const[showS,setShowS]=useState(false);
-  const[stg,setStg]=useState({buyer:'',domesticDoc:90,intlDoc:180,fA:"yes",fI:"blank",fV:"yes"});
-  const[gl]=useState(DEF_GL);const[coreId,setCoreId]=useState(null);const[bundleId,setBundleId]=useState(null);
-  const[data,setData]=useState({cores:[],bundles:[],vendors:[],sales:[],fees:[],inbound:[],abcA:[],abcT:[],abcSub:'',restock:[],priceComp:[]});
-  const[hist,setHist]=useState({bundleSales:[],coreInv:[],bundleInv:[],priceHist:[]});
-  const[daily,setDaily]=useState({coreDays:[],bundleDays:[]});
-  const[ov,setOv]=useState({});const[initV,setInitV]=useState(null);
-  const[loading,setLoading]=useState(true);const[error,setError]=useState(null);const[ts,setTs]=useState("");const[rdy,setRdy]=useState({h:false,d:false});
-  const[prevTab,setPrevTab]=useState(null);
-  // Quick sum state
-  const[sumCells,setSumCells]=useState([]);
-  const addCell=useCallback((v,remove)=>{if(remove)setSumCells(p=>p.filter(x=>x!==v));else setSumCells(p=>[...p,v])},[]);
-  const clearSum=useCallback(()=>setSumCells([]),[]);
-
-  const load=useCallback(()=>{setLoading(true);setError(null);api('live').then(d=>{setData({cores:d.cores||[],bundles:d.bundles||[],vendors:d.vendors||[],sales:d.sales||[],fees:d.fees||[],inbound:d.inbound||[],abcA:d.abcA||[],abcT:d.abcT||[],abcSub:d.abcSub||'',restock:d.restock||[],priceComp:d.priceComp||[]});setTs(d.timestamp||"");setLoading(false);api('history').then(h=>{setHist(h);setRdy(r=>({...r,h:true}))}).catch(()=>setRdy(r=>({...r,h:true})));api('daily').then(d=>{setDaily(d);setRdy(r=>({...r,d:true}))}).catch(()=>setRdy(r=>({...r,d:true})))}).catch(e=>{setError(e.message);setLoading(false)})},[]);
-  useEffect(()=>{load()},[load]);
-  const dataH=useMemo(()=>({...data,_coreInv:hist.coreInv}),[data,hist]);
-  const sc=useMemo(()=>{const c={critical:0,warning:0,healthy:0};(data.cores||[]).forEach(x=>{if(x.active!=="Yes")return;const v=(data.vendors||[]).find(v=>v.name===x.ven);c[gS(x.doc,v?.lt||30,x.buf||14,stg)]++});return c},[data,stg]);
-  const goCore=useCallback(id=>{setPrevTab(tab);setCoreId(id);setTab("core")},[tab]);
-  const goBundle=useCallback(id=>{setPrevTab(tab);setBundleId(id);setTab("bundle")},[tab]);
-  const goVendor=useCallback(n=>{setInitV(n);setTab("purchasing")},[]);
-  const clearIV=useCallback(()=>setInitV(null),[]);
-  const handleBackFromCore=useCallback(()=>setTab("purchasing"),[]);
-  const handleBackFromBundle=useCallback(()=>{if(prevTab==="core"&&coreId)setTab("core");else setTab("purchasing")},[prevTab,coreId]);
-  if(loading)return<div className="min-h-screen bg-gray-950"><Loader text="Loading..."/></div>;
-  if(error)return<div className="min-h-screen bg-gray-950 flex items-center justify-center"><div className="text-center"><p className="text-red-400 mb-4">{error}</p><button onClick={load} className="bg-blue-600 text-white px-6 py-2 rounded-lg">Retry</button></div></div>;
-  return<SumCtx.Provider value={{addCell}}><div className="min-h-screen bg-gray-950 text-gray-200">
-    <header className="bg-gray-900 border-b border-gray-800 px-4 py-3 sticky top-0 z-40"><div className="flex items-center justify-between max-w-7xl mx-auto"><div className="flex items-center gap-3"><h1 className="text-white font-bold text-lg">FBA Dashboard <span className="text-xs text-blue-400">V2.4</span></h1><span className="text-xs text-emerald-400 bg-emerald-400/10 px-2 py-0.5 rounded font-medium">LIVE — {data.cores.length}</span>{stg.buyer&&<span className="text-xs text-gray-400 bg-gray-800 px-2 py-0.5 rounded">{stg.buyer}</span>}{fTs(ts)&&<span className="text-xs text-gray-500">{fTs(ts)}</span>}{(!rdy.h||!rdy.d)&&<span className="text-xs text-yellow-500 animate-pulse">Loading...</span>}</div><div className="flex items-center gap-3"><div className="flex gap-2 text-xs"><span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-500"/>{sc.critical}</span><span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-500"/>{sc.warning}</span><span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500"/>{sc.healthy}</span></div><button onClick={load} className="text-gray-400 hover:text-white text-sm px-2 py-1 rounded hover:bg-gray-800">↻</button><button onClick={()=>setShowS(true)} className="text-gray-400 hover:text-white text-lg px-2 py-1 rounded hover:bg-gray-800">⚙️</button></div></div></header>
-    <nav className="bg-gray-900/50 border-b border-gray-800 px-4 sticky top-[53px] z-30"><div className="flex gap-0 max-w-7xl mx-auto overflow-x-auto">{TABS.map(t=><button key={t.id} onClick={()=>{setPrevTab(tab);setTab(t.id);if(t.id!=="core")setCoreId(null);if(t.id!=="bundle")setBundleId(null);clearSum()}} className={`px-4 py-2.5 text-sm font-medium border-b-2 whitespace-nowrap ${tab===t.id?"border-blue-500 text-blue-400":"border-transparent text-gray-500 hover:text-gray-300"}`}>{t.l}</button>)}</div></nav>
-    <main className="max-w-7xl mx-auto">
-      {tab==="purchasing"&&<PurchTab data={dataH} stg={stg} goCore={goCore} goBundle={goBundle} ov={ov} setOv={setOv} initV={initV} clearIV={clearIV}/>}
-      {tab==="core"&&<CoreTab data={data} stg={stg} hist={hist} daily={daily} coreId={coreId} onBack={handleBackFromCore} goBundle={goBundle}/>}
-      {tab==="bundle"&&<BundleTab data={data} stg={stg} hist={hist} daily={daily} bundleId={bundleId} onBack={handleBackFromBundle} goCore={goCore}/>}
-      {tab==="vendors"&&<VendorsTab data={data} stg={stg} goVendor={goVendor}/>}
-      {tab==="glossary"&&<GlossTab gl={gl}/>}
-    </main>
-    {showS&&<Stg s={stg} setS={setStg} onClose={()=>setShowS(false)}/>}
-    <QuickSum cells={sumCells} onClear={clearSum}/>
-  </div></SumCtx.Provider>}
+  return <SumCtx.Provider value={{ addCell }}>
+    <div className="min-h-screen bg-gray-950 text-gray-200">
+      {/* HEADER */}
+      <header className="bg-gray-900 border-b border-gray-800 px-4 py-3 sticky top-0 z-40">
+        <div className="flex items-center justify-between max-w-7xl mx-auto">
+          <div className="flex items-center gap-3">
+            <h1 className="text-white font-bold text-lg">FBA Dashboard <span className="text-xs text-blue-400">V2.5</span></h1>
+            <span className="text-xs text-emerald-400 bg-emerald-400/10 px-2 py-0.5 rounded font-medium">LIVE — {data.cores.length}</span>
+            {stg.buyer && <span className="text-xs text-gray-400 bg-gray-800 px-2 py-0.5 rounded">{stg.buyer}</span>}
+            {fTs(ts) && <span className="text-xs text-gray-500">{fTs(ts)}</span>}
+            {(!rdy.h || !rdy.d) && <span className="text-xs text-yellow-500 animate-pulse">Loading...</span>}
+          </div>
+          <div className="flex items-center gap-3">
+            <div className="flex gap-2 text-xs">
+              <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-500" />{sc.critical}</span>
+              <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-500" />{sc.warning}</span>
+              <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500" />{sc.healthy}</span>
+            </div>
+            <button onClick={load} className="text-gray-400 hover:text-white text-sm px-2 py-1 rounded hover:bg-gray-800">↻</button>
+            <button onClick={() => setShowS(true)} className="text-gray-400 hover:text-white text-lg px-2 py-1 rounded hover:bg-gray-800">⚙️</button>
+          </div>
+        </div>
+      </header>
+      {/* NAV */}
+      <nav className="bg-gray-900/50 border-b border-gray-800 px-4 sticky top-[53px] z-30">
+        <div className="flex gap-0 max-w-7xl mx-auto overflow-x-auto">{TABS.map(t => <button key={t.id} onClick={() => { setPrevTab(tab); setTab(t.id); if (t.id !== "core") setCoreId(null); if (t.id !== "bundle") setBundleId(null); clearSum() }} className={`px-4 py-2.5 text-sm font-medium border-b-2 whitespace-nowrap ${tab === t.id ? "border-blue-500 text-blue-400" : "border-transparent text-gray-500 hover:text-gray-300"}`}>{t.l}</button>)}</div>
+      </nav>
+      {/* MAIN */}
+      <main className="max-w-7xl mx-auto">
+        {tab === "purchasing" && <PurchTab data={dataH} stg={stg} goCore={goCore} goBundle={goBundle} goVendor={goVendor} ov={ov} setOv={setOv} initV={initV} clearIV={clearIV} />}
+        {tab === "core" && <CoreTab data={data} stg={stg} hist={hist} daily={daily} coreId={coreId} onBack={handleBackFromCore} goBundle={goBundle} />}
+        {tab === "bundle" && <BundleTab data={data} stg={stg} hist={hist} daily={daily} bundleId={bundleId} onBack={handleBackFromBundle} goCore={goCore} />}
+        {tab === "vendors" && <VendorsTab data={data} stg={stg} goVendor={goVendor} />}
+        {tab === "glossary" && <GlossTab />}
+      </main>
+      {/* SETTINGS MODAL */}
+      {showS && <Stg s={stg} setS={setStg} onClose={() => setShowS(false)} />}
+      {/* CORE DETAIL SLIDE PANEL (from vendor view) */}
+      <SlidePanel open={!!panelCoreId} onClose={() => setPanelCoreId(null)}>
+        {panelCoreId && <CoreTab data={data} stg={stg} hist={hist} daily={daily} coreId={panelCoreId} onBack={() => setPanelCoreId(null)} goBundle={id => { setPanelCoreId(null); goBundle(id) }} />}
+      </SlidePanel>
+      {/* QUICK SUM BAR */}
+      <QuickSum cells={sumCells} onClear={clearSum} />
+    </div>
+  </SumCtx.Provider>;
+}
