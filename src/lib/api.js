@@ -31,15 +31,22 @@ function setCache(key, data) {
 }
 
 export async function api(action) {
-  // Return cached data instantly, then refresh in background
   const cached = getCached(action);
   const fresh = jp(API + '?action=' + action + '&_t=' + Date.now());
   if (cached) {
-    // Still fetch fresh in background to update cache
     fresh.then(d => setCache(action, d)).catch(() => {});
     return cached;
   }
   const d = await fresh;
   setCache(action, d);
   return d;
+}
+
+export async function apiPost(body) {
+  const res = await fetch(API, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain' },
+    body: JSON.stringify(body)
+  });
+  return res.json();
 }
