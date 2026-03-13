@@ -80,7 +80,7 @@ export default function CoreTab({ data, stg, hist, daily, coreId, onBack, goBund
       <TH tip="Lifetime Profit" className="py-2 px-1 text-right">LT Prof</TH>
       <th className="py-2 px-1 w-8" />
     </tr></thead><tbody>{cB.map(b => {
-      const f = b.fee; const sa = b.sale; const margin = f && f.pr > 0 ? ((f.gp / f.pr) * 100) : 0;
+      const f = b.fee; const sa = b.sale; const margin = f && f.aicogs > 0 ? ((f.gp / f.aicogs) * 100) : 0;
       const aged = agedMap[b.j]; const kill = killMap[b.j];
       return <tr key={b.j} className="border-t border-gray-800/50 hover:bg-gray-800/20">
         <td className="py-1.5 px-1 text-blue-400 font-mono">{b.j}</td>
