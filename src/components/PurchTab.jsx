@@ -23,7 +23,6 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
 
   useEffect(() => { if (initV) { setVm("vendor"); setVf(initV); clearIV() } }, [initV, clearIV]);
 
-  // Check if item is ignored via workflow
   const isIgnored = useCallback((id) => {
     const wf = (data.workflow || []).find(w => w.id === id);
     if (!wf || wf.status !== "Ignore") return false;
@@ -45,6 +44,16 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
   }, [data.priceComp]);
   const agedMap = useMemo(() => { const m = {}; (data.agedInv || []).forEach(r => m[r.j] = r); return m }, [data.agedInv]);
   const killMap = useMemo(() => { const m = {}; (data.killMgmt || []).forEach(r => m[r.j] = r); return m }, [data.killMgmt]);
+
+  // === RECEIVING MAP (7f) — replaces old ibMap ===
+  const recMap = useMemo(() => {
+    const m = {};
+    (data.receiving || []).forEach(r => {
+      if (!m[r.core]) m[r.core] = [];
+      m[r.core].push(r);
+    });
+    return m;
+  }, [data.receiving]);
 
   // === ENRICHED CORES ===
   const enr = useMemo(() => (data.cores || []).filter(c => {
@@ -132,9 +141,8 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
     } else if (mode === "mix") {
       const coreMap = {};
       cores.forEach(c => { coreMap[c.id] = c });
-      const coreExtras = {}; // pieces from small bundles that go to core
-      const coresWithBundleOrders = new Set(); // cores that have bundle orders
-      // First pass: calculate bundle needs
+      const coreExtras = {};
+      const coresWithBundleOrders = new Set();
       (bundles || []).forEach(b => {
         const tg = cores[0]?.targetDoc || 90;
         const parentCore = coreMap[b.core1];
@@ -147,24 +155,19 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
         if (need <= 0) return;
         const moq = parentCore.moq || 0;
         if (need < moq) {
-          // Too small → convert to core pieces
           coreExtras[parentCore.id] = (coreExtras[parentCore.id] || 0) + (need * qtyPerBundle);
         } else {
           u[b.j] = { ...(u[b.j] || {}), pcs: roundToCasePack(need, parentCore.casePack) };
           coresWithBundleOrders.add(parentCore.id);
         }
       });
-      // Second pass: cores only get orders for extras from small bundles
-      // If a core has bundle orders, don't add its own need (bundles consume the core)
       cores.forEach(c => {
         const extra = coreExtras[c.id] || 0;
         if (extra > 0) {
           u[c.id] = { ...(u[c.id] || {}), pcs: cOQ(extra, c.moq, c.casePack) };
         } else if (!coresWithBundleOrders.has(c.id) && c.needQty > 0) {
-          // Core has no bundle orders at all → use normal core logic
           u[c.id] = { ...(u[c.id] || {}), pcs: cOQ(c.needQty, c.moq, c.casePack) };
         }
-        // If core has bundle orders and no extras → no core order needed
       });
     } else {
       cores.filter(c => c.needQty > 0).forEach(c => {
@@ -179,28 +182,12 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
   const togCollapse = id => setCollapsed(p => ({ ...p, [id]: !p[id] }));
   const togDismiss = id => setDismissed(p => ({ ...p, [id]: !p[id] }));
 
-  // Inbound orders grouped by core (for 7f history)
-  const ibMap = useMemo(() => {
-    const m = {};
-    (data.inbound || []).forEach(r => {
-      if (!m[r.core]) m[r.core] = [];
-      m[r.core].push(r);
-    });
-    Object.keys(m).forEach(k => { m[k].sort((a, b) => (b.eta || '').localeCompare(a.eta || '')); m[k] = m[k].slice(0, 4) });
-    return m;
-  }, [data.inbound]);
-
-  // Last purchase info for a core
-  const lastPurch = id => { const rows = pcMap[id]; if (!rows || !rows.length) return null; return rows[0] };
-
   // === CORE ROW ===
   const CoreRow = ({ c, mixAdj }) => {
     if (dismissed[c.id]) return <tr className="border-t border-gray-800/20 bg-gray-900/30 text-xs opacity-40"><td className="py-1 px-1" colSpan={2}><Dot status={c.status} /></td><td className="py-1 px-1 text-gray-500 font-mono">{c.id}</td><td className="py-1 px-1 text-gray-600 truncate max-w-[110px]">{c.ti}</td><td colSpan={20} className="py-1 px-1 text-right"><button onClick={() => togDismiss(c.id)} className="text-xs text-gray-500 hover:text-white px-1">+</button></td></tr>;
     const eq = coreEffQ(c); const cost = eq * c.cost; const adj = mixAdj || 0;
     const ad = aftD(c.allIn + adj, eq, c.dsr); const rs = getRS(c.id);
-    const lp = lastPurch(c.id); const isCol = collapsed[c.id];
-    const rsCols = showRS ? 5 : 0;
-    const expCols = isCol ? 0 : 5; // expandable: Raw, PPRC, Inbound, FIB DOC(b), FIB Inv(b)
+    const isCol = collapsed[c.id];
 
     return <><tr className={`border-t border-gray-800/30 hover:bg-gray-800/20 text-xs ${hasCoreOrd(c) ? "bg-emerald-900/10" : ""}`}>
       <td className="py-1 px-1 sticky left-0 bg-gray-950 z-10"><Dot status={c.status} /></td>
@@ -210,13 +197,13 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
       <td className="py-1 px-1 text-right">{D1(c.d7)}</td>
       <td className="py-1 px-1 text-center">{c.d7 > c.dsr ? <span className={c.spike ? "text-orange-400 font-bold" : "text-emerald-400"}>▲</span> : c.d7 < c.dsr ? <span className="text-red-400">▼</span> : "—"}{c.spike && <span className="text-orange-400 text-xs ml-0.5" title="Spike: 7D DSR 25%+ above DSR">⚡</span>}</td>
       <td className={`py-1 px-1 text-right font-semibold ${dc(c.doc, c.critDays, c.warnDays)}`}>{R(c.doc)}</td>
-      {/* INV = allIn (without inbound) + inbound shown separately */}
-      <td className="py-1 px-1 text-right">{R(c.allIn - (c.inb || 0))}{c.inb > 0 && <span className="text-teal-400 ml-0.5" title="Inbound pieces">+{R(c.inb)}</span>}{adj > 0 && <span className="text-amber-300 ml-0.5" title="Bundle orders covering core">+{adj}</span>}</td>
+      {/* ALL-IN OWN — single number, no breakdown */}
+      <td className="py-1 px-1 text-right">{R(c.allIn)}</td>
       <td className="py-1 px-1 text-right text-gray-400">{c.moq > 0 ? R(c.moq) : "—"}</td>
       <td className="py-1 px-1 text-right text-gray-400">{c.casePack > 0 ? R(c.casePack) : "—"}</td>
-      <td className="py-1 px-1 text-right text-gray-500 text-xs">{lp ? fMY(lp.date) : "—"}</td>
+      {/* LASTPO removed */}
       <td className="py-1 px-1 text-center">{c.seas && <span className="text-purple-400 font-bold">{c.seas.peak}</span>}</td>
-      <td className="py-1 px-1 text-right text-gray-400">{c.orderQty > 0 ? R(c.orderQty) : "—"}</td>
+      {/* REC removed */}
       {!isCol && <>
         <td className="py-1 px-1 text-right">{R(c.raw)}</td>
         <td className="py-1 px-1 text-right">{R(c.pp)}</td>
@@ -244,25 +231,29 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
       <td className="py-1 px-0.5 flex gap-0.5">
         <button onClick={() => togCollapse(c.id)} className="text-gray-400 hover:text-white text-xs px-0.5">{isCol ? "+" : "−"}</button>
         <button onClick={() => togDismiss(c.id)} className="text-gray-400 hover:text-red-400 text-xs px-0.5">✕</button>
-        {(pcMap[c.id] || ibMap[c.id]) && <button onClick={() => togPH(c.id)} className={`text-xs px-0.5 rounded ${showPH[c.id] ? "text-amber-300" : "text-gray-500"}`}>$</button>}
+        {(pcMap[c.id] || recMap[c.id]) && <button onClick={() => togPH(c.id)} className={`text-xs px-0.5 rounded ${showPH[c.id] ? "text-amber-300" : "text-gray-500"}`}>$</button>}
         <button onClick={() => goCore(c.id)} className="text-blue-400 px-0.5 bg-blue-400/10 rounded text-xs">V</button>
         <div className="relative"><WorkflowChip id={c.id} type="core" workflow={data.workflow} onSave={saveWorkflow} onDelete={deleteWorkflow} buyer={stg.buyer} /></div>
       </td>
     </tr>
-    {showPH[c.id] && (pcMap[c.id] || ibMap[c.id]) && <tr><td colSpan={40} className="p-0"><div className="bg-gray-800/50 px-4 py-2 space-y-3">
+    {/* PURCHASE HISTORY EXPANDED */}
+    {showPH[c.id] && (pcMap[c.id] || recMap[c.id]) && <tr><td colSpan={40} className="p-0"><div className="bg-gray-800/50 px-4 py-2 space-y-3">
       {/* 7g - What you paid */}
       {pcMap[c.id] && <div><div className="text-gray-500 text-xs font-semibold mb-1">💰 Purchase History (7g)</div><table className="w-full text-xs"><thead><tr className="text-gray-500"><th className="py-0.5 text-left">Date</th><th className="py-0.5 text-right">Pcs</th><th className="py-0.5 text-right">Material</th><th className="py-0.5 text-right">Inb Ship</th><th className="py-0.5 text-right">Tariffs</th><th className="py-0.5 text-right">Total</th><th className="py-0.5 text-right">CPP</th></tr></thead><tbody>{pcMap[c.id].map((r, i) => <tr key={i} className="border-t border-gray-700/30"><td className="py-0.5 text-gray-300">{fDateUS(r.date)}</td><td className="py-0.5 text-right">{R(r.pcs)}</td><td className="py-0.5 text-right">{$2(r.matPrice)}</td><td className="py-0.5 text-right text-gray-400">{$2(r.inbShip)}</td><td className="py-0.5 text-right text-gray-400">{$2(r.tariffs)}</td><td className="py-0.5 text-right">{$2(r.totalCost)}</td><td className="py-0.5 text-right text-amber-300">{$2(r.cpp)}</td></tr>)}</tbody></table></div>}
-      {/* 7f - What you ordered */}
-      {ibMap[c.id] && <div><div className="text-gray-500 text-xs font-semibold mb-1">📦 Orders / Receiving (7f)</div><table className="w-full text-xs"><thead><tr className="text-gray-500"><th className="py-0.5 text-left">ETA</th><th className="py-0.5 text-left">Order#</th><th className="py-0.5 text-left">Vendor</th><th className="py-0.5 text-right">Pcs</th><th className="py-0.5 text-right">Cases</th><th className="py-0.5 text-right">Price/pc</th><th className="py-0.5 text-right">Missing</th></tr></thead><tbody>{ibMap[c.id].map((r, i) => <tr key={i} className="border-t border-gray-700/30"><td className="py-0.5 text-gray-300">{fDateUS(r.eta)}</td><td className="py-0.5 text-gray-300">{r.orderNum || "—"}</td><td className="py-0.5 text-gray-400">{r.vendor}</td><td className="py-0.5 text-right">{R(r.pieces)}</td><td className="py-0.5 text-right">{R(r.cases)}</td><td className="py-0.5 text-right text-amber-300">{$2(r.price)}</td><td className={`py-0.5 text-right ${r.piecesMissing > 0 ? "text-red-400" : "text-gray-500"}`}>{r.piecesMissing > 0 ? R(r.piecesMissing) : "—"}</td></tr>)}</tbody></table></div>}
+      {/* 7f - Receiving / Orders */}
+      {recMap[c.id] && <div><div className="text-gray-500 text-xs font-semibold mb-1">📦 Receiving (7f)</div><table className="w-full text-xs"><thead><tr className="text-gray-500"><th className="py-0.5 text-left">Date</th><th className="py-0.5 text-right">Pcs Ordered</th><th className="py-0.5 text-left">Core #</th><th className="py-0.5 text-left">Order #</th></tr></thead><tbody>{recMap[c.id].map((r, i) => <tr key={i} className="border-t border-gray-700/30"><td className="py-0.5 text-gray-300">{fDateUS(r.date)}</td><td className="py-0.5 text-right text-white">{R(r.pcs)}</td><td className="py-0.5 text-blue-400 font-mono">{r.core}</td><td className="py-0.5 text-gray-300">{r.orderNum || "—"}</td></tr>)}</tbody></table></div>}
     </div></td></tr>}
     </>;
   };
 
-  // === BUNDLE ROW (aligned to core columns) ===
+  // === BUNDLE ROW ===
   const BundleRow = ({ b, indent }) => {
     const f = b.fee || feMap[b.j]; const eq = bundleEffQ(b); const cost = f ? (eq * (f.aicogs || 0)) : 0;
     const aged = agedMap[b.j]; const kill = killMap[b.j];
     const isCol = collapsed[b.j];
+    // AFTER DOC fix: calculate projected DOC after adding ordered pieces
+    const bAfterDoc = eq > 0 && b.cd > 0 ? Math.round(((b.fibInv || 0) + eq) / b.cd) : null;
+
     return <tr className={`border-t border-gray-800/20 hover:bg-indigo-900/10 text-xs ${hasBundleOrd(b) ? "bg-emerald-900/10" : "bg-indigo-950/20"}`}>
       <td className="py-1 px-1 sticky left-0 bg-indigo-950/20 z-10" />
       <td className="py-1 px-1 text-indigo-400 font-mono sticky left-5 bg-indigo-950/20 z-10">{indent ? "└ " : ""}{b.j}</td>
@@ -273,18 +264,18 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
         {kill && kill.latestEval && kill.latestEval.toLowerCase().includes('kill') && <span className="ml-1 text-xs text-red-400 font-bold">KILL</span>}
         {kill && kill.sellEval && kill.sellEval.toLowerCase().includes('sell') && <span className="ml-1 text-xs text-amber-400 font-bold">ST</span>}
       </td>
-      {/* DSR */}<td className="py-1 px-1 text-right text-indigo-300">{D1(b.cd)}</td>
-      {/* 7D */}<td className="py-1 px-1 text-right text-indigo-300">{D1(b.d7comp)}</td>
-      {/* T */}<td className="py-1 px-1 text-center">{b.d7comp > b.cd ? <span className="text-emerald-400">▲</span> : b.d7comp < b.cd ? <span className="text-red-400">▼</span> : "—"}</td>
-      {/* DOC */}<td className="py-1 px-1 text-right text-indigo-300">{R(b.doc)}</td>
-      {/* Inv = FIB Inv */}<td className="py-1 px-1 text-right text-indigo-300">{R(b.fibInv)}</td>
-      {/* MOQ */}<td className="py-1 px-1 text-gray-600">—</td>
-      {/* VCAS */}<td className="py-1 px-1 text-gray-600">—</td>
-      {/* LastPO */}<td className="py-1 px-1 text-gray-600">—</td>
-      {/* S = replen */}<td className="py-1 px-1 text-center text-indigo-300">{b.replenTag || "—"}</td>
-      {/* REC */}<td className="py-1 px-1 text-gray-600">—</td>
-      {/* Expandable cols */}{!isCol && <td colSpan={5} />}
-      {/* RS cols */}{showRS && <td colSpan={5} />}
+      <td className="py-1 px-1 text-right text-indigo-300">{D1(b.cd)}</td>
+      <td className="py-1 px-1 text-right text-indigo-300">{D1(b.d7comp)}</td>
+      <td className="py-1 px-1 text-center">{b.d7comp > b.cd ? <span className="text-emerald-400">▲</span> : b.d7comp < b.cd ? <span className="text-red-400">▼</span> : "—"}</td>
+      <td className="py-1 px-1 text-right text-indigo-300">{R(b.doc)}</td>
+      <td className="py-1 px-1 text-right text-indigo-300">{R(b.fibInv)}</td>
+      <td className="py-1 px-1 text-gray-600">—</td>
+      <td className="py-1 px-1 text-gray-600">—</td>
+      {/* LASTPO removed */}
+      <td className="py-1 px-1 text-center text-indigo-300">{b.replenTag || "—"}</td>
+      {/* REC removed */}
+      {!isCol && <td colSpan={5} />}
+      {showRS && <td colSpan={5} />}
       <td className="py-1 border-l-2 border-gray-600 px-1" />
       <td className="py-0.5 px-0.5 sticky right-36 bg-indigo-950/20 z-10"><NumInput value={gPcs(b.j)} onChange={v => setF(b.j, 'pcs', v)} /></td>
       <td className="py-0.5 px-0.5 sticky right-24 bg-indigo-950/20 z-10"><NumInput value={gCas(b.j)} onChange={v => setF(b.j, 'cas', v)} /></td>
@@ -294,7 +285,8 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
         <td className="py-0.5 px-0.5"><NumInput value={gCogC(b.j)} onChange={v => setF(b.j, 'cogC', v)} /></td>
       </>}
       <td className="py-1 px-1 text-right text-amber-300 sticky right-12 bg-indigo-950/20 z-10">{cost > 0 ? $(cost) : "—"}</td>
-      <td className="py-1 px-1 text-right sticky right-0 bg-indigo-950/20 z-10">{R(b.doc)}</td>
+      {/* AFTER DOC — now calculates projected DOC when pcs entered */}
+      <td className={`py-1 px-1 text-right sticky right-0 bg-indigo-950/20 z-10 ${bAfterDoc ? (bAfterDoc <= 30 ? "text-red-400" : bAfterDoc <= 60 ? "text-amber-400" : "text-emerald-400") : ""}`}>{bAfterDoc ? R(bAfterDoc) : R(b.doc)}</td>
       <td className="py-1 px-1"><button onClick={() => goBundle(b.j)} className="text-indigo-400 px-0.5 bg-indigo-400/10 rounded text-xs">V</button></td>
     </tr>;
   };
@@ -304,16 +296,44 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
   const costsToggle = <button onClick={() => setShowCosts(!showCosts)} className={`text-xs px-1 py-0.5 rounded font-bold ${showCosts ? "bg-teal-600 text-white" : "bg-gray-700 text-gray-400"}`} title="Toggle InbS/CogP/CogC columns">{showCosts ? "−" : "+"}$</button>;
 
   const VTH = ({ isCol }) => <tr className="text-gray-500 uppercase bg-gray-900/40 text-xs">
-    <th className="py-2 px-1 w-5 sticky left-0 bg-gray-900 z-10" /><TH tip="Core or JLS #" className="py-2 px-1 text-left sticky left-5 bg-gray-900 z-10">ID</TH><th className="py-2 px-1 text-left sticky left-24 bg-gray-900 z-10">Title</th>
-    <TH tip="Composite Daily Sales Rate" className="py-2 px-1 text-right">DSR</TH><TH tip="7-Day DSR" className="py-2 px-1 text-right">7D</TH><TH tip="Trend" className="py-2 px-1 text-center">T</TH><TH tip="Days of Coverage" className="py-2 px-1 text-right">DOC</TH>
-    <TH tip="Inventory (on hand + inbound shown as +N in teal)" className="py-2 px-1 text-right">Inv</TH><TH tip="MOQ Pieces" className="py-2 px-1 text-right">MOQ</TH><TH tip="Vendor Case Pack" className="py-2 px-1 text-right">VCas</TH><TH tip="Last Purchase Date" className="py-2 px-1 text-right">LastPO</TH>
-    <TH tip="Seasonal Peak" className="py-2 px-1 text-center">S</TH><TH tip="Recommended Qty" className="py-2 px-1 text-right">Rec</TH>
-    {!isCol && <><TH tip="Raw / Potential Units" className="py-2 px-1 text-right">Raw</TH><TH tip="PPRC Available" className="py-2 px-1 text-right">PPRC</TH><TH tip="Inbound Pieces" className="py-2 px-1 text-right">Inb</TH><TH tip="FIB DOC (bundles)" className="py-2 px-1 text-right">FibD</TH><TH tip="FIB Inventory (bundles)" className="py-2 px-1 text-right">FibI</TH></>}
-    {showRS && <><TH tip="FIB Pieces (Restocker)" className="py-2 px-1 text-right text-cyan-400">rFIB</TH><TH tip="Raw Pieces (Restocker)" className="py-2 px-1 text-right text-cyan-400">rRaw</TH><TH tip="Inbound (Restocker)" className="py-2 px-1 text-right text-cyan-400">rInb</TH><TH tip="Case Pack" className="py-2 px-1 text-right text-cyan-400">CPk</TH><TH tip="MOQ Pieces to Order" className="py-2 px-1 text-right text-cyan-400">MOQPcs</TH></>}
+    <th className="py-2 px-1 w-5 sticky left-0 bg-gray-900 z-10" />
+    <TH tip="Core or JLS #" className="py-2 px-1 text-left sticky left-5 bg-gray-900 z-10">ID</TH>
+    <th className="py-2 px-1 text-left sticky left-24 bg-gray-900 z-10">Title</th>
+    <TH tip="Composite Daily Sales Rate" className="py-2 px-1 text-right">DSR</TH>
+    <TH tip="7-Day DSR" className="py-2 px-1 text-right">7D</TH>
+    <TH tip="Trend" className="py-2 px-1 text-center">T</TH>
+    <TH tip="Days of Coverage" className="py-2 px-1 text-right">DOC</TH>
+    <TH tip="All-In Owned Pieces" className="py-2 px-1 text-right">All-In</TH>
+    <TH tip="MOQ Pieces" className="py-2 px-1 text-right">MOQ</TH>
+    <TH tip="Vendor Case Pack" className="py-2 px-1 text-right">VCas</TH>
+    {/* LASTPO removed */}
+    <TH tip="Seasonal Peak" className="py-2 px-1 text-center">S</TH>
+    {/* REC removed */}
+    {!isCol && <>
+      <TH tip="Raw / Potential Units" className="py-2 px-1 text-right">Raw</TH>
+      <TH tip="PPRC Available" className="py-2 px-1 text-right">PPRC</TH>
+      <TH tip="Inbound Pieces" className="py-2 px-1 text-right">Inb</TH>
+      <TH tip="FIB DOC (bundles)" className="py-2 px-1 text-right">FibD</TH>
+      <TH tip="FIB Inventory (bundles)" className="py-2 px-1 text-right">FibI</TH>
+    </>}
+    {showRS && <>
+      <TH tip="FIB Pieces (Restocker)" className="py-2 px-1 text-right text-cyan-400">rFIB</TH>
+      <TH tip="Raw Pieces (Restocker)" className="py-2 px-1 text-right text-cyan-400">rRaw</TH>
+      <TH tip="Inbound (Restocker)" className="py-2 px-1 text-right text-cyan-400">rInb</TH>
+      <TH tip="Case Pack" className="py-2 px-1 text-right text-cyan-400">CPk</TH>
+      <TH tip="MOQ Pieces to Order" className="py-2 px-1 text-right text-cyan-400">MOQPcs</TH>
+    </>}
     <th className="py-2 border-l-2 border-gray-600 px-1" />
-    <TH tip="Pieces to Order" className="py-2 px-1 text-center sticky right-36 bg-gray-900 z-10">Pcs</TH><TH tip="Cases to Order" className="py-2 px-1 text-center sticky right-24 bg-gray-900 z-10">Cas</TH>
-    {showCosts && <><TH tip="Inbound Shipping Cost" className="py-2 px-1 text-center">InbS</TH><TH tip="Cost per Piece" className="py-2 px-1 text-center">CogP</TH><TH tip="Cost per Case" className="py-2 px-1 text-center">CogC</TH></>}
-    <th className="py-2 px-1 text-right sticky right-12 bg-gray-900 z-10">Cost</th><TH tip="DOC After Order" className="py-2 px-1 text-right sticky right-0 bg-gray-900 z-10">After DOC</TH><th className="py-2 px-1 w-16">{rsToggle} {costsToggle}</th>
+    <TH tip="Pieces to Order" className="py-2 px-1 text-center sticky right-36 bg-gray-900 z-10">Pcs</TH>
+    <TH tip="Cases to Order" className="py-2 px-1 text-center sticky right-24 bg-gray-900 z-10">Cas</TH>
+    {showCosts && <>
+      <TH tip="Inbound Shipping Cost" className="py-2 px-1 text-center">InbS</TH>
+      <TH tip="Cost per Piece" className="py-2 px-1 text-center">CogP</TH>
+      <TH tip="Cost per Case" className="py-2 px-1 text-center">CogC</TH>
+    </>}
+    <th className="py-2 px-1 text-right sticky right-12 bg-gray-900 z-10">Cost</th>
+    <TH tip="DOC After Order" className="py-2 px-1 text-right sticky right-0 bg-gray-900 z-10">After DOC</TH>
+    <th className="py-2 px-1 w-16">{rsToggle} {costsToggle}</th>
   </tr>;
 
   // === RENDER ===
@@ -333,7 +353,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
     {vm === "vendor" && <div className="flex flex-wrap gap-3 mb-4 items-center text-sm"><span className="text-gray-500 text-xs">PO#:</span><input type="text" value={poN} onChange={e => setPoN(e.target.value)} placeholder="2637" className="bg-gray-800 border border-gray-700 text-white rounded px-2 py-1 w-20 text-sm" /><span className="text-gray-500 text-xs">Date:</span><input type="date" value={poD} onChange={e => setPoD(e.target.value)} className="bg-gray-800 border border-gray-700 text-white rounded px-2 py-1 text-sm" /><span className="text-gray-500 text-xs">Buyer:</span><span className="text-white font-semibold">{stg.buyer || <span className="text-red-400">Set in ⚙️</span>}</span></div>}
 
     {/* === BY CORE VIEW === */}
-    {vm === "core" && <div className="overflow-x-auto rounded-xl border border-gray-800"><table className="w-full"><thead><tr className="bg-gray-900/80 text-xs text-gray-400 uppercase"><th className="py-3 px-2 w-8" /><th className="py-3 px-2 text-left">Core</th><th className="py-3 px-2 text-left cursor-pointer hover:text-white" onClick={() => { }}>Vendor</th><th className="py-3 px-2 text-left">Title</th><TH tip="Composite DSR" className="py-3 px-2 text-right">DSR</TH><TH tip="7-Day DSR" className="py-3 px-2 text-right">7D</TH><th className="py-3 px-2 text-center">T</th><TH tip="Days of Coverage" className="py-3 px-2 text-right">DOC</TH><TH tip="All-In Owned Pieces" className="py-3 px-2 text-right">All-In</TH><th className="py-3 px-2 text-right">MOQ</th><th className="py-3 px-2 text-center">S</th><th className="py-3 px-1 border-l-2 border-gray-600" /><th className="py-3 px-2 text-right">Need</th><th className="py-3 px-2 text-right">Order</th><th className="py-3 px-2 text-right">Cost</th><TH tip="DOC After Order" className="py-3 px-2 text-right">After</TH><th className="py-3 px-2 w-10" /></tr></thead>
+    {vm === "core" && <div className="overflow-x-auto rounded-xl border border-gray-800"><table className="w-full"><thead><tr className="bg-gray-900/80 text-xs text-gray-400 uppercase"><th className="py-3 px-2 w-8" /><th className="py-3 px-2 text-left">Core</th><th className="py-3 px-2 text-left cursor-pointer hover:text-white">Vendor</th><th className="py-3 px-2 text-left">Title</th><TH tip="Composite DSR" className="py-3 px-2 text-right">DSR</TH><TH tip="7-Day DSR" className="py-3 px-2 text-right">7D</TH><th className="py-3 px-2 text-center">T</th><TH tip="Days of Coverage" className="py-3 px-2 text-right">DOC</TH><TH tip="All-In Owned Pieces" className="py-3 px-2 text-right">All-In</TH><th className="py-3 px-2 text-right">MOQ</th><th className="py-3 px-2 text-center">S</th><th className="py-3 px-1 border-l-2 border-gray-600" /><th className="py-3 px-2 text-right">Need</th><th className="py-3 px-2 text-right">Order</th><th className="py-3 px-2 text-right">Cost</th><TH tip="DOC After Order" className="py-3 px-2 text-right">After</TH><th className="py-3 px-2 w-10" /></tr></thead>
         <tbody>{enr.map(c => <tr key={c.id} className="border-b border-gray-800/50 hover:bg-gray-800/30 text-sm"><td className="py-2 px-2"><Dot status={c.status} /></td><td className="py-2 px-2 text-blue-400 font-mono text-xs">{c.id}</td><td className="py-2 px-2 text-blue-300 text-xs truncate max-w-[100px] cursor-pointer hover:underline" onClick={() => goVendor(c.ven)}>{c.ven}</td><td className="py-2 px-2 text-gray-200 truncate max-w-[180px]">{c.ti}</td><td className="py-2 px-2 text-right">{D1(c.dsr)}</td><td className="py-2 px-2 text-right">{D1(c.d7)}</td><td className="py-2 px-2 text-center">{c.d7 > c.dsr ? <span className="text-emerald-400">▲</span> : c.d7 < c.dsr ? <span className="text-red-400">▼</span> : "—"}</td><td className={`py-2 px-2 text-right font-semibold ${dc(c.doc, c.critDays, c.warnDays)}`}>{R(c.doc)}</td><td className="py-2 px-2 text-right">{R(c.allIn)}</td><td className="py-2 px-2 text-right text-gray-400 text-xs">{c.moq > 0 ? R(c.moq) : "—"}</td><td className="py-2 px-2 text-center">{c.seas && <span className="text-purple-400 text-xs font-bold">{c.seas.peak}</span>}</td><td className="py-2 px-1 border-l-2 border-gray-600" /><td className="py-2 px-2 text-right text-gray-300">{c.needQty > 0 ? R(c.needQty) : "—"}</td><td className="py-2 px-2 text-right text-white font-semibold">{c.orderQty > 0 ? R(c.orderQty) : "—"}</td><td className="py-2 px-2 text-right text-amber-300">{c.needDollar > 0 ? $(c.needDollar) : "—"}</td><td className={`py-2 px-2 text-right ${c.orderQty > 0 ? dc(c.docAfter, c.critDays, c.warnDays) : "text-gray-500"}`}>{c.orderQty > 0 ? R(c.docAfter) : "—"}</td><td className="py-2 px-2"><button onClick={() => goCore(c.id)} className="text-blue-400 text-xs px-1.5 py-0.5 bg-blue-400/10 rounded">V</button></td></tr>)}</tbody>
         <tfoot><tr className="bg-gray-900 border-t-2 border-gray-700 text-sm font-semibold"><td colSpan={4} className="py-3 px-2 text-gray-300">{enr.length}</td><td className="py-3 px-2 text-right text-white">{D1(tot.d)}</td><td colSpan={3} /><td className="py-3 px-2 text-right text-white">{R(tot.a)}</td><td colSpan={2} /><td className="border-l-2 border-gray-600" /><td className="py-3 px-2 text-right">{R(tot.n)}</td><td className="py-3 px-2 text-right text-white">{R(tot.o)}</td><td className="py-3 px-2 text-right text-amber-300">{$(tot.co)}</td><td colSpan={2} /></tr></tfoot>
       </table></div>}
