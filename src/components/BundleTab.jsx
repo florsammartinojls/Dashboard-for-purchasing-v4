@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from "react";
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
+import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
 import { R, D1, $, $2, P, MN, YC, TTP, gS, gY, cMo, fD } from "../lib/utils";
 import { Dot, TH, AbcBadge, HealthBadge, KillBadge } from "./Shared";
 
@@ -28,11 +28,16 @@ export default function BundleTab({ data, stg, hist, daily, bundleId, onBack, go
 
   const sH = useMemo(() => (hist?.bundleSales || []).filter(h => h.j === sel).sort((a, b) => a.y === b.y ? a.m - b.m : a.y - b.y), [hist, sel]);
   const curMo = cMo();
-  const sHF = useMemo(() => sH.filter(h => !(h.y === curMo.y && h.m === curMo.m)), [sH, curMo]);
+  const sHF = sH; // Include current month
   const yrs = useMemo(() => gY(sHF), [sHF]);
   const yD = useMemo(() => MN.map((m, i) => { const r = { month: m }; yrs.forEach(y => { const x = sHF.find(h => h.y === y && h.m === i + 1); r["u_" + y] = x?.units ?? null }); return r }), [sHF, yrs]);
   const uYTot = useMemo(() => { const t = {}; yrs.forEach(y => { t[y] = sHF.filter(h => h.y === y).reduce((s, x) => s + x.units, 0) }); return t }, [sHF, yrs]);
   const bDays = useMemo(() => (daily?.bundleDays || []).filter(d => d.j === sel).sort((a, x) => x.date.localeCompare(a.date)).slice(0, 14), [daily, sel]);
+
+  // Price history for this bundle
+  const priceHist = useMemo(() => (hist?.priceHist || []).filter(h => h.j === sel).sort((a, b) => a.y === b.y ? a.m - b.m : a.y - b.y), [hist, sel]);
+  const pYrs = useMemo(() => gY(priceHist), [priceHist]);
+  const pCh = useMemo(() => MN.map((m, i) => { const r = { month: m }; pYrs.forEach(y => { const x = priceHist.find(h => h.y === y && h.m === i + 1); r["p_" + y] = x?.avgPrice ?? null }); return r }), [priceHist, pYrs]);
 
   const abcSorted = useMemo(() => {
     let arr = [...abcA];
@@ -121,6 +126,8 @@ export default function BundleTab({ data, stg, hist, daily, bundleId, onBack, go
     {/* Recent Sales */}
     {sale && <div className="bg-gray-900 rounded-xl p-4 mb-4 border border-gray-800"><h3 className="text-white font-semibold text-sm mb-3">Recent</h3><div className="grid grid-cols-2 sm:grid-cols-4 gap-4">{[{ l: "This Mo", u: sale.tmU, r: sale.tmR, p: sale.tmP }, { l: "Last Mo", u: sale.lmU, r: sale.lmR, p: sale.lmP }, { l: "7d", u: sale.l7U, r: sale.l7R, p: sale.l7P }, { l: "28d", u: sale.l28U, r: sale.l28R, p: sale.l28P }].map(x => <div key={x.l}><div className="text-gray-500 text-xs">{x.l}</div><div className="text-white font-semibold">{R(x.u)} u</div><div className="text-gray-400 text-xs">{$(x.r)}</div><div className="text-emerald-400 text-xs">{$(x.p)}</div></div>)}</div></div>}
     {/* YoY Units — BAR chart */}
-    {sHF.length > 0 && <div className="bg-gray-900 rounded-xl p-4 mb-4 border border-gray-800"><h3 className="text-white font-semibold text-sm mb-2">YoY Units <span className="text-gray-500 text-xs font-normal">excl. current</span></h3><ResponsiveContainer width="100%" height={200}><BarChart data={yD}><CartesianGrid strokeDasharray="3 3" stroke="#374151" /><XAxis dataKey="month" tick={{ fill: "#9ca3af", fontSize: 10 }} /><YAxis tick={{ fill: "#9ca3af", fontSize: 10 }} /><Tooltip {...TTP} /><Legend />{yrs.map(y => <Bar key={y} dataKey={"u_" + y} fill={YC[y] || "#6b7280"} opacity={0.85} radius={[2, 2, 0, 0]} name={"" + y} />)}</BarChart></ResponsiveContainer><div className="flex gap-6 mt-2 justify-center">{yrs.map(y => <span key={y} className="text-xs"><span className="text-gray-500">{y}: </span><span className="text-white font-semibold">{R(uYTot[y])}</span></span>)}</div></div>}
+    {sHF.length > 0 && <div className="bg-gray-900 rounded-xl p-4 mb-4 border border-gray-800"><h3 className="text-white font-semibold text-sm mb-2">YoY Units</h3>
+    {/* Price History Line Chart */}
+    {priceHist.length > 0 && <div className="bg-gray-900 rounded-xl p-4 mb-4 border border-gray-800"><h3 className="text-white font-semibold text-sm mb-2">Price History (YoY)</h3><ResponsiveContainer width="100%" height={160}><LineChart data={pCh}><CartesianGrid strokeDasharray="3 3" stroke="#374151" /><XAxis dataKey="month" tick={{ fill: "#9ca3af", fontSize: 10 }} /><YAxis tick={{ fill: "#9ca3af", fontSize: 10 }} domain={['auto', 'auto']} /><Tooltip {...TTP} /><Legend />{pYrs.map(y => <Line key={y} dataKey={"p_" + y} stroke={YC[y] || "#6b7280"} strokeWidth={2} dot={{ r: 2 }} connectNulls name={"$" + y} />)}</LineChart></ResponsiveContainer></div>}<div className="flex flex-col lg:flex-row gap-4"><div className="flex-1 min-w-0"><ResponsiveContainer width="100%" height={200}><BarChart data={yD}><CartesianGrid strokeDasharray="3 3" stroke="#374151" /><XAxis dataKey="month" tick={{ fill: "#9ca3af", fontSize: 10 }} /><YAxis tick={{ fill: "#9ca3af", fontSize: 10 }} /><Tooltip {...TTP} /><Legend />{yrs.map(y => <Bar key={y} dataKey={"u_" + y} fill={YC[y] || "#6b7280"} opacity={0.85} radius={[2, 2, 0, 0]} name={"" + y} />)}</BarChart></ResponsiveContainer></div><div className="lg:w-72 overflow-x-auto"><table className="w-full text-xs"><thead><tr className="text-gray-500"><th className="py-1 px-1 text-left">Mo</th>{yrs.map(y => <th key={y} className="py-1 px-1 text-right" style={{ color: YC[y] || "#6b7280" }}>{y}</th>)}</tr></thead><tbody>{yD.map((r, i) => <tr key={i} className={i % 2 === 0 ? "bg-gray-800/20" : ""}><td className="py-0.5 px-1 text-gray-300">{r.month}</td>{yrs.map(y => <td key={y} className="py-0.5 px-1 text-right text-white">{r["u_" + y] != null ? R(r["u_" + y]) : ""}</td>)}</tr>)}<tr className="border-t border-gray-700 font-semibold"><td className="py-1 px-1">Total</td>{yrs.map(y => <td key={y} className="py-1 px-1 text-right text-white">{R(uYTot[y])}</td>)}</tr></tbody></table></div></div></div>}
   </div>;
 }
