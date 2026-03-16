@@ -71,6 +71,8 @@ export const td = () => new Date().toISOString().split('T')[0];
 export const fSl = s => { if (!s) return ""; try { const p = s.split("-"); return p[1] + "/" + p[2] + "/" + p[0] } catch { return s } };
 // MM/YY format for LastPO
 export const fMY = s => { if (!s) return ""; try { const p = s.split("-"); return p[1] + "/" + p[0].slice(2) } catch { return s } };
+// Force MM/DD/YYYY for date inputs
+export const fDateUS = s => { if (!s) return ""; try { const p = s.split("-"); return p[1] + "/" + p[2] + "/" + p[0] } catch { return s } };
 export const cMo = () => { const d = new Date(); return { y: d.getFullYear(), m: d.getMonth() + 1 } };
 export const gY = h => [...new Set(h.map(x => x.y))].filter(y => y >= 2024).sort();
 
