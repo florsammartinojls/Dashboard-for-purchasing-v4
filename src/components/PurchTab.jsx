@@ -15,6 +15,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
   const [poD, setPoD] = useState("");
   const [vendorSub, setVendorSub] = useState("cores");
   const [showRS, setShowRS] = useState(false);
+  const [showCosts, setShowCosts] = useState(false);
   const [showPH, setShowPH] = useState({});
   const [collapsed, setCollapsed] = useState({});
   const [dismissed, setDismissed] = useState({});
@@ -167,9 +168,9 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
     const expCols = isCol ? 0 : 5; // expandable: Raw, PPRC, Inbound, FIB DOC(b), FIB Inv(b)
 
     return <><tr className={`border-t border-gray-800/30 hover:bg-gray-800/20 text-xs ${hasCoreOrd(c) ? "bg-emerald-900/10" : ""}`}>
-      <td className="py-1 px-1"><Dot status={c.status} /></td>
-      <td className="py-1 px-1 text-blue-400 font-mono">{c.id}</td>
-      <td className="py-1 px-1 text-gray-200 truncate max-w-[140px]">{c.ti}</td>
+      <td className="py-1 px-1 sticky left-0 bg-gray-950 z-10"><Dot status={c.status} /></td>
+      <td className="py-1 px-1 text-blue-400 font-mono sticky left-5 bg-gray-950 z-10">{c.id}</td>
+      <td className="py-1 px-1 text-gray-200 truncate max-w-[140px] sticky left-24 bg-gray-950 z-10">{c.ti}</td>
       <td className="py-1 px-1 text-right">{D1(c.dsr)}</td>
       <td className="py-1 px-1 text-right">{D1(c.d7)}</td>
       <td className="py-1 px-1 text-center">{c.d7 > c.dsr ? <span className={c.spike ? "text-orange-400 font-bold" : "text-emerald-400"}>▲</span> : c.d7 < c.dsr ? <span className="text-red-400">▼</span> : "—"}{c.spike && <span className="text-orange-400 text-xs ml-0.5" title="Spike: 7D DSR 25%+ above DSR">⚡</span>}</td>
@@ -195,13 +196,15 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
         <td className="py-1 px-1 text-right text-amber-300">{rs ? R(rs.finalPcsToOrder) : "—"}</td>
       </>}
       <td className="py-1 border-l-2 border-gray-600 px-1" />
-      <td className="py-0.5 px-0.5"><input type="number" value={gPcs(c.id) || ''} onChange={e => setF(c.id, 'pcs', Math.max(0, +e.target.value || 0))} placeholder="0" className="bg-gray-800 border border-gray-600 text-white rounded px-1 py-0.5 w-14 text-center text-xs" /></td>
-      <td className="py-0.5 px-0.5"><input type="number" value={gCas(c.id) || ''} onChange={e => setF(c.id, 'cas', Math.max(0, +e.target.value || 0))} placeholder="0" className="bg-gray-800 border border-gray-600 text-white rounded px-1 py-0.5 w-14 text-center text-xs" /></td>
-      <td className="py-0.5 px-0.5"><input type="number" value={gInbS(c.id) || ''} onChange={e => setF(c.id, 'inbS', Math.max(0, +e.target.value || 0))} placeholder="0" className="bg-gray-800 border border-gray-600 text-white rounded px-1 py-0.5 w-14 text-center text-xs" /></td>
-      <td className="py-0.5 px-0.5"><input type="number" value={gCogP(c.id) || ''} onChange={e => setF(c.id, 'cogP', Math.max(0, +e.target.value || 0))} placeholder="0" className="bg-gray-800 border border-gray-600 text-white rounded px-1 py-0.5 w-14 text-center text-xs" /></td>
-      <td className="py-0.5 px-0.5"><input type="number" value={gCogC(c.id) || ''} onChange={e => setF(c.id, 'cogC', Math.max(0, +e.target.value || 0))} placeholder="0" className="bg-gray-800 border border-gray-600 text-white rounded px-1 py-0.5 w-14 text-center text-xs" /></td>
-      <td className="py-1 px-1 text-right text-amber-300">{cost > 0 ? $(cost) : "—"}</td>
-      <td className={`py-1 px-1 text-right ${ad ? dc(ad, c.critDays, c.warnDays) : "text-gray-500"}`}>{ad ? R(ad) : "—"}</td>
+      <td className="py-0.5 px-0.5 sticky right-36 bg-gray-950 z-10"><input type="number" value={gPcs(c.id) || ''} onChange={e => setF(c.id, 'pcs', Math.max(0, +e.target.value || 0))} placeholder="0" className="bg-gray-800 border border-gray-600 text-white rounded px-1 py-0.5 w-16 text-center text-xs" /></td>
+      <td className="py-0.5 px-0.5 sticky right-24 bg-gray-950 z-10"><input type="number" value={gCas(c.id) || ''} onChange={e => setF(c.id, 'cas', Math.max(0, +e.target.value || 0))} placeholder="0" className="bg-gray-800 border border-gray-600 text-white rounded px-1 py-0.5 w-16 text-center text-xs" /></td>
+      {showCosts && <>
+        <td className="py-0.5 px-0.5"><input type="number" value={gInbS(c.id) || ''} onChange={e => setF(c.id, 'inbS', Math.max(0, +e.target.value || 0))} placeholder="0" className="bg-gray-800 border border-gray-600 text-white rounded px-1 py-0.5 w-16 text-center text-xs" /></td>
+        <td className="py-0.5 px-0.5"><input type="number" value={gCogP(c.id) || ''} onChange={e => setF(c.id, 'cogP', Math.max(0, +e.target.value || 0))} placeholder="0" className="bg-gray-800 border border-gray-600 text-white rounded px-1 py-0.5 w-16 text-center text-xs" /></td>
+        <td className="py-0.5 px-0.5"><input type="number" value={gCogC(c.id) || ''} onChange={e => setF(c.id, 'cogC', Math.max(0, +e.target.value || 0))} placeholder="0" className="bg-gray-800 border border-gray-600 text-white rounded px-1 py-0.5 w-16 text-center text-xs" /></td>
+      </>}
+      <td className="py-1 px-1 text-right text-amber-300 sticky right-12 bg-gray-950 z-10">{cost > 0 ? $(cost) : "—"}</td>
+      <td className={`py-1 px-1 text-right sticky right-0 bg-gray-950 z-10 ${ad ? dc(ad, c.critDays, c.warnDays) : "text-gray-500"}`}>{ad ? R(ad) : "—"}</td>
       <td className="py-1 px-0.5 flex gap-0.5">
         <button onClick={() => togCollapse(c.id)} className="text-gray-400 hover:text-white text-xs px-0.5">{isCol ? "+" : "−"}</button>
         <button onClick={() => togDismiss(c.id)} className="text-gray-400 hover:text-red-400 text-xs px-0.5">✕</button>
@@ -220,9 +223,9 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
     const aged = agedMap[b.j]; const kill = killMap[b.j];
     const isCol = collapsed[b.j];
     return <tr className={`border-t border-gray-800/20 hover:bg-gray-800/10 text-xs ${indent ? "bg-indigo-900/5" : ""} ${hasBundleOrd(b) ? "bg-emerald-900/10" : ""}`}>
-      <td className="py-1 px-1" />
-      <td className="py-1 px-1 text-indigo-400 font-mono">{b.j}</td>
-      <td className="py-1 px-1 text-gray-200 truncate max-w-[140px]">
+      <td className="py-1 px-1 sticky left-0 bg-gray-950 z-10" />
+      <td className="py-1 px-1 text-indigo-400 font-mono sticky left-5 bg-gray-950 z-10">{b.j}</td>
+      <td className="py-1 px-1 text-gray-200 truncate max-w-[140px] sticky left-24 bg-gray-950 z-10">
         {b.t}
         {aged && aged.fbaHealth !== "Healthy" && <span className={`ml-1 text-xs ${aged.fbaHealth === "At Risk" ? "text-amber-400" : "text-red-400"}`}>{aged.fbaHealth}</span>}
         {aged && aged.storageLtsf > 0 && <span className="ml-1 text-xs text-red-300">${aged.storageLtsf.toFixed(0)}</span>}
@@ -241,30 +244,34 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
       {!isCol && <td colSpan={5} />}
       {showRS && <td colSpan={5} />}
       <td className="py-1 border-l-2 border-gray-600 px-1" />
-      <td className="py-0.5 px-0.5"><input type="number" value={gPcs(b.j) || ''} onChange={e => setF(b.j, 'pcs', Math.max(0, +e.target.value || 0))} placeholder="0" className="bg-gray-800 border border-gray-600 text-white rounded px-1 py-0.5 w-14 text-center text-xs" /></td>
-      <td className="py-0.5 px-0.5"><input type="number" value={gCas(b.j) || ''} onChange={e => setF(b.j, 'cas', Math.max(0, +e.target.value || 0))} placeholder="0" className="bg-gray-800 border border-gray-600 text-white rounded px-1 py-0.5 w-14 text-center text-xs" /></td>
-      <td className="py-0.5 px-0.5"><input type="number" value={gInbS(b.j) || ''} onChange={e => setF(b.j, 'inbS', Math.max(0, +e.target.value || 0))} placeholder="0" className="bg-gray-800 border border-gray-600 text-white rounded px-1 py-0.5 w-14 text-center text-xs" /></td>
-      <td className="py-0.5 px-0.5"><input type="number" value={gCogP(b.j) || ''} onChange={e => setF(b.j, 'cogP', Math.max(0, +e.target.value || 0))} placeholder="0" className="bg-gray-800 border border-gray-600 text-white rounded px-1 py-0.5 w-14 text-center text-xs" /></td>
-      <td className="py-0.5 px-0.5"><input type="number" value={gCogC(b.j) || ''} onChange={e => setF(b.j, 'cogC', Math.max(0, +e.target.value || 0))} placeholder="0" className="bg-gray-800 border border-gray-600 text-white rounded px-1 py-0.5 w-14 text-center text-xs" /></td>
-      <td className="py-1 px-1 text-right text-amber-300">{cost > 0 ? $(cost) : "—"}</td>
-      <td className="py-1 px-1 text-right">{R(b.doc)}</td>
+      <td className="py-0.5 px-0.5 sticky right-36 bg-gray-950 z-10"><input type="number" value={gPcs(b.j) || ''} onChange={e => setF(b.j, 'pcs', Math.max(0, +e.target.value || 0))} placeholder="0" className="bg-gray-800 border border-gray-600 text-white rounded px-1 py-0.5 w-16 text-center text-xs" /></td>
+      <td className="py-0.5 px-0.5 sticky right-24 bg-gray-950 z-10"><input type="number" value={gCas(b.j) || ''} onChange={e => setF(b.j, 'cas', Math.max(0, +e.target.value || 0))} placeholder="0" className="bg-gray-800 border border-gray-600 text-white rounded px-1 py-0.5 w-16 text-center text-xs" /></td>
+      {showCosts && <>
+        <td className="py-0.5 px-0.5"><input type="number" value={gInbS(b.j) || ''} onChange={e => setF(b.j, 'inbS', Math.max(0, +e.target.value || 0))} placeholder="0" className="bg-gray-800 border border-gray-600 text-white rounded px-1 py-0.5 w-16 text-center text-xs" /></td>
+        <td className="py-0.5 px-0.5"><input type="number" value={gCogP(b.j) || ''} onChange={e => setF(b.j, 'cogP', Math.max(0, +e.target.value || 0))} placeholder="0" className="bg-gray-800 border border-gray-600 text-white rounded px-1 py-0.5 w-16 text-center text-xs" /></td>
+        <td className="py-0.5 px-0.5"><input type="number" value={gCogC(b.j) || ''} onChange={e => setF(b.j, 'cogC', Math.max(0, +e.target.value || 0))} placeholder="0" className="bg-gray-800 border border-gray-600 text-white rounded px-1 py-0.5 w-16 text-center text-xs" /></td>
+      </>}
+      <td className="py-1 px-1 text-right text-amber-300 sticky right-12 bg-gray-950 z-10">{cost > 0 ? $(cost) : "—"}</td>
+      <td className="py-1 px-1 text-right sticky right-0 bg-gray-950 z-10">{R(b.doc)}</td>
       <td className="py-1 px-1"><button onClick={() => goBundle(b.j)} className="text-indigo-400 px-0.5 bg-indigo-400/10 rounded text-xs">V</button></td>
     </tr>;
   };
 
   // === VENDOR TABLE HEADER ===
   const rsToggle = <button onClick={() => setShowRS(!showRS)} className={`text-xs px-1 py-0.5 rounded font-bold ${showRS ? "bg-purple-600 text-white" : "bg-gray-700 text-gray-400"}`} title="Toggle Restocker columns">{showRS ? "−" : "+"}RS</button>;
+  const costsToggle = <button onClick={() => setShowCosts(!showCosts)} className={`text-xs px-1 py-0.5 rounded font-bold ${showCosts ? "bg-teal-600 text-white" : "bg-gray-700 text-gray-400"}`} title="Toggle InbS/CogP/CogC columns">{showCosts ? "−" : "+"}$</button>;
 
   const VTH = ({ isCol }) => <tr className="text-gray-500 uppercase bg-gray-900/40 text-xs">
-    <th className="py-2 px-1 w-6" /><TH tip="Core or JLS #" className="py-2 px-1 text-left">ID</TH><th className="py-2 px-1 text-left">Title</th>
+    <th className="py-2 px-1 w-5 sticky left-0 bg-gray-900 z-10" /><TH tip="Core or JLS #" className="py-2 px-1 text-left sticky left-5 bg-gray-900 z-10">ID</TH><th className="py-2 px-1 text-left sticky left-24 bg-gray-900 z-10">Title</th>
     <TH tip="Composite Daily Sales Rate" className="py-2 px-1 text-right">DSR</TH><TH tip="7-Day DSR" className="py-2 px-1 text-right">7D</TH><TH tip="Trend" className="py-2 px-1 text-center">T</TH><TH tip="Days of Coverage" className="py-2 px-1 text-right">DOC</TH>
     <TH tip="All-In Owned Pieces" className="py-2 px-1 text-right">Inv</TH><TH tip="MOQ Pieces" className="py-2 px-1 text-right">MOQ</TH><TH tip="Vendor Case Pack" className="py-2 px-1 text-right">VCas</TH><TH tip="Last Purchase Date" className="py-2 px-1 text-right">LastPO</TH>
     <TH tip="Seasonal Peak" className="py-2 px-1 text-center">S</TH><TH tip="Recommended Qty" className="py-2 px-1 text-right">Rec</TH>
     {!isCol && <><TH tip="Raw / Potential Units" className="py-2 px-1 text-right">Raw</TH><TH tip="PPRC Available" className="py-2 px-1 text-right">PPRC</TH><TH tip="Inbound Pieces" className="py-2 px-1 text-right">Inb</TH><TH tip="FIB DOC (bundles)" className="py-2 px-1 text-right">FibD</TH><TH tip="FIB Inventory (bundles)" className="py-2 px-1 text-right">FibI</TH></>}
     {showRS && <><TH tip="FIB Pieces (Restocker)" className="py-2 px-1 text-right text-cyan-400">rFIB</TH><TH tip="Raw Pieces (Restocker)" className="py-2 px-1 text-right text-cyan-400">rRaw</TH><TH tip="Inbound (Restocker)" className="py-2 px-1 text-right text-cyan-400">rInb</TH><TH tip="Case Pack" className="py-2 px-1 text-right text-cyan-400">CPk</TH><TH tip="MOQ Pieces to Order" className="py-2 px-1 text-right text-cyan-400">MOQPcs</TH></>}
     <th className="py-2 border-l-2 border-gray-600 px-1" />
-    <TH tip="Pieces to Order" className="py-2 px-1 text-center">Pcs</TH><TH tip="Cases to Order" className="py-2 px-1 text-center">Cas</TH><TH tip="Inbound Shipping Cost" className="py-2 px-1 text-center">InbS</TH><TH tip="Cost per Piece" className="py-2 px-1 text-center">CogP</TH><TH tip="Cost per Case" className="py-2 px-1 text-center">CogC</TH>
-    <th className="py-2 px-1 text-right">Cost</th><TH tip="DOC After Order" className="py-2 px-1 text-right">After DOC</TH><th className="py-2 px-1 w-16">{rsToggle}</th>
+    <TH tip="Pieces to Order" className="py-2 px-1 text-center sticky right-36 bg-gray-900 z-10">Pcs</TH><TH tip="Cases to Order" className="py-2 px-1 text-center sticky right-24 bg-gray-900 z-10">Cas</TH>
+    {showCosts && <><TH tip="Inbound Shipping Cost" className="py-2 px-1 text-center">InbS</TH><TH tip="Cost per Piece" className="py-2 px-1 text-center">CogP</TH><TH tip="Cost per Case" className="py-2 px-1 text-center">CogC</TH></>}
+    <th className="py-2 px-1 text-right sticky right-12 bg-gray-900 z-10">Cost</th><TH tip="DOC After Order" className="py-2 px-1 text-right sticky right-0 bg-gray-900 z-10">After DOC</TH><th className="py-2 px-1 w-16">{rsToggle} {costsToggle}</th>
   </tr>;
 
   // === RENDER ===
