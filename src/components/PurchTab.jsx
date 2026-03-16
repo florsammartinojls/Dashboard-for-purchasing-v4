@@ -46,15 +46,6 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
   const agedMap = useMemo(() => { const m = {}; (data.agedInv || []).forEach(r => m[r.j] = r); return m }, [data.agedInv]);
   const killMap = useMemo(() => { const m = {}; (data.killMgmt || []).forEach(r => m[r.j] = r); return m }, [data.killMgmt]);
 
-  // Check if item is ignored (workflow status=Ignore with future date)
-  const isIgnored = useCallback((id) => {
-    const wf = (data.workflow || []).find(w => w.id === id);
-    if (!wf || wf.status !== "Ignore") return false;
-    if (!wf.ignoreUntil) return true; // Ignore with no date = always hidden
-    const until = new Date(wf.ignoreUntil);
-    return !isNaN(until.getTime()) && until >= new Date(new Date().toDateString());
-  }, [data.workflow]);
-
   // === ENRICHED CORES ===
   const enr = useMemo(() => (data.cores || []).filter(c => {
     if (stg.fA === "yes" && c.active !== "Yes") return false;
