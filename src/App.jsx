@@ -34,7 +34,7 @@ const DEFAULT_GL = [
   { term: "⚡ Spike", desc: "7D DSR is 25%+ above composite DSR. Need calculation uses 7D DSR instead to cover the demand spike." },
   { term: "Fill Rec: Cores", desc: "Need = (Target DOC × effective DSR) − All-In Inventory. Order = max(Need, MOQ), rounded up to vendor case pack." },
   { term: "Fill Rec: Bundles", desc: "Need = (Target DOC × bundle DSR) − FIB Inventory. Order = Need (no MOQ on bundles)." },
-  { term: "Fill Rec: Mix", desc: "1) Calculate need per bundle. 2) If bundle need < vendor MOQ → don't order bundle, add pieces to core order instead. 3) Core order = own need + extras from small bundles, rounded to case pack." },
+  { term: "Fill Rec: Mix", desc: "1) For each bundle: Effective DOC = current DOC + (core inbound ÷ qty_per_bundle ÷ bundle DSR). 2) Need = (Target DOC − Effective DOC) × bundle DSR. 3) If need < vendor MOQ → don't order bundle, convert to core pieces instead. 4) Core order = own need + converted bundle pieces, rounded to case pack." },
   { term: "FIBDOC", desc: "FBA Inbound Days of Coverage." },
   { term: "PFIBDOC", desc: "Projected FIB DOC after restock." },
   { term: "7f", desc: "Receiving Ledger (clipboard copy for spreadsheet)." },
