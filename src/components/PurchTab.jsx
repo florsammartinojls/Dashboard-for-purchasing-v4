@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useCallback, useEffect, Fragment } from "react";
 import { R, D1, $, $2, $4, P, gS, cAI, cNQ, cOQ, cDA, bNQ, isD, gTD, dc, cSeas, fSl, fMY, fE, effectiveDSR, roundToCasePack, genPO, genRFQ, cp7f, cp7g } from "../lib/utils";
-import { Dot, Toast, TH, SS, WorkflowChip } from "./Shared";
+import { Dot, Toast, TH, SS, WorkflowChip, NumInput } from "./Shared";
 
 export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, setOv, initV, clearIV, saveWorkflow, deleteWorkflow }) {
   const [vm, setVm] = useState(initV ? "vendor" : "core");
@@ -19,8 +19,18 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
   const [showPH, setShowPH] = useState({});
   const [collapsed, setCollapsed] = useState({});
   const [dismissed, setDismissed] = useState({});
+  const [showIgnored, setShowIgnored] = useState(false);
 
   useEffect(() => { if (initV) { setVm("vendor"); setVf(initV); clearIV() } }, [initV, clearIV]);
+
+  // Check if item is ignored via workflow
+  const isIgnored = useCallback((id) => {
+    const wf = (data.workflow || []).find(w => w.id === id);
+    if (!wf || wf.status !== "Ignore") return false;
+    if (!wf.ignoreUntil) return true;
+    const until = new Date(wf.ignoreUntil);
+    return !isNaN(until.getTime()) && until >= new Date(new Date().toDateString());
+  }, [data.workflow]);
 
   // === MAPS ===
   const vMap = useMemo(() => { const m = {}; (data.vendors || []).forEach(v => m[v.name] = v); return m }, [data.vendors]);
@@ -35,6 +45,15 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
   }, [data.priceComp]);
   const agedMap = useMemo(() => { const m = {}; (data.agedInv || []).forEach(r => m[r.j] = r); return m }, [data.agedInv]);
   const killMap = useMemo(() => { const m = {}; (data.killMgmt || []).forEach(r => m[r.j] = r); return m }, [data.killMgmt]);
+
+  // Check if item is ignored (workflow status=Ignore with future date)
+  const isIgnored = useCallback((id) => {
+    const wf = (data.workflow || []).find(w => w.id === id);
+    if (!wf || wf.status !== "Ignore") return false;
+    if (!wf.ignoreUntil) return true; // Ignore with no date = always hidden
+    const until = new Date(wf.ignoreUntil);
+    return !isNaN(until.getTime()) && until >= new Date(new Date().toDateString());
+  }, [data.workflow]);
 
   // === ENRICHED CORES ===
   const enr = useMemo(() => (data.cores || []).filter(c => {
@@ -100,8 +119,8 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
     const g = {};
     enr.forEach(c => { if (!g[c.ven]) g[c.ven] = { v: vMap[c.ven] || { name: c.ven }, cores: [], bundles: [] }; g[c.ven].cores.push(c) });
     Object.keys(g).forEach(vn => { g[vn].bundles = venBundles.filter(b => (b.vendors || "").indexOf(vn) >= 0) });
-    return Object.values(g).sort((a, b) => b.cores.filter(c => c.status === "critical").length - a.cores.filter(c => c.status === "critical").length);
-  }, [enr, vm, vMap, venBundles]);
+    return Object.values(g).filter(grp => showIgnored || !isIgnored(grp.v.name)).sort((a, b) => b.cores.filter(c => c.status === "critical").length - a.cores.filter(c => c.status === "critical").length);
+  }, [enr, vm, vMap, venBundles, isIgnored, showIgnored]);
 
   // === PO ITEMS (cores + bundles) ===
   const getPOI = (cores, bundles) => {
@@ -114,32 +133,45 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
   const fillR = (cores, bundles, mode) => {
     const u = { ...ov };
     if (mode === "bundles") {
-      // Bundles only: fill bundles by FIB DOC target
-      (bundles || []).forEach(b => {
-        const need = bNQ(b, cores[0]?.targetDoc || 90);
-        if (need > 0) u[b.j] = { ...(u[b.j] || {}), pcs: need };
-      });
-    } else if (mode === "mix") {
-      // Mix: fill bundles first, small ones go to core
-      const coreExtras = {};
       (bundles || []).forEach(b => {
         const tg = cores[0]?.targetDoc || 90;
         const need = bNQ(b, tg);
+        if (need > 0) u[b.j] = { ...(u[b.j] || {}), pcs: need };
+      });
+    } else if (mode === "mix") {
+      // Mix: calculate effective DOC per bundle considering core inbound
+      const coreMap = {};
+      cores.forEach(c => { coreMap[c.id] = c });
+      const coreExtras = {};
+      (bundles || []).forEach(b => {
+        const tg = cores[0]?.targetDoc || 90;
+        const parentCore = coreMap[b.core1];
+        if (!parentCore) return;
+        // How many core pieces per bundle unit
+        const qtyPerBundle = b.qty1 || 1;
+        // Extra DOC from core inbound
+        const coreInb = parentCore.inb || 0;
+        const extraDoc = b.cd > 0 ? Math.floor(coreInb / qtyPerBundle / b.cd) : 0;
+        const effectiveDoc = (b.doc || 0) + extraDoc;
+        // Need based on effective DOC
+        const need = Math.ceil(Math.max(0, (tg - effectiveDoc) * b.cd));
         if (need <= 0) return;
-        // Find vendor MOQ for this bundle's core
-        const parentCore = cores.find(c => c.id === b.core1);
-        const moq = parentCore?.moq || 0;
-        if (need < moq && parentCore) {
-          // Too small → add to core extras
-          coreExtras[parentCore.id] = (coreExtras[parentCore.id] || 0) + need;
+        const moq = parentCore.moq || 0;
+        if (need < moq) {
+          // Too small → add core pieces instead
+          coreExtras[parentCore.id] = (coreExtras[parentCore.id] || 0) + (need * qtyPerBundle);
         } else {
-          u[b.j] = { ...(u[b.j] || {}), pcs: need };
+          u[b.j] = { ...(u[b.j] || {}), pcs: roundToCasePack(need, parentCore.casePack) };
         }
       });
       // Fill cores with their own need + extras from small bundles
-      cores.filter(c => c.needQty > 0 || coreExtras[c.id]).forEach(c => {
-        const totalNeed = (c.needQty > 0 ? c.needQty : 0) + (coreExtras[c.id] || 0);
-        u[c.id] = { ...(u[c.id] || {}), pcs: cOQ(totalNeed, c.moq, c.casePack) };
+      cores.forEach(c => {
+        const ownNeed = c.needQty > 0 ? c.needQty : 0;
+        const extra = coreExtras[c.id] || 0;
+        const totalNeed = ownNeed + extra;
+        if (totalNeed > 0) {
+          u[c.id] = { ...(u[c.id] || {}), pcs: cOQ(totalNeed, c.moq, c.casePack) };
+        }
       });
     } else {
       // Cores only (default)
@@ -196,12 +228,12 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
         <td className="py-1 px-1 text-right text-amber-300">{rs ? R(rs.finalPcsToOrder) : "—"}</td>
       </>}
       <td className="py-1 border-l-2 border-gray-600 px-1" />
-      <td className="py-0.5 px-0.5 sticky right-36 bg-gray-950 z-10"><input type="number" value={gPcs(c.id) || ''} onChange={e => setF(c.id, 'pcs', Math.max(0, +e.target.value || 0))} placeholder="0" className="bg-gray-800 border border-gray-600 text-white rounded px-1 py-0.5 w-16 text-center text-xs" /></td>
-      <td className="py-0.5 px-0.5 sticky right-24 bg-gray-950 z-10"><input type="number" value={gCas(c.id) || ''} onChange={e => setF(c.id, 'cas', Math.max(0, +e.target.value || 0))} placeholder="0" className="bg-gray-800 border border-gray-600 text-white rounded px-1 py-0.5 w-16 text-center text-xs" /></td>
+      <td className="py-0.5 px-0.5 sticky right-36 bg-gray-950 z-10"><NumInput value={gPcs(c.id)} onChange={v => setF(c.id, 'pcs', v)} /></td>
+      <td className="py-0.5 px-0.5 sticky right-24 bg-gray-950 z-10"><NumInput value={gCas(c.id)} onChange={v => setF(c.id, 'cas', v)} /></td>
       {showCosts && <>
-        <td className="py-0.5 px-0.5"><input type="number" value={gInbS(c.id) || ''} onChange={e => setF(c.id, 'inbS', Math.max(0, +e.target.value || 0))} placeholder="0" className="bg-gray-800 border border-gray-600 text-white rounded px-1 py-0.5 w-16 text-center text-xs" /></td>
-        <td className="py-0.5 px-0.5"><input type="number" value={gCogP(c.id) || ''} onChange={e => setF(c.id, 'cogP', Math.max(0, +e.target.value || 0))} placeholder="0" className="bg-gray-800 border border-gray-600 text-white rounded px-1 py-0.5 w-16 text-center text-xs" /></td>
-        <td className="py-0.5 px-0.5"><input type="number" value={gCogC(c.id) || ''} onChange={e => setF(c.id, 'cogC', Math.max(0, +e.target.value || 0))} placeholder="0" className="bg-gray-800 border border-gray-600 text-white rounded px-1 py-0.5 w-16 text-center text-xs" /></td>
+        <td className="py-0.5 px-0.5"><NumInput value={gInbS(c.id)} onChange={v => setF(c.id, 'inbS', v)} /></td>
+        <td className="py-0.5 px-0.5"><NumInput value={gCogP(c.id)} onChange={v => setF(c.id, 'cogP', v)} /></td>
+        <td className="py-0.5 px-0.5"><NumInput value={gCogC(c.id)} onChange={v => setF(c.id, 'cogC', v)} /></td>
       </>}
       <td className="py-1 px-1 text-right text-amber-300 sticky right-12 bg-gray-950 z-10">{cost > 0 ? $(cost) : "—"}</td>
       <td className={`py-1 px-1 text-right sticky right-0 bg-gray-950 z-10 ${ad ? dc(ad, c.critDays, c.warnDays) : "text-gray-500"}`}>{ad ? R(ad) : "—"}</td>
@@ -217,42 +249,43 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
     </>;
   };
 
-  // === BUNDLE ROW ===
+  // === BUNDLE ROW (aligned to core columns) ===
   const BundleRow = ({ b, indent }) => {
     const f = b.fee || feMap[b.j]; const eq = bundleEffQ(b); const cost = f ? (eq * (f.aicogs || 0)) : 0;
     const aged = agedMap[b.j]; const kill = killMap[b.j];
     const isCol = collapsed[b.j];
-    return <tr className={`border-t border-gray-800/20 hover:bg-gray-800/10 text-xs ${indent ? "bg-indigo-900/5" : ""} ${hasBundleOrd(b) ? "bg-emerald-900/10" : ""}`}>
-      <td className="py-1 px-1 sticky left-0 bg-gray-950 z-10" />
-      <td className="py-1 px-1 text-indigo-400 font-mono sticky left-5 bg-gray-950 z-10">{b.j}</td>
-      <td className="py-1 px-1 text-gray-200 truncate max-w-[140px] sticky left-24 bg-gray-950 z-10">
+    return <tr className={`border-t border-gray-800/20 hover:bg-indigo-900/10 text-xs ${hasBundleOrd(b) ? "bg-emerald-900/10" : "bg-indigo-950/20"}`}>
+      <td className="py-1 px-1 sticky left-0 bg-indigo-950/20 z-10" />
+      <td className="py-1 px-1 text-indigo-400 font-mono sticky left-5 bg-indigo-950/20 z-10">{indent ? "└ " : ""}{b.j}</td>
+      <td className="py-1 px-1 text-indigo-200 truncate max-w-[140px] sticky left-24 bg-indigo-950/20 z-10">
         {b.t}
         {aged && aged.fbaHealth !== "Healthy" && <span className={`ml-1 text-xs ${aged.fbaHealth === "At Risk" ? "text-amber-400" : "text-red-400"}`}>{aged.fbaHealth}</span>}
         {aged && aged.storageLtsf > 0 && <span className="ml-1 text-xs text-red-300">${aged.storageLtsf.toFixed(0)}</span>}
-        {kill && kill.latestEval && <span className={`ml-1 text-xs font-bold ${kill.latestEval.toLowerCase().includes('kill') ? "text-red-400" : kill.latestEval.toLowerCase().includes('sell') ? "text-amber-400" : ""}`}>{kill.latestEval.toLowerCase().includes('kill') ? "KILL" : kill.sellEval ? "ST" : ""}</span>}
+        {kill && kill.latestEval && kill.latestEval.toLowerCase().includes('kill') && <span className="ml-1 text-xs text-red-400 font-bold">KILL</span>}
+        {kill && kill.sellEval && kill.sellEval.toLowerCase().includes('sell') && <span className="ml-1 text-xs text-amber-400 font-bold">ST</span>}
       </td>
-      <td className="py-1 px-1 text-right">{D1(b.cd)}</td>
-      <td className="py-1 px-1 text-right">{D1(b.d7comp)}</td>
-      <td className="py-1 px-1 text-center">{b.d7comp > b.cd ? <span className="text-emerald-400">▲</span> : b.d7comp < b.cd ? <span className="text-red-400">▼</span> : "—"}</td>
-      <td className="py-1 px-1 text-right">{R(b.fibDoc)}</td>
-      <td className="py-1 px-1 text-right">{R(b.fibInv)}</td>
-      <td className="py-1 px-1 text-right text-emerald-400">{f ? $2(f.gp) : "—"}</td>
-      <td className="py-1 px-1 text-right">{b.margin > 0 ? P(b.margin) : "—"}</td>
-      <td className="py-1 px-1 text-center text-xs">{b.replenTag || "—"}</td>
-      <td className="py-1 px-1 text-center">{b.scInv > 0 ? R(b.scInv) : "—"}</td>
-      <td className="py-1 px-1 text-right">{R(b.doc)}</td>
-      {!isCol && <td colSpan={5} />}
-      {showRS && <td colSpan={5} />}
+      {/* DSR */}<td className="py-1 px-1 text-right text-indigo-300">{D1(b.cd)}</td>
+      {/* 7D */}<td className="py-1 px-1 text-right text-indigo-300">{D1(b.d7comp)}</td>
+      {/* T */}<td className="py-1 px-1 text-center">{b.d7comp > b.cd ? <span className="text-emerald-400">▲</span> : b.d7comp < b.cd ? <span className="text-red-400">▼</span> : "—"}</td>
+      {/* DOC */}<td className="py-1 px-1 text-right text-indigo-300">{R(b.doc)}</td>
+      {/* Inv = FIB Inv */}<td className="py-1 px-1 text-right text-indigo-300">{R(b.fibInv)}</td>
+      {/* MOQ */}<td className="py-1 px-1 text-gray-600">—</td>
+      {/* VCAS */}<td className="py-1 px-1 text-gray-600">—</td>
+      {/* LastPO */}<td className="py-1 px-1 text-gray-600">—</td>
+      {/* S = replen */}<td className="py-1 px-1 text-center text-indigo-300">{b.replenTag || "—"}</td>
+      {/* REC */}<td className="py-1 px-1 text-gray-600">—</td>
+      {/* Expandable cols */}{!isCol && <td colSpan={5} />}
+      {/* RS cols */}{showRS && <td colSpan={5} />}
       <td className="py-1 border-l-2 border-gray-600 px-1" />
-      <td className="py-0.5 px-0.5 sticky right-36 bg-gray-950 z-10"><input type="number" value={gPcs(b.j) || ''} onChange={e => setF(b.j, 'pcs', Math.max(0, +e.target.value || 0))} placeholder="0" className="bg-gray-800 border border-gray-600 text-white rounded px-1 py-0.5 w-16 text-center text-xs" /></td>
-      <td className="py-0.5 px-0.5 sticky right-24 bg-gray-950 z-10"><input type="number" value={gCas(b.j) || ''} onChange={e => setF(b.j, 'cas', Math.max(0, +e.target.value || 0))} placeholder="0" className="bg-gray-800 border border-gray-600 text-white rounded px-1 py-0.5 w-16 text-center text-xs" /></td>
+      <td className="py-0.5 px-0.5 sticky right-36 bg-indigo-950/20 z-10"><NumInput value={gPcs(b.j)} onChange={v => setF(b.j, 'pcs', v)} /></td>
+      <td className="py-0.5 px-0.5 sticky right-24 bg-indigo-950/20 z-10"><NumInput value={gCas(b.j)} onChange={v => setF(b.j, 'cas', v)} /></td>
       {showCosts && <>
-        <td className="py-0.5 px-0.5"><input type="number" value={gInbS(b.j) || ''} onChange={e => setF(b.j, 'inbS', Math.max(0, +e.target.value || 0))} placeholder="0" className="bg-gray-800 border border-gray-600 text-white rounded px-1 py-0.5 w-16 text-center text-xs" /></td>
-        <td className="py-0.5 px-0.5"><input type="number" value={gCogP(b.j) || ''} onChange={e => setF(b.j, 'cogP', Math.max(0, +e.target.value || 0))} placeholder="0" className="bg-gray-800 border border-gray-600 text-white rounded px-1 py-0.5 w-16 text-center text-xs" /></td>
-        <td className="py-0.5 px-0.5"><input type="number" value={gCogC(b.j) || ''} onChange={e => setF(b.j, 'cogC', Math.max(0, +e.target.value || 0))} placeholder="0" className="bg-gray-800 border border-gray-600 text-white rounded px-1 py-0.5 w-16 text-center text-xs" /></td>
+        <td className="py-0.5 px-0.5"><NumInput value={gInbS(b.j)} onChange={v => setF(b.j, 'inbS', v)} /></td>
+        <td className="py-0.5 px-0.5"><NumInput value={gCogP(b.j)} onChange={v => setF(b.j, 'cogP', v)} /></td>
+        <td className="py-0.5 px-0.5"><NumInput value={gCogC(b.j)} onChange={v => setF(b.j, 'cogC', v)} /></td>
       </>}
-      <td className="py-1 px-1 text-right text-amber-300 sticky right-12 bg-gray-950 z-10">{cost > 0 ? $(cost) : "—"}</td>
-      <td className="py-1 px-1 text-right sticky right-0 bg-gray-950 z-10">{R(b.doc)}</td>
+      <td className="py-1 px-1 text-right text-amber-300 sticky right-12 bg-indigo-950/20 z-10">{cost > 0 ? $(cost) : "—"}</td>
+      <td className="py-1 px-1 text-right sticky right-0 bg-indigo-950/20 z-10">{R(b.doc)}</td>
       <td className="py-1 px-1"><button onClick={() => goBundle(b.j)} className="text-indigo-400 px-0.5 bg-indigo-400/10 rounded text-xs">V</button></td>
     </tr>;
   };
@@ -284,7 +317,9 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
       <select value={nf} onChange={e => setNf(e.target.value)} className="bg-gray-800 border border-gray-700 text-gray-300 text-sm rounded-lg px-2 py-1.5"><option value="all">All</option><option value="need">Needs Buy</option><option value="ok">No Need</option></select>
       {vm === "core" && <><select value={sort} onChange={e => setSort(e.target.value)} className="bg-gray-800 border border-gray-700 text-gray-300 text-sm rounded-lg px-2 py-1.5"><option value="status">Priority</option><option value="doc">DOC</option><option value="dsr">DSR</option><option value="need$">$</option></select><span className="text-gray-500 text-xs">Min:</span><input type="number" value={minD} onChange={e => setMinD(+e.target.value)} className="bg-gray-800 border border-gray-700 text-white text-sm rounded px-2 py-1 w-14" /></>}
       {vm === "vendor" && <div className="flex bg-gray-800 rounded-lg p-0.5">{[["cores", "Cores"], ["bundles", "Bundles"], ["mix", "Mix"]].map(([k, l]) => <button key={k} onClick={() => setVendorSub(k)} className={`px-2.5 py-1 rounded-md text-xs font-medium ${vendorSub === k ? "bg-indigo-600 text-white" : "text-gray-400"}`}>{l}</button>)}</div>}
-      <div className="flex gap-2 ml-auto text-xs"><span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-500" />{sc.critical}</span><span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-500" />{sc.warning}</span><span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500" />{sc.healthy}</span><span className="text-gray-500">|</span><span className="text-gray-300 font-semibold">{enr.length}</span></div>
+      <div className="flex gap-2 ml-auto text-xs"><span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-500" />{sc.critical}</span><span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-500" />{sc.warning}</span><span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500" />{sc.healthy}</span><span className="text-gray-500">|</span><span className="text-gray-300 font-semibold">{enr.length}</span>
+      {vm === "vendor" && <button onClick={() => setShowIgnored(!showIgnored)} className={`ml-2 px-2 py-0.5 rounded text-xs ${showIgnored ? "bg-red-500/20 text-red-400" : "bg-gray-700 text-gray-500"}`}>{showIgnored ? "Hide" : "Show"} Ignored</button>}
+      </div>
     </div>
     {vm === "vendor" && <div className="flex flex-wrap gap-3 mb-4 items-center text-sm"><span className="text-gray-500 text-xs">PO#:</span><input type="text" value={poN} onChange={e => setPoN(e.target.value)} placeholder="2637" className="bg-gray-800 border border-gray-700 text-white rounded px-2 py-1 w-20 text-sm" /><span className="text-gray-500 text-xs">Date:</span><input type="date" value={poD} onChange={e => setPoD(e.target.value)} className="bg-gray-800 border border-gray-700 text-white rounded px-2 py-1 text-sm" /><span className="text-gray-500 text-xs">Buyer:</span><span className="text-white font-semibold">{stg.buyer || <span className="text-red-400">Set in ⚙️</span>}</span></div>}
 
@@ -306,7 +341,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
       return <div key={v.name} className="mb-5 border border-gray-800 rounded-xl overflow-hidden">
         <div className="bg-gray-900 px-4 py-3">
           <div className="flex flex-wrap items-center gap-3 mb-2">
-            <span className="text-white font-semibold">{v.name}</span>
+            <span className="text-white font-semibold cursor-pointer hover:text-blue-400 hover:underline" onClick={() => window.open(window.location.pathname + '?vendor=' + encodeURIComponent(v.name), '_blank')}>{v.name}</span>
             <div className="relative"><WorkflowChip id={v.name} type="vendor" workflow={data.workflow} onSave={saveWorkflow} onDelete={deleteWorkflow} buyer={stg.buyer} /></div>
             {v.country && <span className="text-xs text-gray-500">{v.country}</span>}
             <span className="text-xs text-gray-400">LT:{v.lt}d</span>
