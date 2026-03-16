@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useCallback, useEffect, Fragment } from "react";
-import { R, D1, $, $2, $4, P, gS, cAI, cNQ, cOQ, cDA, bNQ, isD, gTD, dc, cSeas, fSl, fMY, fE, effectiveDSR, roundToCasePack, genPO, genRFQ, cp7f, cp7g } from "../lib/utils";
+import { R, D1, $, $2, $4, P, gS, cAI, cNQ, cOQ, cDA, bNQ, isD, gTD, dc, cSeas, fSl, fMY, fE, fDateUS, effectiveDSR, roundToCasePack, genPO, genRFQ, cp7f, cp7g } from "../lib/utils";
 import { Dot, Toast, TH, SS, WorkflowChip, NumInput } from "./Shared";
 
 export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, setOv, initV, clearIV, saveWorkflow, deleteWorkflow }) {
@@ -46,6 +46,14 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
   const agedMap = useMemo(() => { const m = {}; (data.agedInv || []).forEach(r => m[r.j] = r); return m }, [data.agedInv]);
   const killMap = useMemo(() => { const m = {}; (data.killMgmt || []).forEach(r => m[r.j] = r); return m }, [data.killMgmt]);
 
+  // Check if item is ignored (workflow status=Ignore with future date)
+  const isIgnored = useCallback((id) => {
+    const wf = (data.workflow || []).find(w => w.id === id);
+    if (!wf || wf.status !== "Ignore") return false;
+    if (!wf.ignoreUntil) return true; // Ignore with no date = always hidden
+    const until = new Date(wf.ignoreUntil);
+    return !isNaN(until.getTime()) && until >= new Date(new Date().toDateString());
+  }, [data.workflow]);
 
   // === ENRICHED CORES ===
   const enr = useMemo(() => (data.cores || []).filter(c => {
@@ -131,42 +139,43 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
         if (need > 0) u[b.j] = { ...(u[b.j] || {}), pcs: need };
       });
     } else if (mode === "mix") {
-      // Mix: calculate effective DOC per bundle considering core inbound
       const coreMap = {};
       cores.forEach(c => { coreMap[c.id] = c });
-      const coreExtras = {};
+      const coreExtras = {}; // pieces from small bundles that go to core
+      const coresWithBundleOrders = new Set(); // cores that have bundle orders
+      // First pass: calculate bundle needs
       (bundles || []).forEach(b => {
         const tg = cores[0]?.targetDoc || 90;
         const parentCore = coreMap[b.core1];
         if (!parentCore) return;
-        // How many core pieces per bundle unit
         const qtyPerBundle = b.qty1 || 1;
-        // Extra DOC from core inbound
         const coreInb = parentCore.inb || 0;
         const extraDoc = b.cd > 0 ? Math.floor(coreInb / qtyPerBundle / b.cd) : 0;
         const effectiveDoc = (b.doc || 0) + extraDoc;
-        // Need based on effective DOC
         const need = Math.ceil(Math.max(0, (tg - effectiveDoc) * b.cd));
         if (need <= 0) return;
         const moq = parentCore.moq || 0;
         if (need < moq) {
-          // Too small → add core pieces instead
+          // Too small → convert to core pieces
           coreExtras[parentCore.id] = (coreExtras[parentCore.id] || 0) + (need * qtyPerBundle);
         } else {
           u[b.j] = { ...(u[b.j] || {}), pcs: roundToCasePack(need, parentCore.casePack) };
+          coresWithBundleOrders.add(parentCore.id);
         }
       });
-      // Fill cores with their own need + extras from small bundles
+      // Second pass: cores only get orders for extras from small bundles
+      // If a core has bundle orders, don't add its own need (bundles consume the core)
       cores.forEach(c => {
-        const ownNeed = c.needQty > 0 ? c.needQty : 0;
         const extra = coreExtras[c.id] || 0;
-        const totalNeed = ownNeed + extra;
-        if (totalNeed > 0) {
-          u[c.id] = { ...(u[c.id] || {}), pcs: cOQ(totalNeed, c.moq, c.casePack) };
+        if (extra > 0) {
+          u[c.id] = { ...(u[c.id] || {}), pcs: cOQ(extra, c.moq, c.casePack) };
+        } else if (!coresWithBundleOrders.has(c.id) && c.needQty > 0) {
+          // Core has no bundle orders at all → use normal core logic
+          u[c.id] = { ...(u[c.id] || {}), pcs: cOQ(c.needQty, c.moq, c.casePack) };
         }
+        // If core has bundle orders and no extras → no core order needed
       });
     } else {
-      // Cores only (default)
       cores.filter(c => c.needQty > 0).forEach(c => {
         u[c.id] = { ...(u[c.id] || {}), pcs: cOQ(c.needQty, c.moq, c.casePack) };
       });
@@ -178,6 +187,17 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
   const togPH = id => setShowPH(p => ({ ...p, [id]: !p[id] }));
   const togCollapse = id => setCollapsed(p => ({ ...p, [id]: !p[id] }));
   const togDismiss = id => setDismissed(p => ({ ...p, [id]: !p[id] }));
+
+  // Inbound orders grouped by core (for 7f history)
+  const ibMap = useMemo(() => {
+    const m = {};
+    (data.inbound || []).forEach(r => {
+      if (!m[r.core]) m[r.core] = [];
+      m[r.core].push(r);
+    });
+    Object.keys(m).forEach(k => { m[k].sort((a, b) => (b.eta || '').localeCompare(a.eta || '')); m[k] = m[k].slice(0, 4) });
+    return m;
+  }, [data.inbound]);
 
   // Last purchase info for a core
   const lastPurch = id => { const rows = pcMap[id]; if (!rows || !rows.length) return null; return rows[0] };
@@ -199,7 +219,8 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
       <td className="py-1 px-1 text-right">{D1(c.d7)}</td>
       <td className="py-1 px-1 text-center">{c.d7 > c.dsr ? <span className={c.spike ? "text-orange-400 font-bold" : "text-emerald-400"}>▲</span> : c.d7 < c.dsr ? <span className="text-red-400">▼</span> : "—"}{c.spike && <span className="text-orange-400 text-xs ml-0.5" title="Spike: 7D DSR 25%+ above DSR">⚡</span>}</td>
       <td className={`py-1 px-1 text-right font-semibold ${dc(c.doc, c.critDays, c.warnDays)}`}>{R(c.doc)}</td>
-      <td className="py-1 px-1 text-right">{R(c.allIn)}{adj > 0 && <span className="text-teal-400 ml-0.5">+{adj}</span>}</td>
+      {/* INV = allIn (without inbound) + inbound shown separately */}
+      <td className="py-1 px-1 text-right">{R(c.allIn - (c.inb || 0))}{c.inb > 0 && <span className="text-teal-400 ml-0.5" title="Inbound pieces">+{R(c.inb)}</span>}{adj > 0 && <span className="text-amber-300 ml-0.5" title="Bundle orders covering core">+{adj}</span>}</td>
       <td className="py-1 px-1 text-right text-gray-400">{c.moq > 0 ? R(c.moq) : "—"}</td>
       <td className="py-1 px-1 text-right text-gray-400">{c.casePack > 0 ? R(c.casePack) : "—"}</td>
       <td className="py-1 px-1 text-right text-gray-500 text-xs">{lp ? fMY(lp.date) : "—"}</td>
@@ -232,12 +253,17 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
       <td className="py-1 px-0.5 flex gap-0.5">
         <button onClick={() => togCollapse(c.id)} className="text-gray-400 hover:text-white text-xs px-0.5">{isCol ? "+" : "−"}</button>
         <button onClick={() => togDismiss(c.id)} className="text-gray-400 hover:text-red-400 text-xs px-0.5">✕</button>
-        {pcMap[c.id] && <button onClick={() => togPH(c.id)} className={`text-xs px-0.5 rounded ${showPH[c.id] ? "text-amber-300" : "text-gray-500"}`}>$</button>}
+        {(pcMap[c.id] || ibMap[c.id]) && <button onClick={() => togPH(c.id)} className={`text-xs px-0.5 rounded ${showPH[c.id] ? "text-amber-300" : "text-gray-500"}`}>$</button>}
         <button onClick={() => goCore(c.id)} className="text-blue-400 px-0.5 bg-blue-400/10 rounded text-xs">V</button>
         <div className="relative"><WorkflowChip id={c.id} type="core" workflow={data.workflow} onSave={saveWorkflow} onDelete={deleteWorkflow} buyer={stg.buyer} /></div>
       </td>
     </tr>
-    {showPH[c.id] && pcMap[c.id] && <tr><td colSpan={40} className="p-0"><div className="bg-gray-800/50 px-4 py-2"><table className="w-full text-xs"><thead><tr className="text-gray-500"><th className="py-1 text-left">Date</th><th className="py-1 text-right">Pcs</th><th className="py-1 text-right">Material</th><th className="py-1 text-right">Inb Ship</th><th className="py-1 text-right">Tariffs</th><th className="py-1 text-right">Total</th><th className="py-1 text-right">CPP</th></tr></thead><tbody>{pcMap[c.id].map((r, i) => <tr key={i} className="border-t border-gray-700/30"><td className="py-1 text-gray-300">{fSl(r.date)}</td><td className="py-1 text-right">{R(r.pcs)}</td><td className="py-1 text-right">{$2(r.matPrice)}</td><td className="py-1 text-right text-gray-400">{$2(r.inbShip)}</td><td className="py-1 text-right text-gray-400">{$2(r.tariffs)}</td><td className="py-1 text-right">{$2(r.totalCost)}</td><td className="py-1 text-right text-amber-300">{$2(r.cpp)}</td></tr>)}</tbody></table></div></td></tr>}
+    {showPH[c.id] && (pcMap[c.id] || ibMap[c.id]) && <tr><td colSpan={40} className="p-0"><div className="bg-gray-800/50 px-4 py-2 space-y-3">
+      {/* 7g - What you paid */}
+      {pcMap[c.id] && <div><div className="text-gray-500 text-xs font-semibold mb-1">💰 Purchase History (7g)</div><table className="w-full text-xs"><thead><tr className="text-gray-500"><th className="py-0.5 text-left">Date</th><th className="py-0.5 text-right">Pcs</th><th className="py-0.5 text-right">Material</th><th className="py-0.5 text-right">Inb Ship</th><th className="py-0.5 text-right">Tariffs</th><th className="py-0.5 text-right">Total</th><th className="py-0.5 text-right">CPP</th></tr></thead><tbody>{pcMap[c.id].map((r, i) => <tr key={i} className="border-t border-gray-700/30"><td className="py-0.5 text-gray-300">{fDateUS(r.date)}</td><td className="py-0.5 text-right">{R(r.pcs)}</td><td className="py-0.5 text-right">{$2(r.matPrice)}</td><td className="py-0.5 text-right text-gray-400">{$2(r.inbShip)}</td><td className="py-0.5 text-right text-gray-400">{$2(r.tariffs)}</td><td className="py-0.5 text-right">{$2(r.totalCost)}</td><td className="py-0.5 text-right text-amber-300">{$2(r.cpp)}</td></tr>)}</tbody></table></div>}
+      {/* 7f - What you ordered */}
+      {ibMap[c.id] && <div><div className="text-gray-500 text-xs font-semibold mb-1">📦 Orders / Receiving (7f)</div><table className="w-full text-xs"><thead><tr className="text-gray-500"><th className="py-0.5 text-left">ETA</th><th className="py-0.5 text-left">Order#</th><th className="py-0.5 text-left">Vendor</th><th className="py-0.5 text-right">Pcs</th><th className="py-0.5 text-right">Cases</th><th className="py-0.5 text-right">Price/pc</th><th className="py-0.5 text-right">Missing</th></tr></thead><tbody>{ibMap[c.id].map((r, i) => <tr key={i} className="border-t border-gray-700/30"><td className="py-0.5 text-gray-300">{fDateUS(r.eta)}</td><td className="py-0.5 text-gray-300">{r.orderNum || "—"}</td><td className="py-0.5 text-gray-400">{r.vendor}</td><td className="py-0.5 text-right">{R(r.pieces)}</td><td className="py-0.5 text-right">{R(r.cases)}</td><td className="py-0.5 text-right text-amber-300">{$2(r.price)}</td><td className={`py-0.5 text-right ${r.piecesMissing > 0 ? "text-red-400" : "text-gray-500"}`}>{r.piecesMissing > 0 ? R(r.piecesMissing) : "—"}</td></tr>)}</tbody></table></div>}
+    </div></td></tr>}
     </>;
   };
 
@@ -289,7 +315,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
   const VTH = ({ isCol }) => <tr className="text-gray-500 uppercase bg-gray-900/40 text-xs">
     <th className="py-2 px-1 w-5 sticky left-0 bg-gray-900 z-10" /><TH tip="Core or JLS #" className="py-2 px-1 text-left sticky left-5 bg-gray-900 z-10">ID</TH><th className="py-2 px-1 text-left sticky left-24 bg-gray-900 z-10">Title</th>
     <TH tip="Composite Daily Sales Rate" className="py-2 px-1 text-right">DSR</TH><TH tip="7-Day DSR" className="py-2 px-1 text-right">7D</TH><TH tip="Trend" className="py-2 px-1 text-center">T</TH><TH tip="Days of Coverage" className="py-2 px-1 text-right">DOC</TH>
-    <TH tip="All-In Owned Pieces" className="py-2 px-1 text-right">Inv</TH><TH tip="MOQ Pieces" className="py-2 px-1 text-right">MOQ</TH><TH tip="Vendor Case Pack" className="py-2 px-1 text-right">VCas</TH><TH tip="Last Purchase Date" className="py-2 px-1 text-right">LastPO</TH>
+    <TH tip="Inventory (on hand + inbound shown as +N in teal)" className="py-2 px-1 text-right">Inv</TH><TH tip="MOQ Pieces" className="py-2 px-1 text-right">MOQ</TH><TH tip="Vendor Case Pack" className="py-2 px-1 text-right">VCas</TH><TH tip="Last Purchase Date" className="py-2 px-1 text-right">LastPO</TH>
     <TH tip="Seasonal Peak" className="py-2 px-1 text-center">S</TH><TH tip="Recommended Qty" className="py-2 px-1 text-right">Rec</TH>
     {!isCol && <><TH tip="Raw / Potential Units" className="py-2 px-1 text-right">Raw</TH><TH tip="PPRC Available" className="py-2 px-1 text-right">PPRC</TH><TH tip="Inbound Pieces" className="py-2 px-1 text-right">Inb</TH><TH tip="FIB DOC (bundles)" className="py-2 px-1 text-right">FibD</TH><TH tip="FIB Inventory (bundles)" className="py-2 px-1 text-right">FibI</TH></>}
     {showRS && <><TH tip="FIB Pieces (Restocker)" className="py-2 px-1 text-right text-cyan-400">rFIB</TH><TH tip="Raw Pieces (Restocker)" className="py-2 px-1 text-right text-cyan-400">rRaw</TH><TH tip="Inbound (Restocker)" className="py-2 px-1 text-right text-cyan-400">rInb</TH><TH tip="Case Pack" className="py-2 px-1 text-right text-cyan-400">CPk</TH><TH tip="MOQ Pieces to Order" className="py-2 px-1 text-right text-cyan-400">MOQPcs</TH></>}
