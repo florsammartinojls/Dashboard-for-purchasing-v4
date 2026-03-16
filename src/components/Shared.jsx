@@ -27,6 +27,30 @@ export function Toast({ msg, onClose }) {
   return <div className="fixed bottom-4 right-4 bg-emerald-600 text-white px-4 py-3 rounded-lg shadow-xl z-50">✅ {msg}</div>;
 }
 
+// === Editable Number Input (keeps focus while typing) ===
+export function NumInput({ value, onChange, placeholder, className }) {
+  const [local, setLocal] = useState(value || '');
+  const [focused, setFocused] = useState(false);
+  const ref = useRef(null);
+
+  useEffect(() => {
+    if (!focused) setLocal(value || '');
+  }, [value, focused]);
+
+  return <input
+    ref={ref}
+    type="text"
+    inputMode="decimal"
+    value={focused ? local : (value || '')}
+    onFocus={() => { setFocused(true); setLocal(value || '') }}
+    onChange={e => { const v = e.target.value.replace(/[^0-9.]/g, ''); setLocal(v) }}
+    onBlur={() => { setFocused(false); onChange(Math.max(0, parseFloat(local) || 0)) }}
+    onKeyDown={e => { if (e.key === 'Enter') { e.target.blur() } }}
+    placeholder={placeholder || "0"}
+    className={className || "bg-gray-800 border border-gray-600 text-white rounded px-1.5 py-1 w-16 text-center text-xs focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"}
+  />;
+}
+
 // === Tooltip header cell ===
 export function TH({ children, tip, className }) {
   return <th className={className} title={tip}>{children}</th>;
@@ -105,7 +129,7 @@ export function Stg({ s, setS, onClose }) {
         <div className="space-y-4">
           <div>
             <label className="text-sm text-gray-400 block mb-1">Buyer Initials</label>
-            <input type="text" value={l.buyer || ''} onChange={e => setL({ ...l, buyer: e.target.value })} placeholder="TG" className="bg-gray-800 border border-gray-600 text-white rounded px-3 py-2 w-full" />
+            <input type="text" value={l.buyer || ''} onChange={e => setL({ ...l, buyer: e.target.value })} placeholder="e.g. FS" className="bg-gray-800 border border-gray-600 text-white rounded px-3 py-2 w-full" />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div><label className="text-sm text-gray-400 block mb-1">Domestic DOC</label><input type="number" value={l.domesticDoc} onChange={e => setL({ ...l, domesticDoc: +e.target.value })} className="bg-gray-800 border border-gray-600 text-white rounded px-3 py-2 w-full" /></div>
