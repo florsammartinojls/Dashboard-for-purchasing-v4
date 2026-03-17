@@ -90,7 +90,10 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
   }), [data, stg, vf, sf, sort, vMap, nf, minD, locF]);
 
   const venBundles = useMemo(() => (data.bundles || []).filter(b => {
-    if (b.active !== "Yes") return false;
+    if (stg.fA === "yes" && b.active !== "Yes") return false;
+    if (stg.fA === "no" && b.active === "Yes") return false;
+    if (stg.fI === "blank" && !!b.ignoreUntil) return false;
+    if (stg.fI === "set" && !b.ignoreUntil) return false;
     if (vf && (b.vendors || "").indexOf(vf) < 0) return false;
     return true;
   }).map(b => { const f = feMap[b.j]; const margin = f && f.aicogs > 0 ? ((f.gp / f.aicogs) * 100) : 0; return { ...b, fee: f, margin } }), [data.bundles, vf, feMap]);
@@ -408,7 +411,14 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
         <div className="overflow-x-auto"><table className="w-full text-xs"><thead><VTH isCol={anyCol} /></thead><tbody>
           {vendorSub === "bundles" ? <>{grp.bundles.map(b => <BundleRow key={b.j} b={b} />)}{grp.bundles.length === 0 && <tr><td colSpan={40} className="py-4 text-center text-gray-500">No bundles</td></tr>}</>
             : vendorSub === "mix" ? <>{grp.cores.map(c => {
-              const cBs = (data.bundles || []).filter(b => b.core1 === c.id && b.active === "Yes").map(b => ({ ...b, fee: feMap[b.j], margin: feMap[b.j] && feMap[b.j].aicogs > 0 ? ((feMap[b.j].gp / feMap[b.j].aicogs) * 100) : 0 }));
+              const cBs = (data.bundles || []).filter(b => {
+  if (b.core1 !== c.id) return false;
+  if (stg.fA === "yes" && b.active !== "Yes") return false;
+  if (stg.fA === "no" && b.active === "Yes") return false;
+  if (stg.fI === "blank" && !!b.ignoreUntil) return false;
+  if (stg.fI === "set" && !b.ignoreUntil) return false;
+  return true;
+}).map(b => ({ ...b, fee: feMap[b.j], margin: feMap[b.j] && feMap[b.j].aicogs > 0 ? ((feMap[b.j].gp / feMap[b.j].aicogs) * 100) : 0 }));
               const bAdj = cBs.reduce((s, b) => s + bundleEffQ(b), 0);
               return <Fragment key={c.id}><CoreRow c={c} mixAdj={bAdj} />{!dismissed[c.id] && cBs.map(b => <BundleRow key={b.j} b={b} indent />)}</Fragment>;
             })}</>
