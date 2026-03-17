@@ -411,14 +411,14 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
         <div className="overflow-x-auto"><table className="w-full text-xs"><thead><VTH isCol={anyCol} /></thead><tbody>
           {vendorSub === "bundles" ? <>{grp.bundles.map(b => <BundleRow key={b.j} b={b} />)}{grp.bundles.length === 0 && <tr><td colSpan={40} className="py-4 text-center text-gray-500">No bundles</td></tr>}</>
             : vendorSub === "mix" ? <>{grp.cores.map(c => {
-              const cBs = (data.bundles || []).filter(b => {
-  if (b.core1 !== c.id) return false;
-  if (stg.bA === "yes" && b.active !== "Yes") return false;
-  if (stg.bA === "no" && b.active === "Yes") return false;
-  if (stg.bI === "blank" && !!b.ignoreUntil) return false;
-  if (stg.bI === "set" && !b.ignoreUntil) return false;
-  return true;
-})
+             const cBs = (data.bundles || []).filter(b => {
+                if (b.core1 !== c.id) return false;
+                if (stg.bA === "yes" && b.active !== "Yes") return false;
+                if (stg.bA === "no" && b.active === "Yes") return false;
+                if (stg.bI === "blank" && !!b.ignoreUntil) return false;
+                if (stg.bI === "set" && !b.ignoreUntil) return false;
+                return true;
+              }).map(b => ({ ...b, fee: feMap[b.j], margin: feMap[b.j] && feMap[b.j].aicogs > 0 ? ((feMap[b.j].gp / feMap[b.j].aicogs) * 100) : 0 }));
 }).map(b => ({ ...b, fee: feMap[b.j], margin: feMap[b.j] && feMap[b.j].aicogs > 0 ? ((feMap[b.j].gp / feMap[b.j].aicogs) * 100) : 0 }));
               const bAdj = cBs.reduce((s, b) => s + bundleEffQ(b), 0);
               return <Fragment key={c.id}><CoreRow c={c} mixAdj={bAdj} />{!dismissed[c.id] && cBs.map(b => <BundleRow key={b.j} b={b} indent />)}</Fragment>;
