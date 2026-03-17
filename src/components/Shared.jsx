@@ -135,20 +135,42 @@ export function Stg({ s, setS, onClose }) {
             <div><label className="text-sm text-gray-400 block mb-1">Domestic DOC</label><input type="number" value={l.domesticDoc} onChange={e => setL({ ...l, domesticDoc: +e.target.value })} className="bg-gray-800 border border-gray-600 text-white rounded px-3 py-2 w-full" /></div>
             <div><label className="text-sm text-gray-400 block mb-1">Intl DOC</label><input type="number" value={l.intlDoc} onChange={e => setL({ ...l, intlDoc: +e.target.value })} className="bg-gray-800 border border-gray-600 text-white rounded px-3 py-2 w-full" /></div>
           </div>
-          <div className="border-t border-gray-700 pt-4 space-y-3">
-            {[["Active", "fA"], ["Visible", "fV"]].map(([lb, k]) => (
-              <div key={k} className="flex items-center justify-between">
-                <span className="text-sm text-gray-300">{lb}</span>
-                <select value={l[k]} onChange={e => setL({ ...l, [k]: e.target.value })} className="bg-gray-800 border border-gray-600 text-white rounded px-2 py-1 text-sm w-28">
+          {/* CORE FILTERS */}
+          <div className="border-t border-gray-700 pt-4">
+            <h3 className="text-sm font-semibold text-blue-400 mb-3">Core Filters</h3>
+            <div className="space-y-3">
+              {[["Active", "fA"], ["Visible", "fV"]].map(([lb, k]) => (
+                <div key={k} className="flex items-center justify-between">
+                  <span className="text-sm text-gray-300">{lb}</span>
+                  <select value={l[k]} onChange={e => setL({ ...l, [k]: e.target.value })} className="bg-gray-800 border border-gray-600 text-white rounded px-2 py-1 text-sm w-28">
+                    <option value="yes">Yes</option><option value="no">No</option><option value="all">All</option>
+                  </select>
+                </div>
+              ))}
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-gray-300">Ignored</span>
+                <select value={l.fI} onChange={e => setL({ ...l, fI: e.target.value })} className="bg-gray-800 border border-gray-600 text-white rounded px-2 py-1 text-sm w-28">
+                  <option value="blank">Blank</option><option value="set">Set</option><option value="all">All</option>
+                </select>
+              </div>
+            </div>
+          </div>
+          {/* BUNDLE FILTERS */}
+          <div className="border-t border-gray-700 pt-4">
+            <h3 className="text-sm font-semibold text-indigo-400 mb-3">Bundle Filters</h3>
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-gray-300">Active</span>
+                <select value={l.bA || 'yes'} onChange={e => setL({ ...l, bA: e.target.value })} className="bg-gray-800 border border-gray-600 text-white rounded px-2 py-1 text-sm w-28">
                   <option value="yes">Yes</option><option value="no">No</option><option value="all">All</option>
                 </select>
               </div>
-            ))}
-            <div className="flex items-center justify-between">
-              <span className="text-sm text-gray-300">Ignored</span>
-              <select value={l.fI} onChange={e => setL({ ...l, fI: e.target.value })} className="bg-gray-800 border border-gray-600 text-white rounded px-2 py-1 text-sm w-28">
-                <option value="blank">Blank</option><option value="set">Set</option><option value="all">All</option>
-              </select>
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-gray-300">Ignored</span>
+                <select value={l.bI || 'blank'} onChange={e => setL({ ...l, bI: e.target.value })} className="bg-gray-800 border border-gray-600 text-white rounded px-2 py-1 text-sm w-28">
+                  <option value="blank">Blank</option><option value="set">Set</option><option value="all">All</option>
+                </select>
+              </div>
             </div>
           </div>
         </div>
