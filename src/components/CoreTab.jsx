@@ -20,11 +20,7 @@ export default function CoreTab({ data, stg, hist, daily, coreId, onBack, goBund
   // Monthly DSR chart data
   const dsrCh = useMemo(() => MN.map((m, i) => { const r = { month: m }; yrs.forEach(y => { const h = cHF.find(x => x.y === y && x.m === i + 1); r["d_" + y] = h?.avgDsr ?? null; r["oos_" + y] = h?.oosDays ?? null }); return r }), [cHF, yrs]);
 
-  // Monthly Sales (units) chart data
-  const unitsCh = useMemo(() => MN.map((m, i) => { const r = { month: m }; yrs.forEach(y => { const h = cHF.find(x => x.y === y && x.m === i + 1); r["u_" + y] = h?.units ?? null; r["oos_" + y] = h?.oosDays ?? null }); return r }), [cHF, yrs]);
-  const uYTot = useMemo(() => { const t = {}; yrs.forEach(y => { t[y] = cHF.filter(h => h.y === y).reduce((s, x) => s + (x.units || 0), 0) }); return t }, [cHF, yrs]);
-
-  // Bundle association — use Attached JLS #s first, then core1 fallback
+   // Bundle association — use Attached JLS #s first, then core1 fallback
   const bA = stg.bA || "yes"; const bI = stg.bI || "blank";
   const bundleFilter = b => {
     if (bA === "yes" && b.active !== "Yes") return false;
