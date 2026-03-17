@@ -241,17 +241,16 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
     const aged = agedMap[b.j]; const kill = killMap[b.j];
     const bAfterDoc = eq > 0 && b.cd > 0 ? Math.round(((b.fibInv || 0) + eq) / b.cd) : null;
     const bMiss = missingMap[b.j] || 0;
-    const scLink = b.asin ? `https://sellercentral.amazon.com/skucentral?mSku=${b.asin}` : null;
 
     return <tr className={`border-t border-gray-800/20 hover:bg-indigo-900/10 text-xs ${hasBundleOrd(b) ? "bg-emerald-900/10" : "bg-indigo-950/20"}`}>
       <td className="py-1 px-1 sticky left-0 bg-indigo-950/20 z-10" />
       <td className="py-1 px-1 sticky left-5 bg-indigo-950/20 z-10">
         {indent ? <span className="text-gray-600 mr-0.5">└</span> : null}
         <button onClick={() => goBundle(b.j)} className="text-indigo-400 font-mono hover:underline">{b.j}</button>
-        {scLink && <a href={scLink} target="_blank" rel="noopener noreferrer" className="ml-1 text-gray-500 hover:text-blue-400 text-[9px]" title="Open in Seller Central">↗</a>}
       </td>
       <td className="py-1 px-1 text-indigo-200 truncate max-w-[140px] sticky left-24 bg-indigo-950/20 z-10">
         {b.t}
+        {b.asin && <a href={`https://sellercentral.amazon.com/skucentral?mSku=${b.asin}`} target="_blank" rel="noopener noreferrer" className="ml-1 text-gray-500 hover:text-blue-400 text-[9px] font-mono" title="Open in Seller Central">{b.asin}</a>}
         {aged && aged.fbaHealth !== "Healthy" && <span className={`ml-1 text-xs ${aged.fbaHealth === "At Risk" ? "text-amber-400" : "text-red-400"}`}>{aged.fbaHealth}</span>}
         {aged && aged.storageLtsf > 0 && <span className="ml-1 text-xs text-red-300">${aged.storageLtsf.toFixed(0)}</span>}
         {kill && kill.latestEval && kill.latestEval.toLowerCase().includes('kill') && <span className="ml-1 text-xs text-red-400 font-bold">KILL</span>}
@@ -282,7 +281,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
         <td className="py-0.5 px-0.5"><NumInput value={gCogC(b.j)} onChange={v => setF(b.j, 'cogC', v)} /></td>
       </>}
       <SC v={cost} className="py-1 px-1 text-right text-amber-300 sticky right-12 bg-indigo-950/20 z-10">{cost > 0 ? $(cost) : "—"}</SC>
-      <td className={`py-1 px-1 text-right sticky right-0 bg-indigo-950/20 z-10 ${bAfterDoc ? (bAfterDoc <= 30 ? "text-red-400" : bAfterDoc <= 60 ? "text-amber-400" : "text-emerald-400") : ""}`}>{bAfterDoc ? R(bAfterDoc) : R(b.doc)}</td>
+      <td className={`py-1 px-1 text-right sticky right-0 bg-indigo-950/20 z-10 ${bAfterDoc ? (bAfterDoc <= 30 ? "text-red-400" : bAfterDoc <= 60 ? "text-amber-400" : "text-emerald-400") : "text-gray-600"}`}>{bAfterDoc ? R(bAfterDoc) : "—"}</td>
       <td className="py-1 px-1"><button onClick={() => goBundle(b.j)} className="text-indigo-400 px-0.5 bg-indigo-400/10 rounded text-xs">V</button></td>
     </tr>;
   };
