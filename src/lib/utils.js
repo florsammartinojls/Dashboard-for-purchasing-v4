@@ -111,7 +111,8 @@ export function genPO(v, items, po, buyer, dt) {
   const w = window.open('', '_blank'); w.document.write(h); w.document.close();
 }
 
-export function genRFQ(v, items, buyer, dt) {
+// genRFQ — ahora recibe poNum como 5to parámetro y lo muestra en el documento
+export function genRFQ(v, items, buyer, dt, poNum) {
   const addr = v.address || [v.address1, v.address2, v.city, v.state, v.zip].filter(Boolean).join(', ');
   const uc = v.vou === 'Cases';
   let rows = '';
@@ -120,10 +121,9 @@ export function genRFQ(v, items, buyer, dt) {
     rows += `<tr><td>${i.vsku || i.id}</td><td>${i.ti || ''}</td><td style="text-align:right">${dq}</td></tr>`;
   });
   for (let i = items.length; i < 20; i++) rows += '<tr><td>&nbsp;</td><td></td><td></td></tr>';
-  const h = `<!DOCTYPE html><html><head><title>RFQ - ${v.name}</title><style>body{font-family:Arial,sans-serif;margin:40px;font-size:12px}h1{font-size:20px;margin:0 0 30px}table.i{width:100%;margin-bottom:10px}table.i td{padding:2px 8px;vertical-align:top}table.t{width:100%;border-collapse:collapse;margin-top:20px}table.t th,table.t td{border:1px solid #999;padding:6px 8px}table.t th{background:#f0f0f0;text-align:left}@media print{body{margin:20px}}</style></head><body><h1>JLS Trading Co. — Request for Quote</h1><table class="i"><tr><td><b>Date:</b> ${fSl(dt || td())}</td></tr><tr><td><b>Buyer:</b> ${buyer || ''}</td></tr><tr><td><b>Contact:</b> ${JC}</td></tr></table><table class="i"><tr><td><b>Vendor:</b> ${v.name}</td></tr><tr><td><b>Rep:</b> ${v.contactName || 'N/A'}</td></tr><tr><td><b>Email:</b> ${v.contactEmail || ''}</td></tr></table><table class="t"><thead><tr><th>SKU</th><th>Item</th><th style="text-align:right">${uc ? 'Cases' : 'Qty'}</th></tr></thead><tbody>${rows}</tbody></table><p style="margin-top:30px"><b>Please provide pricing and lead time for the above items.</b></p><script>window.onload=function(){window.print()}<\/script></body></html>`;
+  const h = `<!DOCTYPE html><html><head><title>RFQ ${poNum || ''} - ${v.name}</title><style>body{font-family:Arial,sans-serif;margin:40px;font-size:12px}h1{font-size:20px;margin:0 0 30px}table.i{width:100%;margin-bottom:10px}table.i td{padding:2px 8px;vertical-align:top}table.t{width:100%;border-collapse:collapse;margin-top:20px}table.t th,table.t td{border:1px solid #999;padding:6px 8px}table.t th{background:#f0f0f0;text-align:left}@media print{body{margin:20px}}</style></head><body><h1>JLS Trading Co. — Request for Quote</h1><table class="i"><tr><td><b>Date:</b> ${fSl(dt || td())}</td><td><b>Reference #:</b> ${poNum || ''}</td></tr><tr><td><b>Buyer:</b> ${buyer || ''}</td></tr><tr><td><b>Contact:</b> ${JC}</td></tr></table><table class="i"><tr><td><b>Vendor:</b> ${v.name}</td></tr><tr><td><b>Rep:</b> ${v.contactName || 'N/A'}</td></tr><tr><td><b>Email:</b> ${v.contactEmail || ''}</td></tr></table><table class="t"><thead><tr><th>SKU</th><th>Item</th><th style="text-align:right">${uc ? 'Cases' : 'Qty'}</th></tr></thead><tbody>${rows}</tbody></table><p style="margin-top:30px"><b>Please provide pricing and lead time for the above items.</b></p><script>window.onload=function(){window.print()}<\/script></body></html>`;
   const w = window.open('', '_blank'); w.document.write(h); w.document.close();
 }
-
 export function cp7f(v, it, po, b, eta) {
   const d = fSl(td()); const e = eta ? fSl(eta) : '';
   const r = it.map(i => {
