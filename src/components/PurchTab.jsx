@@ -34,7 +34,6 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
   // === MAPS ===
   const vMap = useMemo(() => { const m = {}; (data.vendors || []).forEach(v => m[v.name] = v); return m }, [data.vendors]);
   const vNames = useMemo(() => (data.vendors || []).map(v => v.name).sort(), [data.vendors]);
-  const rsMap = useMemo(() => { const m = {}; (data.restock || []).forEach(r => { if (!m[r.core]) m[r.core] = []; m[r.core].push(r) }); return m }, [data.restock]);
   const feMap = useMemo(() => { const m = {}; (data.fees || []).forEach(f => m[f.j] = f); return m }, [data.fees]);
   const saMap = useMemo(() => { const m = {}; (data.sales || []).forEach(s => m[s.j] = s); return m }, [data.sales]);
   const pcMap = useMemo(() => {
@@ -44,16 +43,47 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
   }, [data.priceComp]);
   const agedMap = useMemo(() => { const m = {}; (data.agedInv || []).forEach(r => m[r.j] = r); return m }, [data.agedInv]);
   const killMap = useMemo(() => { const m = {}; (data.killMgmt || []).forEach(r => m[r.j] = r); return m }, [data.killMgmt]);
-
-  // === RECEIVING MAP (7f) ===
   const recMap = useMemo(() => {
     const m = {};
-    (data.receiving || []).forEach(r => {
-      if (!m[r.core]) m[r.core] = [];
-      m[r.core].push(r);
-    });
+    (data.receiving || []).forEach(r => { if (!m[r.core]) m[r.core] = []; m[r.core].push(r) });
     return m;
   }, [data.receiving]);
+
+  const bA = stg.bA || "yes"; const bI = stg.bI || "blank";
+
+  // === BUNDLE AGGREGATE MAP (for +RS columns) ===
+  const bundleAggMap = useMemo(() => {
+    const m = {};
+    const activeBundles = (data.bundles || []).filter(b => {
+      if (bA === "yes" && b.active !== "Yes") return false;
+      if (bA === "no" && b.active === "Yes") return false;
+      return true;
+    });
+    activeBundles.forEach(b => {
+      const cid = b.core1;
+      if (!cid) return;
+      if (!m[cid]) m[cid] = { fib: 0, sc: 0, res: 0, inb: 0, miss: 0 };
+      m[cid].fib += b.fibInv || 0;
+      m[cid].sc += b.scInv || 0;
+      m[cid].res += b.reserved || 0;
+      m[cid].inb += b.inbound || 0;
+    });
+    // 7f missing: receiving where piecesMissing > 0
+    (data.receiving || []).forEach(r => {
+      if (!(r.piecesMissing > 0)) return;
+      const rid = (r.core || "").trim().toLowerCase();
+      // Direct core match
+      Object.keys(m).forEach(cid => {
+        if (cid.trim().toLowerCase() === rid) m[cid].miss += r.piecesMissing;
+      });
+      // Bundle match → attribute to parent core
+      const parentBundle = activeBundles.find(b => b.j.trim().toLowerCase() === rid);
+      if (parentBundle && parentBundle.core1 && m[parentBundle.core1]) {
+        m[parentBundle.core1].miss += r.piecesMissing;
+      }
+    });
+    return m;
+  }, [data.bundles, data.receiving, bA]);
 
   // === ENRICHED CORES ===
   const enr = useMemo(() => (data.cores || []).filter(c => {
@@ -89,7 +119,6 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
     return 0;
   }), [data, stg, vf, sf, sort, vMap, nf, minD, locF]);
 
-  const bA = stg.bA || "yes"; const bI = stg.bI || "blank";
   const venBundles = useMemo(() => (data.bundles || []).filter(b => {
     if (bA === "yes" && b.active !== "Yes") return false;
     if (bA === "no" && b.active === "Yes") return false;
@@ -114,7 +143,6 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
   const hasBundleOrd = b => (gPcs(b.j) > 0 || gCas(b.j) > 0);
   const bundleEffQ = b => gPcs(b.j) || gCas(b.j) * 1;
   const aftD = (allIn, q, dsr) => q > 0 && dsr > 0 ? Math.round((allIn + q) / dsr) : null;
-
   const tot = useMemo(() => { let d = 0, a = 0, n = 0, o = 0, co = 0; enr.forEach(c => { d += c.dsr; a += c.allIn; n += c.needQty; o += c.orderQty; co += c.needDollar }); return { d, a, n, o, co } }, [enr]);
 
   // === VENDOR GROUPS ===
@@ -134,7 +162,6 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
     return items;
   };
 
-  // === AUTO PO# ===
   const autoPO = (vendorCode) => {
     if (poN) return poN;
     const d = new Date();
@@ -153,54 +180,39 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
         if (need > 0) u[b.j] = { ...(u[b.j] || {}), pcs: need };
       });
     } else if (mode === "mix") {
-      const coreMap = {};
-      cores.forEach(c => { coreMap[c.id] = c });
-      const coreExtras = {};
-      const coresWithBundleOrders = new Set();
+      const coreMap = {}; cores.forEach(c => { coreMap[c.id] = c });
+      const coreExtras = {}; const coresWithBundleOrders = new Set();
       (bundles || []).forEach(b => {
-        const tg = cores[0]?.targetDoc || 90;
-        const parentCore = coreMap[b.core1];
+        const tg = cores[0]?.targetDoc || 90; const parentCore = coreMap[b.core1];
         if (!parentCore) return;
-        const qtyPerBundle = b.qty1 || 1;
-        const coreInb = parentCore.inb || 0;
+        const qtyPerBundle = b.qty1 || 1; const coreInb = parentCore.inb || 0;
         const extraDoc = b.cd > 0 ? Math.floor(coreInb / qtyPerBundle / b.cd) : 0;
         const effectiveDoc = (b.doc || 0) + extraDoc;
         const need = Math.ceil(Math.max(0, (tg - effectiveDoc) * b.cd));
         if (need <= 0) return;
         const moq = parentCore.moq || 0;
-        if (need < moq) {
-          coreExtras[parentCore.id] = (coreExtras[parentCore.id] || 0) + (need * qtyPerBundle);
-        } else {
-          u[b.j] = { ...(u[b.j] || {}), pcs: roundToCasePack(need, parentCore.casePack) };
-          coresWithBundleOrders.add(parentCore.id);
-        }
+        if (need < moq) { coreExtras[parentCore.id] = (coreExtras[parentCore.id] || 0) + (need * qtyPerBundle) }
+        else { u[b.j] = { ...(u[b.j] || {}), pcs: roundToCasePack(need, parentCore.casePack) }; coresWithBundleOrders.add(parentCore.id) }
       });
       cores.forEach(c => {
         const extra = coreExtras[c.id] || 0;
-        if (extra > 0) {
-          u[c.id] = { ...(u[c.id] || {}), pcs: cOQ(extra, c.moq, c.casePack) };
-        } else if (!coresWithBundleOrders.has(c.id) && c.needQty > 0) {
-          u[c.id] = { ...(u[c.id] || {}), pcs: cOQ(c.needQty, c.moq, c.casePack) };
-        }
+        if (extra > 0) u[c.id] = { ...(u[c.id] || {}), pcs: cOQ(extra, c.moq, c.casePack) };
+        else if (!coresWithBundleOrders.has(c.id) && c.needQty > 0) u[c.id] = { ...(u[c.id] || {}), pcs: cOQ(c.needQty, c.moq, c.casePack) };
       });
     } else {
-      cores.filter(c => c.needQty > 0).forEach(c => {
-        u[c.id] = { ...(u[c.id] || {}), pcs: cOQ(c.needQty, c.moq, c.casePack) };
-      });
+      cores.filter(c => c.needQty > 0).forEach(c => { u[c.id] = { ...(u[c.id] || {}), pcs: cOQ(c.needQty, c.moq, c.casePack) } });
     }
     setOv(u);
   };
   const clrV = (cores, bundles) => { const u = { ...ov }; cores.forEach(c => { delete u[c.id] }); (bundles || []).forEach(b => { delete u[b.j] }); setOv(u) };
-  const getRS = id => (rsMap[id] || [])[0];
   const togPH = id => setShowPH(p => ({ ...p, [id]: !p[id] }));
   const togCollapse = id => setCollapsed(p => ({ ...p, [id]: !p[id] }));
   const togDismiss = id => setDismissed(p => ({ ...p, [id]: !p[id] }));
 
-  // Helper: combined receiving for core + bundles
   const getCombinedRec = (coreId) => {
     const recs = [...(recMap[coreId] || [])];
     const bundleJls = (data.bundles || []).filter(b => b.core1 === coreId && b.active === "Yes").map(b => b.j);
-    bundleJls.forEach(j => { if (recMap[j]) recs.push(...recMap[j]); });
+    bundleJls.forEach(j => { if (recMap[j]) recs.push(...recMap[j]) });
     return recs.sort((a, b) => (b.date || '').localeCompare(a.date || '')).slice(0, 4);
   };
   const hasRecData = (coreId) => {
@@ -212,9 +224,10 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
   const CoreRow = ({ c, mixAdj }) => {
     if (dismissed[c.id]) return <tr className="border-t border-gray-800/20 bg-gray-900/30 text-xs opacity-40"><td className="py-1 px-1" colSpan={2}><Dot status={c.status} /></td><td className="py-1 px-1 text-gray-500 font-mono">{c.id}</td><td className="py-1 px-1 text-gray-600 truncate max-w-[110px]">{c.ti}</td><td colSpan={20} className="py-1 px-1 text-right"><button onClick={() => togDismiss(c.id)} className="text-xs text-gray-500 hover:text-white px-1">+</button></td></tr>;
     const eq = coreEffQ(c); const cost = eq * c.cost; const adj = mixAdj || 0;
-    const ad = aftD(c.allIn + adj, eq, c.dsr); const rs = getRS(c.id);
+    const ad = aftD(c.allIn + adj, eq, c.dsr);
     const isCol = collapsed[c.id];
     const combinedRec = showPH[c.id] ? getCombinedRec(c.id) : [];
+    const ba = bundleAggMap[c.id] || { fib: 0, sc: 0, res: 0, inb: 0, miss: 0 };
 
     return <><tr className={`border-t border-gray-800/30 hover:bg-gray-800/20 text-xs ${hasCoreOrd(c) ? "bg-emerald-900/10" : ""}`}>
       <td className="py-1 px-1 sticky left-0 bg-gray-950 z-10"><Dot status={c.status} /></td>
@@ -236,11 +249,11 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
         <td className="py-1 px-1 text-right text-gray-400">—</td>
       </>}
       {showRS && <>
-        <td className="py-1 px-1 text-right text-cyan-300">{rs ? R(rs.fibPcs) : "—"}</td>
-        <td className="py-1 px-1 text-right">{rs ? R(rs.rawPcs) : "—"}</td>
-        <td className="py-1 px-1 text-right">{rs ? R(rs.inbPcs) : "—"}</td>
-        <td className="py-1 px-1 text-right text-gray-400">{rs ? R(rs.casePack) : "—"}</td>
-        <td className="py-1 px-1 text-right text-amber-300">{rs ? R(rs.finalPcsToOrder) : "—"}</td>
+        <td className="py-1 px-1 text-right text-cyan-300">{ba.fib > 0 ? R(ba.fib) : "—"}</td>
+        <td className="py-1 px-1 text-right">{ba.sc > 0 ? R(ba.sc) : "—"}</td>
+        <td className="py-1 px-1 text-right">{ba.res > 0 ? R(ba.res) : "—"}</td>
+        <td className="py-1 px-1 text-right">{ba.inb > 0 ? R(ba.inb) : "—"}</td>
+        <td className="py-1 px-1 text-right text-red-400">{ba.miss > 0 ? R(ba.miss) : "—"}</td>
       </>}
       <td className="py-1 border-l-2 border-gray-600 px-1" />
       <td className="py-0.5 px-0.5 sticky right-36 bg-gray-950 z-10"><NumInput value={gPcs(c.id)} onChange={v => setF(c.id, 'pcs', v)} /></td>
@@ -308,14 +321,14 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
     </tr>;
   };
 
-  // === TABLE HEADER ===
-  const rsToggle = <button onClick={() => setShowRS(!showRS)} className={`text-xs px-1 py-0.5 rounded font-bold ${showRS ? "bg-purple-600 text-white" : "bg-gray-700 text-gray-400"}`} title="Toggle Restocker columns">{showRS ? "−" : "+"}RS</button>;
+  // === TABLE HEADER (updated +RS = bundle aggregate columns) ===
+  const rsToggle = <button onClick={() => setShowRS(!showRS)} className={`text-xs px-1 py-0.5 rounded font-bold ${showRS ? "bg-purple-600 text-white" : "bg-gray-700 text-gray-400"}`} title="Toggle Bundle Inventory columns">{showRS ? "−" : "+"}RS</button>;
   const costsToggle = <button onClick={() => setShowCosts(!showCosts)} className={`text-xs px-1 py-0.5 rounded font-bold ${showCosts ? "bg-teal-600 text-white" : "bg-gray-700 text-gray-400"}`} title="Toggle InbS/CogP/CogC columns">{showCosts ? "−" : "+"}$</button>;
 
-  const VTH = ({ isCol }) => <tr className="text-gray-500 uppercase bg-gray-900/40 text-xs sticky top-0 z-20">
-    <th className="py-2 px-1 w-5 sticky left-0 bg-gray-900 z-10" />
-    <TH tip="Core or JLS #" className="py-2 px-1 text-left sticky left-5 bg-gray-900 z-10">ID</TH>
-    <th className="py-2 px-1 text-left sticky left-24 bg-gray-900 z-10">Title</th>
+  const VTH = ({ isCol }) => <tr className="text-gray-500 uppercase bg-gray-900 text-xs sticky top-0 z-20">
+    <th className="py-2 px-1 w-5 sticky left-0 bg-gray-900 z-30" />
+    <TH tip="Core or JLS #" className="py-2 px-1 text-left sticky left-5 bg-gray-900 z-30">ID</TH>
+    <th className="py-2 px-1 text-left sticky left-24 bg-gray-900 z-30">Title</th>
     <TH tip="Composite Daily Sales Rate" className="py-2 px-1 text-right">DSR</TH>
     <TH tip="7-Day DSR" className="py-2 px-1 text-right">7D</TH>
     <TH tip="Trend" className="py-2 px-1 text-center">T</TH>
@@ -332,22 +345,22 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
       <TH tip="FIB Inventory (bundles)" className="py-2 px-1 text-right">FibI</TH>
     </>}
     {showRS && <>
-      <TH tip="FIB Pieces (Restocker)" className="py-2 px-1 text-right text-cyan-400">rFIB</TH>
-      <TH tip="Raw Pieces (Restocker)" className="py-2 px-1 text-right text-cyan-400">rRaw</TH>
-      <TH tip="Inbound (Restocker)" className="py-2 px-1 text-right text-cyan-400">rInb</TH>
-      <TH tip="Case Pack" className="py-2 px-1 text-right text-cyan-400">CPk</TH>
-      <TH tip="MOQ Pieces to Order" className="py-2 px-1 text-right text-cyan-400">MOQPcs</TH>
+      <TH tip="Bundle FIB Inventory (aggregate)" className="py-2 px-1 text-right text-cyan-400">B.FIB</TH>
+      <TH tip="Bundle SC Inventory" className="py-2 px-1 text-right text-cyan-400">B.SC</TH>
+      <TH tip="Bundle Reserved" className="py-2 px-1 text-right text-cyan-400">B.Res</TH>
+      <TH tip="Bundle Inbound" className="py-2 px-1 text-right text-cyan-400">B.Inb</TH>
+      <TH tip="7f Receiving — Missing Pieces" className="py-2 px-1 text-right text-red-400">7f Miss</TH>
     </>}
     <th className="py-2 border-l-2 border-gray-600 px-1" />
-    <TH tip="Pieces to Order" className="py-2 px-1 text-center sticky right-36 bg-gray-900 z-10">Pcs</TH>
-    <TH tip="Cases to Order" className="py-2 px-1 text-center sticky right-24 bg-gray-900 z-10">Cas</TH>
+    <TH tip="Pieces to Order" className="py-2 px-1 text-center sticky right-36 bg-gray-900 z-30">Pcs</TH>
+    <TH tip="Cases to Order" className="py-2 px-1 text-center sticky right-24 bg-gray-900 z-30">Cas</TH>
     {showCosts && <>
       <TH tip="Inbound Shipping Cost" className="py-2 px-1 text-center">InbS</TH>
       <TH tip="Cost per Piece" className="py-2 px-1 text-center">CogP</TH>
       <TH tip="Cost per Case" className="py-2 px-1 text-center">CogC</TH>
     </>}
-    <th className="py-2 px-1 text-right sticky right-12 bg-gray-900 z-10">Cost</th>
-    <TH tip="DOC After Order" className="py-2 px-1 text-right sticky right-0 bg-gray-900 z-10">After DOC</TH>
+    <th className="py-2 px-1 text-right sticky right-12 bg-gray-900 z-30">Cost</th>
+    <TH tip="DOC After Order" className="py-2 px-1 text-right sticky right-0 bg-gray-900 z-30">After</TH>
     <th className="py-2 px-1 w-16">{rsToggle} {costsToggle}</th>
   </tr>;
 
@@ -365,7 +378,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
       {vm === "vendor" && <button onClick={() => setShowIgnored(!showIgnored)} className={`ml-2 px-2 py-0.5 rounded text-xs ${showIgnored ? "bg-red-500/20 text-red-400" : "bg-gray-700 text-gray-500"}`}>{showIgnored ? "Hide" : "Show"} Ignored</button>}
       </div>
     </div>
-    {vm === "vendor" && <div className="flex flex-wrap gap-3 mb-4 items-center text-sm"><span className="text-gray-500 text-xs">PO#:</span><input type="text" value={poN} onChange={e => setPoN(e.target.value)} placeholder="Auto" className="bg-gray-800 border border-gray-700 text-white rounded px-2 py-1 w-28 text-sm" /><span className="text-gray-500 text-xs">Date:</span><input type="date" value={poD} onChange={e => setPoD(e.target.value)} className="bg-gray-800 border border-gray-700 text-white rounded px-2 py-1 text-sm" lang="en" /><span className="text-gray-500 text-xs">Buyer:</span><span className="text-white font-semibold">{stg.buyer || <span className="text-red-400">Set in ⚙️</span>}</span></div>}
+    {vm === "vendor" && <div className="flex flex-wrap gap-3 mb-4 items-center text-sm"><span className="text-gray-500 text-xs">PO#:</span><input type="text" value={poN} onChange={e => setPoN(e.target.value)} placeholder="Auto" className="bg-gray-800 border border-gray-700 text-white rounded px-2 py-1 w-28 text-sm" /><span className="text-gray-500 text-xs">Date:</span><input type="date" value={poD} onChange={e => setPoD(e.target.value)} className="bg-gray-800 border border-gray-700 text-white rounded px-2 py-1 text-sm" lang="en-US" /><span className="text-gray-500 text-xs">Buyer:</span><span className="text-white font-semibold">{stg.buyer || <span className="text-red-400">Set in ⚙️</span>}</span></div>}
 
     {/* === BY CORE VIEW === */}
     {vm === "core" && <div className="overflow-x-auto rounded-xl border border-gray-800"><table className="w-full"><thead><tr className="bg-gray-900/80 text-xs text-gray-400 uppercase sticky top-0 z-20"><th className="py-3 px-2 w-8" /><th className="py-3 px-2 text-left">Core</th><th className="py-3 px-2 text-left cursor-pointer hover:text-white">Vendor</th><th className="py-3 px-2 text-left">Title</th><TH tip="Composite DSR" className="py-3 px-2 text-right">DSR</TH><TH tip="7-Day DSR" className="py-3 px-2 text-right">7D</TH><th className="py-3 px-2 text-center">T</th><TH tip="Days of Coverage" className="py-3 px-2 text-right">DOC</TH><TH tip="All-In Owned Pieces" className="py-3 px-2 text-right">All-In</TH><th className="py-3 px-2 text-right">MOQ</th><th className="py-3 px-2 text-center">S</th><th className="py-3 px-1 border-l-2 border-gray-600" /><th className="py-3 px-2 text-right">Need</th><th className="py-3 px-2 text-right">Order</th><th className="py-3 px-2 text-right">Cost</th><TH tip="DOC After Order" className="py-3 px-2 text-right">After</TH><th className="py-3 px-2 w-10" /></tr></thead>
@@ -381,6 +394,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
       const poC = poI.reduce((s, i) => s + (v.vou === 'Cases' && i.isCoreItem ? Math.ceil(i.qty / (i.cp || 1)) : 0), 0);
       const meets = poT >= (v.moqDollar || 0);
       const anyCol = Object.values(collapsed).some(Boolean);
+      const vendorPO = autoPO(v.code);
 
       return <div key={v.name} className="mb-5 border border-gray-800 rounded-xl overflow-hidden">
         <div className="bg-gray-900 px-4 py-3">
@@ -400,15 +414,20 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
             <button onClick={() => clrV(grp.cores, grp.bundles)} className="text-xs bg-gray-700 text-gray-300 px-2.5 py-1 rounded">Clear</button>
             <button onClick={() => setDismissed({})} className="text-xs bg-gray-700 text-gray-300 px-2 py-1 rounded">Show All</button>
             <div className="ml-auto flex gap-2">
-              <button disabled={!poI.length} onClick={() => { genRFQ(v, poI, stg.buyer, poD); setToast("RFQ " + v.name) }} className={`text-xs px-3 py-1.5 rounded font-medium ${poI.length ? "bg-orange-600 text-white" : "bg-gray-700 text-gray-500 cursor-not-allowed"}`}>RFQ</button>
-              <button disabled={!poI.length} onClick={() => { const pn = autoPO(v.code); genPO(v, poI, pn, stg.buyer, poD); setToast("PO " + pn) }} className={`text-xs px-3 py-1.5 rounded font-medium ${poI.length ? "bg-emerald-600 text-white" : "bg-gray-700 text-gray-500 cursor-not-allowed"}`}>PO</button>
-              <button disabled={!poI.length} onClick={() => { const pn = autoPO(v.code); cp7f(v, poI, pn, stg.buyer, poD); setToast("7f copied!") }} className={`text-xs px-3 py-1.5 rounded font-medium ${poI.length ? "bg-teal-600 text-white" : "bg-gray-700 text-gray-500 cursor-not-allowed"}`}>7f</button>
-              <button disabled={!poI.length} onClick={() => { const pn = autoPO(v.code); cp7g(v, poI, pn, stg.buyer); setToast("7g copied!") }} className={`text-xs px-3 py-1.5 rounded font-medium ${poI.length ? "bg-purple-600 text-white" : "bg-gray-700 text-gray-500 cursor-not-allowed"}`}>7g</button>
-              {v.contactEmail && <button onClick={() => { const pn = autoPO(v.code); const subj = encodeURIComponent('PO ' + pn + ' — JLS Trading Co.'); const body = encodeURIComponent('Hi ' + (v.contactName || '') + ',\n\nPlease find attached PO ' + pn + '.\n\nThank you,\n' + (stg.buyer || '')); window.open('mailto:' + v.contactEmail + '?subject=' + subj + '&body=' + body) }} className="text-xs px-3 py-1.5 rounded font-medium bg-blue-600 text-white">📧</button>}
+              <button disabled={!poI.length} onClick={() => { genRFQ(v, poI, stg.buyer, poD, vendorPO); setToast("RFQ " + v.name + " — " + vendorPO) }} className={`text-xs px-3 py-1.5 rounded font-medium ${poI.length ? "bg-orange-600 text-white" : "bg-gray-700 text-gray-500 cursor-not-allowed"}`}>RFQ</button>
+              <button disabled={!poI.length} onClick={() => { genPO(v, poI, vendorPO, stg.buyer, poD); setToast("PO " + vendorPO) }} className={`text-xs px-3 py-1.5 rounded font-medium ${poI.length ? "bg-emerald-600 text-white" : "bg-gray-700 text-gray-500 cursor-not-allowed"}`}>PO</button>
+              <button disabled={!poI.length} onClick={() => { cp7f(v, poI, vendorPO, stg.buyer, poD); setToast("7f copied!") }} className={`text-xs px-3 py-1.5 rounded font-medium ${poI.length ? "bg-teal-600 text-white" : "bg-gray-700 text-gray-500 cursor-not-allowed"}`}>7f</button>
+              <button disabled={!poI.length} onClick={() => { cp7g(v, poI, vendorPO, stg.buyer); setToast("7g copied!") }} className={`text-xs px-3 py-1.5 rounded font-medium ${poI.length ? "bg-purple-600 text-white" : "bg-gray-700 text-gray-500 cursor-not-allowed"}`}>7g</button>
+              {v.contactEmail && <button onClick={() => {
+                const subj = encodeURIComponent('PO ' + vendorPO + ' — JLS Trading Co.');
+                const body = encodeURIComponent('Hi ' + (v.contactName || '') + ',\n\nPlease find attached PO ' + vendorPO + '.\n\nItems: ' + poI.length + '\nTotal: $' + poT.toFixed(2) + '\n\nThank you,\n' + (stg.buyer || ''));
+                window.open('mailto:' + v.contactEmail + '?subject=' + subj + '&body=' + body);
+              }} className="text-xs px-3 py-1.5 rounded font-medium bg-blue-600 text-white">📧</button>}
             </div>
           </div>
         </div>
-        <div className="overflow-x-auto"><table className="w-full text-xs"><thead><VTH isCol={anyCol} /></thead><tbody>
+        {/* Scrollable table with sticky header */}
+        <div className="overflow-auto max-h-[70vh]"><table className="w-full text-xs"><thead><VTH isCol={anyCol} /></thead><tbody>
           {vendorSub === "bundles" ? <>{grp.bundles.map(b => <BundleRow key={b.j} b={b} />)}{grp.bundles.length === 0 && <tr><td colSpan={40} className="py-4 text-center text-gray-500">No bundles</td></tr>}</>
             : vendorSub === "mix" ? <>{grp.cores.map(c => {
               const cBs = (data.bundles || []).filter(b => {
@@ -426,5 +445,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
         </tbody></table></div>
       </div>;
     })}
+
+    {vm === "vendor" && vG.length === 0 && <div className="text-center text-gray-500 py-12">No vendors match current filters.</div>}
   </div>;
 }
