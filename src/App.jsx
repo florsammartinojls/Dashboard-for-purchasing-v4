@@ -111,7 +111,7 @@ export default function App() {
   const initVendorParam = urlParams.get('vendor');
   const [tab, setTab] = useState(initCore ? "core" : initBundle ? "bundle" : "purchasing");
   const [showS, setShowS] = useState(false);
-  const [stg, setStg] = useState({ buyer: '', domesticDoc: 90, intlDoc: 180, fA: "yes", fI: "blank", fV: "yes" });
+  const [stg, setStg] = useState({ buyer: '', domesticDoc: 90, intlDoc: 180, fA: "yes", fI: "blank", fV: "yes", bA: "yes", bI: "blank" });
   const [coreId, setCoreId] = useState(initCore || null);
   const [bundleId, setBundleId] = useState(initBundle || null);
   const [data, setData] = useState({ cores: [], bundles: [], vendors: [], sales: [], fees: [], inbound: [], abcA: [], abcT: [], abcSub: '', restock: [], priceComp: [], agedInv: [], killMgmt: [], workflow: [], receiving: [] });
