@@ -45,7 +45,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
   const agedMap = useMemo(() => { const m = {}; (data.agedInv || []).forEach(r => m[r.j] = r); return m }, [data.agedInv]);
   const killMap = useMemo(() => { const m = {}; (data.killMgmt || []).forEach(r => m[r.j] = r); return m }, [data.killMgmt]);
 
-  // === RECEIVING MAP (7f) — replaces old ibMap ===
+  // === RECEIVING MAP (7f) ===
   const recMap = useMemo(() => {
     const m = {};
     (data.receiving || []).forEach(r => {
@@ -89,14 +89,15 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
     return 0;
   }), [data, stg, vf, sf, sort, vMap, nf, minD, locF]);
 
+  const bA = stg.bA || "yes"; const bI = stg.bI || "blank";
   const venBundles = useMemo(() => (data.bundles || []).filter(b => {
-    if (stg.bA === "yes" && b.active !== "Yes") return false;
-    if (stg.bA === "no" && b.active === "Yes") return false;
-    if (stg.bI === "blank" && !!b.ignoreUntil) return false;
-    if (stg.bI === "set" && !b.ignoreUntil) return false;
+    if (bA === "yes" && b.active !== "Yes") return false;
+    if (bA === "no" && b.active === "Yes") return false;
+    if (bI === "blank" && !!b.ignoreUntil) return false;
+    if (bI === "set" && !b.ignoreUntil) return false;
     if (vf && (b.vendors || "").indexOf(vf) < 0) return false;
     return true;
-  }).map(b => { const f = feMap[b.j]; const margin = f && f.aicogs > 0 ? ((f.gp / f.aicogs) * 100) : 0; return { ...b, fee: f, margin } }), [data.bundles, vf, feMap]);
+  }).map(b => { const f = feMap[b.j]; const margin = f && f.aicogs > 0 ? ((f.gp / f.aicogs) * 100) : 0; return { ...b, fee: f, margin } }), [data.bundles, vf, feMap, bA, bI]);
 
   const sc = useMemo(() => { const c = { critical: 0, warning: 0, healthy: 0 }; enr.forEach(x => c[x.status]++); return c }, [enr]);
 
@@ -125,12 +126,22 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
     return Object.values(g).filter(grp => showIgnored || !isIgnored(grp.v.name)).sort((a, b) => b.cores.filter(c => c.status === "critical").length - a.cores.filter(c => c.status === "critical").length);
   }, [enr, vm, vMap, venBundles, isIgnored, showIgnored]);
 
-  // === PO ITEMS (cores + bundles) ===
+  // === PO ITEMS ===
   const getPOI = (cores, bundles) => {
     const items = [];
     cores.filter(c => hasCoreOrd(c)).forEach(c => items.push({ id: c.id, ti: c.ti, vsku: c.vsku, qty: coreEffQ(c), cost: c.cost, cp: c.casePack || 1, inbS: gInbS(c.id), isCoreItem: true }));
     (bundles || []).filter(b => hasBundleOrd(b)).forEach(b => { const f = feMap[b.j]; items.push({ id: b.j, ti: b.t, vsku: b.asin || b.bundleCode, qty: bundleEffQ(b), cost: f?.aicogs || b.aicogs || 0, cp: 1, inbS: gInbS(b.j), isCoreItem: false }) });
     return items;
+  };
+
+  // === AUTO PO# ===
+  const autoPO = (vendorCode) => {
+    if (poN) return poN;
+    const d = new Date();
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    const yy = String(d.getFullYear()).slice(2);
+    return 'PO-' + mm + dd + yy + '-' + (vendorCode || 'XXX');
   };
 
   const fillR = (cores, bundles, mode) => {
@@ -185,7 +196,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
   const togCollapse = id => setCollapsed(p => ({ ...p, [id]: !p[id] }));
   const togDismiss = id => setDismissed(p => ({ ...p, [id]: !p[id] }));
 
-  // Helper: get combined receiving records for a core + its bundles
+  // Helper: combined receiving for core + bundles
   const getCombinedRec = (coreId) => {
     const recs = [...(recMap[coreId] || [])];
     const bundleJls = (data.bundles || []).filter(b => b.core1 === coreId && b.active === "Yes").map(b => b.j);
@@ -213,13 +224,10 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
       <td className="py-1 px-1 text-right">{D1(c.d7)}</td>
       <td className="py-1 px-1 text-center">{c.d7 > c.dsr ? <span className={c.spike ? "text-orange-400 font-bold" : "text-emerald-400"}>▲</span> : c.d7 < c.dsr ? <span className="text-red-400">▼</span> : "—"}{c.spike && <span className="text-orange-400 text-xs ml-0.5" title="Spike: 7D DSR 25%+ above DSR">⚡</span>}</td>
       <td className={`py-1 px-1 text-right font-semibold ${dc(c.doc, c.critDays, c.warnDays)}`}>{R(c.doc)}</td>
-      {/* ALL-IN OWN — single number, no breakdown */}
       <td className="py-1 px-1 text-right">{R(c.allIn)}</td>
       <td className="py-1 px-1 text-right text-gray-400">{c.moq > 0 ? R(c.moq) : "—"}</td>
       <td className="py-1 px-1 text-right text-gray-400">{c.casePack > 0 ? R(c.casePack) : "—"}</td>
-      {/* LASTPO removed */}
       <td className="py-1 px-1 text-center">{c.seas && <span className="text-purple-400 font-bold">{c.seas.peak}</span>}</td>
-      {/* REC removed */}
       {!isCol && <>
         <td className="py-1 px-1 text-right">{R(c.raw)}</td>
         <td className="py-1 px-1 text-right">{R(c.pp)}</td>
@@ -252,11 +260,8 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
         <div className="relative"><WorkflowChip id={c.id} type="core" workflow={data.workflow} onSave={saveWorkflow} onDelete={deleteWorkflow} buyer={stg.buyer} /></div>
       </td>
     </tr>
-    {/* PURCHASE HISTORY EXPANDED */}
     {showPH[c.id] && (pcMap[c.id] || combinedRec.length > 0) && <tr><td colSpan={40} className="p-0"><div className="bg-gray-800/50 px-4 py-2 space-y-3">
-      {/* 7g - What you paid */}
       {pcMap[c.id] && <div><div className="text-gray-500 text-xs font-semibold mb-1">💰 Purchase History (7g)</div><table className="w-full text-xs"><thead><tr className="text-gray-500"><th className="py-0.5 text-left">Date</th><th className="py-0.5 text-right">Pcs</th><th className="py-0.5 text-right">Material</th><th className="py-0.5 text-right">Inb Ship</th><th className="py-0.5 text-right">Tariffs</th><th className="py-0.5 text-right">Total</th><th className="py-0.5 text-right">CPP</th></tr></thead><tbody>{pcMap[c.id].map((r, i) => <tr key={i} className="border-t border-gray-700/30"><td className="py-0.5 text-gray-300">{fDateUS(r.date)}</td><td className="py-0.5 text-right">{R(r.pcs)}</td><td className="py-0.5 text-right">{$2(r.matPrice)}</td><td className="py-0.5 text-right text-gray-400">{$2(r.inbShip)}</td><td className="py-0.5 text-right text-gray-400">{$2(r.tariffs)}</td><td className="py-0.5 text-right">{$2(r.totalCost)}</td><td className="py-0.5 text-right text-amber-300">{$2(r.cpp)}</td></tr>)}</tbody></table></div>}
-      {/* 7f - Receiving / Orders (core + associated bundles) */}
       {combinedRec.length > 0 && <div><div className="text-gray-500 text-xs font-semibold mb-1">📦 Receiving (7f) — Last 4 orders</div><table className="w-full text-xs"><thead><tr className="text-gray-500"><th className="py-0.5 text-left">Date</th><th className="py-0.5 text-left">Vendor</th><th className="py-0.5 text-left">ID</th><th className="py-0.5 text-right">Pcs</th><th className="py-0.5 text-right">Cases</th><th className="py-0.5 text-left">Order #</th><th className="py-0.5 text-right">Missing</th></tr></thead><tbody>{combinedRec.map((r, i) => <tr key={i} className="border-t border-gray-700/30"><td className="py-0.5 text-gray-300">{fDateUS(r.date) || "—"}</td><td className="py-0.5 text-gray-300">{r.vendor || "—"}</td><td className="py-0.5 text-blue-400 font-mono">{r.core}</td><td className="py-0.5 text-right text-white">{R(r.pcs)}</td><td className="py-0.5 text-right">{r.cases > 0 ? R(r.cases) : "—"}</td><td className="py-0.5 text-gray-300">{r.orderNum || "—"}</td><td className={`py-0.5 text-right ${r.piecesMissing > 0 ? "text-red-400" : "text-gray-500"}`}>{r.piecesMissing > 0 ? R(r.piecesMissing) : "—"}</td></tr>)}</tbody></table></div>}
     </div></td></tr>}
     </>;
@@ -267,7 +272,6 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
     const f = b.fee || feMap[b.j]; const eq = bundleEffQ(b); const cost = f ? (eq * (f.aicogs || 0)) : 0;
     const aged = agedMap[b.j]; const kill = killMap[b.j];
     const isCol = collapsed[b.j];
-    // AFTER DOC fix: calculate projected DOC after adding ordered pieces
     const bAfterDoc = eq > 0 && b.cd > 0 ? Math.round(((b.fibInv || 0) + eq) / b.cd) : null;
 
     return <tr className={`border-t border-gray-800/20 hover:bg-indigo-900/10 text-xs ${hasBundleOrd(b) ? "bg-emerald-900/10" : "bg-indigo-950/20"}`}>
@@ -287,9 +291,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
       <td className="py-1 px-1 text-right text-indigo-300">{R(b.fibInv)}</td>
       <td className="py-1 px-1 text-gray-600">—</td>
       <td className="py-1 px-1 text-gray-600">—</td>
-      {/* LASTPO removed */}
       <td className="py-1 px-1 text-center text-indigo-300">{b.replenTag || "—"}</td>
-      {/* REC removed */}
       {!isCol && <td colSpan={5} />}
       {showRS && <td colSpan={5} />}
       <td className="py-1 border-l-2 border-gray-600 px-1" />
@@ -301,17 +303,16 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
         <td className="py-0.5 px-0.5"><NumInput value={gCogC(b.j)} onChange={v => setF(b.j, 'cogC', v)} /></td>
       </>}
       <td className="py-1 px-1 text-right text-amber-300 sticky right-12 bg-indigo-950/20 z-10">{cost > 0 ? $(cost) : "—"}</td>
-      {/* AFTER DOC — now calculates projected DOC when pcs entered */}
       <td className={`py-1 px-1 text-right sticky right-0 bg-indigo-950/20 z-10 ${bAfterDoc ? (bAfterDoc <= 30 ? "text-red-400" : bAfterDoc <= 60 ? "text-amber-400" : "text-emerald-400") : ""}`}>{bAfterDoc ? R(bAfterDoc) : R(b.doc)}</td>
       <td className="py-1 px-1"><button onClick={() => goBundle(b.j)} className="text-indigo-400 px-0.5 bg-indigo-400/10 rounded text-xs">V</button></td>
     </tr>;
   };
 
-  // === VENDOR TABLE HEADER ===
+  // === TABLE HEADER ===
   const rsToggle = <button onClick={() => setShowRS(!showRS)} className={`text-xs px-1 py-0.5 rounded font-bold ${showRS ? "bg-purple-600 text-white" : "bg-gray-700 text-gray-400"}`} title="Toggle Restocker columns">{showRS ? "−" : "+"}RS</button>;
   const costsToggle = <button onClick={() => setShowCosts(!showCosts)} className={`text-xs px-1 py-0.5 rounded font-bold ${showCosts ? "bg-teal-600 text-white" : "bg-gray-700 text-gray-400"}`} title="Toggle InbS/CogP/CogC columns">{showCosts ? "−" : "+"}$</button>;
 
-  const VTH = ({ isCol }) => <tr className="text-gray-500 uppercase bg-gray-900/40 text-xs">
+  const VTH = ({ isCol }) => <tr className="text-gray-500 uppercase bg-gray-900/40 text-xs sticky top-0 z-20">
     <th className="py-2 px-1 w-5 sticky left-0 bg-gray-900 z-10" />
     <TH tip="Core or JLS #" className="py-2 px-1 text-left sticky left-5 bg-gray-900 z-10">ID</TH>
     <th className="py-2 px-1 text-left sticky left-24 bg-gray-900 z-10">Title</th>
@@ -322,9 +323,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
     <TH tip="All-In Owned Pieces" className="py-2 px-1 text-right">All-In</TH>
     <TH tip="MOQ Pieces" className="py-2 px-1 text-right">MOQ</TH>
     <TH tip="Vendor Case Pack" className="py-2 px-1 text-right">VCas</TH>
-    {/* LASTPO removed */}
     <TH tip="Seasonal Peak" className="py-2 px-1 text-center">S</TH>
-    {/* REC removed */}
     {!isCol && <>
       <TH tip="Raw / Potential Units" className="py-2 px-1 text-right">Raw</TH>
       <TH tip="PPRC Available" className="py-2 px-1 text-right">PPRC</TH>
@@ -366,10 +365,10 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
       {vm === "vendor" && <button onClick={() => setShowIgnored(!showIgnored)} className={`ml-2 px-2 py-0.5 rounded text-xs ${showIgnored ? "bg-red-500/20 text-red-400" : "bg-gray-700 text-gray-500"}`}>{showIgnored ? "Hide" : "Show"} Ignored</button>}
       </div>
     </div>
-    {vm === "vendor" && <div className="flex flex-wrap gap-3 mb-4 items-center text-sm"><span className="text-gray-500 text-xs">PO#:</span><input type="text" value={poN} onChange={e => setPoN(e.target.value)} placeholder="2637" className="bg-gray-800 border border-gray-700 text-white rounded px-2 py-1 w-20 text-sm" /><span className="text-gray-500 text-xs">Date:</span><input type="date" value={poD} onChange={e => setPoD(e.target.value)} className="bg-gray-800 border border-gray-700 text-white rounded px-2 py-1 text-sm" /><span className="text-gray-500 text-xs">Buyer:</span><span className="text-white font-semibold">{stg.buyer || <span className="text-red-400">Set in ⚙️</span>}</span></div>}
+    {vm === "vendor" && <div className="flex flex-wrap gap-3 mb-4 items-center text-sm"><span className="text-gray-500 text-xs">PO#:</span><input type="text" value={poN} onChange={e => setPoN(e.target.value)} placeholder="Auto" className="bg-gray-800 border border-gray-700 text-white rounded px-2 py-1 w-28 text-sm" /><span className="text-gray-500 text-xs">Date:</span><input type="date" value={poD} onChange={e => setPoD(e.target.value)} className="bg-gray-800 border border-gray-700 text-white rounded px-2 py-1 text-sm" lang="en" /><span className="text-gray-500 text-xs">Buyer:</span><span className="text-white font-semibold">{stg.buyer || <span className="text-red-400">Set in ⚙️</span>}</span></div>}
 
     {/* === BY CORE VIEW === */}
-    {vm === "core" && <div className="overflow-x-auto rounded-xl border border-gray-800"><table className="w-full"><thead><tr className="bg-gray-900/80 text-xs text-gray-400 uppercase"><th className="py-3 px-2 w-8" /><th className="py-3 px-2 text-left">Core</th><th className="py-3 px-2 text-left cursor-pointer hover:text-white">Vendor</th><th className="py-3 px-2 text-left">Title</th><TH tip="Composite DSR" className="py-3 px-2 text-right">DSR</TH><TH tip="7-Day DSR" className="py-3 px-2 text-right">7D</TH><th className="py-3 px-2 text-center">T</th><TH tip="Days of Coverage" className="py-3 px-2 text-right">DOC</TH><TH tip="All-In Owned Pieces" className="py-3 px-2 text-right">All-In</TH><th className="py-3 px-2 text-right">MOQ</th><th className="py-3 px-2 text-center">S</th><th className="py-3 px-1 border-l-2 border-gray-600" /><th className="py-3 px-2 text-right">Need</th><th className="py-3 px-2 text-right">Order</th><th className="py-3 px-2 text-right">Cost</th><TH tip="DOC After Order" className="py-3 px-2 text-right">After</TH><th className="py-3 px-2 w-10" /></tr></thead>
+    {vm === "core" && <div className="overflow-x-auto rounded-xl border border-gray-800"><table className="w-full"><thead><tr className="bg-gray-900/80 text-xs text-gray-400 uppercase sticky top-0 z-20"><th className="py-3 px-2 w-8" /><th className="py-3 px-2 text-left">Core</th><th className="py-3 px-2 text-left cursor-pointer hover:text-white">Vendor</th><th className="py-3 px-2 text-left">Title</th><TH tip="Composite DSR" className="py-3 px-2 text-right">DSR</TH><TH tip="7-Day DSR" className="py-3 px-2 text-right">7D</TH><th className="py-3 px-2 text-center">T</th><TH tip="Days of Coverage" className="py-3 px-2 text-right">DOC</TH><TH tip="All-In Owned Pieces" className="py-3 px-2 text-right">All-In</TH><th className="py-3 px-2 text-right">MOQ</th><th className="py-3 px-2 text-center">S</th><th className="py-3 px-1 border-l-2 border-gray-600" /><th className="py-3 px-2 text-right">Need</th><th className="py-3 px-2 text-right">Order</th><th className="py-3 px-2 text-right">Cost</th><TH tip="DOC After Order" className="py-3 px-2 text-right">After</TH><th className="py-3 px-2 w-10" /></tr></thead>
         <tbody>{enr.map(c => <tr key={c.id} className="border-b border-gray-800/50 hover:bg-gray-800/30 text-sm"><td className="py-2 px-2"><Dot status={c.status} /></td><td className="py-2 px-2 text-blue-400 font-mono text-xs">{c.id}</td><td className="py-2 px-2 text-blue-300 text-xs truncate max-w-[100px] cursor-pointer hover:underline" onClick={() => goVendor(c.ven)}>{c.ven}</td><td className="py-2 px-2 text-gray-200 truncate max-w-[180px]">{c.ti}</td><td className="py-2 px-2 text-right">{D1(c.dsr)}</td><td className="py-2 px-2 text-right">{D1(c.d7)}</td><td className="py-2 px-2 text-center">{c.d7 > c.dsr ? <span className="text-emerald-400">▲</span> : c.d7 < c.dsr ? <span className="text-red-400">▼</span> : "—"}</td><td className={`py-2 px-2 text-right font-semibold ${dc(c.doc, c.critDays, c.warnDays)}`}>{R(c.doc)}</td><td className="py-2 px-2 text-right">{R(c.allIn)}</td><td className="py-2 px-2 text-right text-gray-400 text-xs">{c.moq > 0 ? R(c.moq) : "—"}</td><td className="py-2 px-2 text-center">{c.seas && <span className="text-purple-400 text-xs font-bold">{c.seas.peak}</span>}</td><td className="py-2 px-1 border-l-2 border-gray-600" /><td className="py-2 px-2 text-right text-gray-300">{c.needQty > 0 ? R(c.needQty) : "—"}</td><td className="py-2 px-2 text-right text-white font-semibold">{c.orderQty > 0 ? R(c.orderQty) : "—"}</td><td className="py-2 px-2 text-right text-amber-300">{c.needDollar > 0 ? $(c.needDollar) : "—"}</td><td className={`py-2 px-2 text-right ${c.orderQty > 0 ? dc(c.docAfter, c.critDays, c.warnDays) : "text-gray-500"}`}>{c.orderQty > 0 ? R(c.docAfter) : "—"}</td><td className="py-2 px-2"><button onClick={() => goCore(c.id)} className="text-blue-400 text-xs px-1.5 py-0.5 bg-blue-400/10 rounded">V</button></td></tr>)}</tbody>
         <tfoot><tr className="bg-gray-900 border-t-2 border-gray-700 text-sm font-semibold"><td colSpan={4} className="py-3 px-2 text-gray-300">{enr.length}</td><td className="py-3 px-2 text-right text-white">{D1(tot.d)}</td><td colSpan={3} /><td className="py-3 px-2 text-right text-white">{R(tot.a)}</td><td colSpan={2} /><td className="border-l-2 border-gray-600" /><td className="py-3 px-2 text-right">{R(tot.n)}</td><td className="py-3 px-2 text-right text-white">{R(tot.o)}</td><td className="py-3 px-2 text-right text-amber-300">{$(tot.co)}</td><td colSpan={2} /></tr></tfoot>
       </table></div>}
@@ -402,24 +401,24 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
             <button onClick={() => setDismissed({})} className="text-xs bg-gray-700 text-gray-300 px-2 py-1 rounded">Show All</button>
             <div className="ml-auto flex gap-2">
               <button disabled={!poI.length} onClick={() => { genRFQ(v, poI, stg.buyer, poD); setToast("RFQ " + v.name) }} className={`text-xs px-3 py-1.5 rounded font-medium ${poI.length ? "bg-orange-600 text-white" : "bg-gray-700 text-gray-500 cursor-not-allowed"}`}>RFQ</button>
-              <button disabled={!poI.length} onClick={() => { genPO(v, poI, poN, stg.buyer, poD); setToast("PO " + v.name) }} className={`text-xs px-3 py-1.5 rounded font-medium ${poI.length ? "bg-emerald-600 text-white" : "bg-gray-700 text-gray-500 cursor-not-allowed"}`}>PO</button>
-              <button disabled={!poI.length} onClick={() => { cp7f(v, poI, poN, stg.buyer, poD); setToast("7f copied!") }} className={`text-xs px-3 py-1.5 rounded font-medium ${poI.length ? "bg-teal-600 text-white" : "bg-gray-700 text-gray-500 cursor-not-allowed"}`}>7f</button>
-              <button disabled={!poI.length} onClick={() => { cp7g(v, poI, poN, stg.buyer); setToast("7g copied!") }} className={`text-xs px-3 py-1.5 rounded font-medium ${poI.length ? "bg-purple-600 text-white" : "bg-gray-700 text-gray-500 cursor-not-allowed"}`}>7g</button>
+              <button disabled={!poI.length} onClick={() => { const pn = autoPO(v.code); genPO(v, poI, pn, stg.buyer, poD); setToast("PO " + pn) }} className={`text-xs px-3 py-1.5 rounded font-medium ${poI.length ? "bg-emerald-600 text-white" : "bg-gray-700 text-gray-500 cursor-not-allowed"}`}>PO</button>
+              <button disabled={!poI.length} onClick={() => { const pn = autoPO(v.code); cp7f(v, poI, pn, stg.buyer, poD); setToast("7f copied!") }} className={`text-xs px-3 py-1.5 rounded font-medium ${poI.length ? "bg-teal-600 text-white" : "bg-gray-700 text-gray-500 cursor-not-allowed"}`}>7f</button>
+              <button disabled={!poI.length} onClick={() => { const pn = autoPO(v.code); cp7g(v, poI, pn, stg.buyer); setToast("7g copied!") }} className={`text-xs px-3 py-1.5 rounded font-medium ${poI.length ? "bg-purple-600 text-white" : "bg-gray-700 text-gray-500 cursor-not-allowed"}`}>7g</button>
+              {v.contactEmail && <button onClick={() => { const pn = autoPO(v.code); const subj = encodeURIComponent('PO ' + pn + ' — JLS Trading Co.'); const body = encodeURIComponent('Hi ' + (v.contactName || '') + ',\n\nPlease find attached PO ' + pn + '.\n\nThank you,\n' + (stg.buyer || '')); window.open('mailto:' + v.contactEmail + '?subject=' + subj + '&body=' + body) }} className="text-xs px-3 py-1.5 rounded font-medium bg-blue-600 text-white">📧</button>}
             </div>
           </div>
         </div>
         <div className="overflow-x-auto"><table className="w-full text-xs"><thead><VTH isCol={anyCol} /></thead><tbody>
           {vendorSub === "bundles" ? <>{grp.bundles.map(b => <BundleRow key={b.j} b={b} />)}{grp.bundles.length === 0 && <tr><td colSpan={40} className="py-4 text-center text-gray-500">No bundles</td></tr>}</>
             : vendorSub === "mix" ? <>{grp.cores.map(c => {
-             const cBs = (data.bundles || []).filter(b => {
+              const cBs = (data.bundles || []).filter(b => {
                 if (b.core1 !== c.id) return false;
-                if (stg.bA === "yes" && b.active !== "Yes") return false;
-                if (stg.bA === "no" && b.active === "Yes") return false;
-                if (stg.bI === "blank" && !!b.ignoreUntil) return false;
-                if (stg.bI === "set" && !b.ignoreUntil) return false;
+                if (bA === "yes" && b.active !== "Yes") return false;
+                if (bA === "no" && b.active === "Yes") return false;
+                if (bI === "blank" && !!b.ignoreUntil) return false;
+                if (bI === "set" && !b.ignoreUntil) return false;
                 return true;
               }).map(b => ({ ...b, fee: feMap[b.j], margin: feMap[b.j] && feMap[b.j].aicogs > 0 ? ((feMap[b.j].gp / feMap[b.j].aicogs) * 100) : 0 }));
-
               const bAdj = cBs.reduce((s, b) => s + bundleEffQ(b), 0);
               return <Fragment key={c.id}><CoreRow c={c} mixAdj={bAdj} />{!dismissed[c.id] && cBs.map(b => <BundleRow key={b.j} b={b} indent />)}</Fragment>;
             })}</>
