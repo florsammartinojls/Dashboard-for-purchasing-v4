@@ -107,7 +107,7 @@ export default function BundleTab({ data, stg, hist, daily, bundleId, onBack, go
         {core && <button onClick={() => goCore(core.id)} className="text-blue-400 text-xs bg-blue-400/10 px-2 py-0.5 rounded">→{core.id}</button>}
         {bAbc && <AbcBadge grade={bAbc.profABC} />}
         {bTrend && <><span className="text-xs text-gray-400">Q1'26: {bTrend.q1_26 || "—"}</span><span className="text-xs text-gray-400">Trend: {bTrend.movement || "—"}</span></>}
-        {bAged && <><HealthBadge health={bAged.fbaHealth} ltsf={bAged.storageLtsf} />{bAged.action && <span className="text-xs px-1.5 py-0.5 rounded bg-gray-700 text-gray-300">AMZ: {bAged.action}</span>}</>}
+        {bAged && <><HealthBadge health={bAged.fbaHealth} ltsf={0} />{bAged.action && <span className="text-xs px-1.5 py-0.5 rounded bg-gray-700 text-gray-300">AMZ: {bAged.action}</span>}</>}
         {bKill && <KillBadge eval={bKill.latestEval || bKill.sellEval} />}
       </div>
       <p className="text-gray-300 text-sm">{b.t}</p>
