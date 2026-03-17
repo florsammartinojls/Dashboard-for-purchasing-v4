@@ -8,6 +8,7 @@ import BundleTab from "./components/BundleTab";
 
 // === Vendors Tab ===
 function VendorsTab({ data, stg, goVendor, workflow, saveWorkflow, deleteWorkflow }) {
+  const [vSearch, setVSearch] = useState("");
   const vMap = useMemo(() => { const m = {}; (data.vendors || []).forEach(v => m[v.name] = v); return m }, [data.vendors]);
   const vS = useMemo(() => {
     const g = {};
@@ -26,9 +27,10 @@ function VendorsTab({ data, stg, goVendor, workflow, saveWorkflow, deleteWorkflo
       g[c.ven][st === "critical" ? "cr" : st === "warning" ? "wa" : "he"]++;
       g[c.ven].cores++; g[c.ven].dsr += c.dsr;
     });
-    return Object.values(g).sort((a, b) => b.cr - a.cr || b.wa - a.wa);
+    return Object.values(g).sort((a, b) => a.name.localeCompare(b.name));
   }, [data.cores, vMap, stg]);
-  return <div className="p-4 max-w-4xl mx-auto"><h2 className="text-xl font-bold text-white mb-4">Vendor Overview</h2><div className="space-y-1">{vS.map(v => <div key={v.name} className="flex items-center gap-2 px-4 py-3 rounded-lg bg-gray-900/50 hover:bg-gray-800"><button onClick={() => goVendor(v.name)} className="flex items-center gap-4 flex-1 text-left"><div className="flex gap-1 min-w-[80px]">{v.cr > 0 && <span className="text-xs bg-red-500/20 text-red-400 px-1.5 py-0.5 rounded font-semibold">{v.cr}</span>}{v.wa > 0 && <span className="text-xs bg-amber-500/20 text-amber-400 px-1.5 py-0.5 rounded font-semibold">{v.wa}</span>}<span className="text-xs bg-emerald-500/20 text-emerald-400 px-1.5 py-0.5 rounded">{v.he}</span></div><span className="text-white font-medium flex-1">{v.name}</span><span className="text-gray-500 text-xs">{v.cores} · DSR:{D1(v.dsr)}</span></button><div className="relative"><WorkflowChip id={v.name} type="vendor" workflow={workflow} onSave={saveWorkflow} onDelete={deleteWorkflow} buyer="" /></div></div>)}</div></div>;
+  const vSF = useMemo(() => vSearch ? vS.filter(v => v.name.toLowerCase().includes(vSearch.toLowerCase())) : vS, [vS, vSearch]);
+  return <div className="p-4 max-w-4xl mx-auto"><h2 className="text-xl font-bold text-white mb-4">Vendor Overview</h2><input type="text" placeholder="Search vendor..." value={vSearch} onChange={e => setVSearch(e.target.value)} className="bg-gray-800 border border-gray-700 text-white rounded-lg px-4 py-2 w-full max-w-md text-sm mb-4" /><div className="space-y-1">{vSF.map(v => <div key={v.name} className="flex items-center gap-2 px-4 py-3 rounded-lg bg-gray-900/50 hover:bg-gray-800"><button onClick={() => goVendor(v.name)} className="flex items-center gap-4 flex-1 text-left"><div className="flex gap-1 min-w-[80px]">{v.cr > 0 && <span className="text-xs bg-red-500/20 text-red-400 px-1.5 py-0.5 rounded font-semibold">{v.cr}</span>}{v.wa > 0 && <span className="text-xs bg-amber-500/20 text-amber-400 px-1.5 py-0.5 rounded font-semibold">{v.wa}</span>}<span className="text-xs bg-emerald-500/20 text-emerald-400 px-1.5 py-0.5 rounded">{v.he}</span></div><span className="text-white font-medium flex-1">{v.name}</span><span className="text-gray-500 text-xs">{v.cores} · DSR:{D1(v.dsr)}</span></button><div className="relative"><WorkflowChip id={v.name} type="vendor" workflow={workflow} onSave={saveWorkflow} onDelete={deleteWorkflow} buyer="" /></div></div>)}</div></div>;
 }
 
 // === Glossary Tab ===
@@ -111,7 +113,7 @@ export default function App() {
   const initVendorParam = urlParams.get('vendor');
   const [tab, setTab] = useState(initCore ? "core" : initBundle ? "bundle" : "purchasing");
   const [showS, setShowS] = useState(false);
-  const [stg, setStg] = useState({ buyer: '', domesticDoc: 90, intlDoc: 180, fA: "yes", fI: "blank", fV: "yes", bA: "yes", bI: "blank" });
+  const [stg, setStg] = useState({ buyer: '', domesticDoc: 90, intlDoc: 180, fA: "yes", fI: "blank", fV: "yes" });
   const [coreId, setCoreId] = useState(initCore || null);
   const [bundleId, setBundleId] = useState(initBundle || null);
   const [data, setData] = useState({ cores: [], bundles: [], vendors: [], sales: [], fees: [], inbound: [], abcA: [], abcT: [], abcSub: '', restock: [], priceComp: [], agedInv: [], killMgmt: [], workflow: [], receiving: [] });
@@ -225,7 +227,7 @@ export default function App() {
         {tab === "vendors" && <VendorsTab data={data} stg={stg} goVendor={goVendor} workflow={data.workflow} saveWorkflow={saveWorkflow} deleteWorkflow={deleteWorkflow} />}
         {tab === "glossary" && <GlossTab />}
       </main>
-      {showS && <Stg s={{ bA: "yes", bI: "blank", ...stg }} setS={setStg} onClose={() => setShowS(false)} />}
+      {showS && <Stg s={stg} setS={setStg} onClose={() => setShowS(false)} />}
       <SlidePanel open={!!(panelCoreId || panelBundleId)} onClose={() => { setPanelCoreId(null); setPanelBundleId(null) }}>
         {panelBundleId ? <BundleTab data={data} stg={stg} hist={hist} daily={daily} bundleId={panelBundleId} onBack={() => { setPanelBundleId(null); if (!panelCoreId) { setPanelCoreId(null) } }} goCore={id => { setPanelBundleId(null); setPanelCoreId(id) }} />
         : panelCoreId ? <CoreTab data={data} stg={stg} hist={hist} daily={daily} coreId={panelCoreId} onBack={() => setPanelCoreId(null)} goBundle={id => setPanelBundleId(id)} />
