@@ -63,7 +63,7 @@ function VendorsTab({ data, stg, goVendor, workflow, saveWorkflow, deleteWorkflo
 }
 // === Glossary Tab ===
 const DEFAULT_GL = [
-  { term: "C.DSR", desc: "Composite Daily Sales Rate (1 decimal)." },
+  { term: "C.DSR", desc: "Complete Daily Sales Rate (1 decimal)." },
   { term: "DOC", desc: "Days of Coverage — how many days current inventory will last at current sales rate." },
   { term: "Critical", desc: "DOC ≤ Lead Time. Needs immediate action — you may run out before new stock arrives." },
   { term: "Warning", desc: "DOC ≤ Lead Time + Buffer Days. Monitor closely — tight but not yet critical." },
@@ -75,15 +75,21 @@ const DEFAULT_GL = [
   { term: "Fill Rec: Mix", desc: "1) For each bundle: Effective DOC = current DOC + (core inbound ÷ qty_per_bundle ÷ bundle DSR). 2) Need = (Target DOC − Effective DOC) × bundle DSR. 3) If need < vendor MOQ → don't order bundle, convert to core pieces instead. 4) Core order = own need + converted bundle pieces, rounded to case pack." },
   { term: "FIBDOC", desc: "FBA Inbound Days of Coverage." },
   { term: "PFIBDOC", desc: "Projected FIB DOC after restock." },
+  { term: "+RS", desc: "Toggle Bundle Inventory columns: B.FIB, B.SC, B.Res, B.Inb, 7f Missing Pieces." },
+  { term: "+$", desc: "Toggle cost columns: InbS, CogP, CogC." },
   { term: "7f", desc: "Receiving Ledger (clipboard copy for spreadsheet)." },
   { term: "7g", desc: "COGS Ledger (clipboard copy for spreadsheet)." },
+  { term: "7f Miss", desc: "Pieces Missing from 7f Receiving — inbound shipments not fully received." },
+  { term: "B.FIB", desc: "Aggregate FIB Inventory across all active bundles for a core." },
+  { term: "B.SC", desc: "Aggregate SC Inventory across all active bundles for a core." },
+  { term: "B.Res", desc: "Aggregate Reserved units across all active bundles for a core." },
+  { term: "B.Inb", desc: "Aggregate Inbound units across all active bundles for a core." },
   { term: "RFQ", desc: "Request for Quote — like PO but without pricing columns." },
   { term: "AICOGS", desc: "All-In Cost of Goods Sold." },
   { term: "InbS", desc: "Inbound Shipping cost." },
   { term: "CogP", desc: "Cost per Piece." },
   { term: "CogC", desc: "Cost per Case." },
-  { term: "+RS", desc: "Toggle Restocker columns: FIB Pcs, Raw Pcs, Inbound Pcs, Case Pack, MOQ Pcs." },
-  { term: "$", desc: "Toggle purchase history (last 4 orders) for a core." },
+  { term: "$", desc: "Toggle purchase history (last 4 orders) + receiving (7f) for a core." },
   { term: "%28d", desc: "Bundle % weight = units sold L28d for this bundle / total L28d units for all bundles of the same core." },
   { term: "FBA Health", desc: "From Aged Inventory sheet — Healthy, At Risk, or Unhealthy." },
   { term: "LTSF", desc: "Long-Term Storage Fee — charges for aged inventory at FBA." },
@@ -91,6 +97,7 @@ const DEFAULT_GL = [
   { term: "ST", desc: "Sell-Through — ASIN in sell-through evaluation mode." },
   { term: "+/−", desc: "Expand or collapse detail columns per core row." },
   { term: "✕", desc: "Dismiss a core row (hide it temporarily while reviewing). 'Show All' brings them back." },
+  { term: "PO#", desc: "Auto-generated: PO-MMDDYY-VendorCode. Override with manual entry." },
 ];
 
 function GlossTab() {
