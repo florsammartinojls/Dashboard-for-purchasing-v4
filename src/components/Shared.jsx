@@ -27,7 +27,8 @@ export function Toast({ msg, onClose }) {
   return <div className="fixed bottom-4 right-4 bg-emerald-600 text-white px-4 py-3 rounded-lg shadow-xl z-50">✅ {msg}</div>;
 }
 
-// === Editable Number Input (keeps focus while typing) ===
+
+// === Editable Number Input (shows commas while typing) ===
 export function NumInput({ value, onChange, placeholder, className }) {
   const [local, setLocal] = useState(value || '');
   const [focused, setFocused] = useState(false);
@@ -44,13 +45,24 @@ export function NumInput({ value, onChange, placeholder, className }) {
     return n.toLocaleString('en-US');
   };
 
+  const fmtLive = v => {
+    const clean = String(v).replace(/[^0-9.]/g, '');
+    if (!clean) return '';
+    const parts = clean.split('.');
+    parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    return parts.join('.');
+  };
+
   return <input
     ref={ref}
     type="text"
     inputMode="decimal"
-    value={focused ? local : fmt(value)}
+    value={focused ? fmtLive(local) : fmt(value)}
     onFocus={() => { setFocused(true); setLocal(value || '') }}
-    onChange={e => { const v = e.target.value.replace(/[^0-9.]/g, ''); setLocal(v) }}
+    onChange={e => {
+      const raw = e.target.value.replace(/[^0-9.,]/g, '');
+      setLocal(raw.replace(/,/g, ''));
+    }}
     onBlur={() => { setFocused(false); onChange(Math.max(0, parseFloat(local) || 0)) }}
     onKeyDown={e => { if (e.key === 'Enter') { e.target.blur() } }}
     placeholder={placeholder || "0"}
