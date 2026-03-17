@@ -419,7 +419,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
                 if (stg.bI === "set" && !b.ignoreUntil) return false;
                 return true;
               }).map(b => ({ ...b, fee: feMap[b.j], margin: feMap[b.j] && feMap[b.j].aicogs > 0 ? ((feMap[b.j].gp / feMap[b.j].aicogs) * 100) : 0 }));
-}).map(b => ({ ...b, fee: feMap[b.j], margin: feMap[b.j] && feMap[b.j].aicogs > 0 ? ((feMap[b.j].gp / feMap[b.j].aicogs) * 100) : 0 }));
+
               const bAdj = cBs.reduce((s, b) => s + bundleEffQ(b), 0);
               return <Fragment key={c.id}><CoreRow c={c} mixAdj={bAdj} />{!dismissed[c.id] && cBs.map(b => <BundleRow key={b.j} b={b} indent />)}</Fragment>;
             })}</>
