@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from "react";
-import { BarChart, Bar, LineChart, Line, ComposedChart, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
 import { R, D1, $, $2, P, MN, YC, TTP, BL, TL, gS, cAI, cNQ, cOQ, cDA, gTD, dc, fE, fD, cMo, gY, cSeas } from "../lib/utils";
 import { Dot, TH } from "./Shared";
 
@@ -247,77 +247,85 @@ export default function CoreTab({ data, stg, hist, daily, coreId, onBack, goBund
         </div>
       )}
 
-      {/* Monthly DSR (YoY) — ComposedChart: DSR lines + OOS bars */}
+      {/* Monthly DSR (YoY) — clean line chart, OOS as subtle indicator in table */}
       {cHF.length > 0 && (
         <div className="bg-gray-900 rounded-xl p-4 mb-4 border border-gray-800">
           <h3 className="text-white font-semibold text-sm mb-2">Monthly DSR (YoY)</h3>
           <div className="flex flex-col lg:flex-row gap-4">
             <div className="flex-1 min-w-0">
-              <ResponsiveContainer width="100%" height={220}>
-                <ComposedChart data={dsrCh}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
-                  <XAxis dataKey="month" tick={{ fill: "#9ca3af", fontSize: 10 }} />
-                  <YAxis yAxisId="left" tick={{ fill: "#9ca3af", fontSize: 10 }} label={{ value: "DSR", angle: -90, position: "insideLeft", fill: "#9ca3af", fontSize: 10 }} />
-                  <YAxis yAxisId="right" orientation="right" tick={{ fill: "#ef4444", fontSize: 10 }} domain={[0, 'auto']} label={{ value: "OOS Days", angle: 90, position: "insideRight", fill: "#ef4444", fontSize: 10 }} />
-                  <Tooltip {...TTP} />
-                  <Legend />
+              <ResponsiveContainer width="100%" height={240}>
+                <LineChart data={dsrCh}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
+                  <XAxis dataKey="month" tick={{ fill: "#9ca3af", fontSize: 11 }} axisLine={{ stroke: "#374151" }} tickLine={false} />
+                  <YAxis tick={{ fill: "#9ca3af", fontSize: 11 }} axisLine={false} tickLine={false} domain={['auto', 'auto']} />
+                  <Tooltip contentStyle={{ backgroundColor: "#111827", border: "1px solid #374151", borderRadius: "8px", fontSize: 12 }} />
+                  <Legend wrapperStyle={{ fontSize: 11 }} />
                   {yrs.map(y => (
-                    <Bar key={"oos_" + y} yAxisId="right" dataKey={"oos_" + y}
-                      fill={YC[y] || "#6b7280"} opacity={0.15} name={"OOS " + y} />
+                    <Line key={y} dataKey={"d_" + y}
+                      stroke={YC[y] || "#6b7280"} strokeWidth={2.5}
+                      dot={{ r: 3, fill: YC[y] || "#6b7280", strokeWidth: 0 }}
+                      activeDot={{ r: 5, strokeWidth: 2, stroke: "#fff" }}
+                      connectNulls name={String(y)} />
                   ))}
-                  {yrs.map(y => (
-                    <Line key={y} yAxisId="left" dataKey={"d_" + y}
-                      stroke={YC[y] || "#6b7280"} strokeWidth={2} dot={{ r: 2 }}
-                      connectNulls name={"DSR " + y} />
-                  ))}
-                </ComposedChart>
+                </LineChart>
               </ResponsiveContainer>
             </div>
 
-            {/* Table: DSR per year + OOS */}
-            <div className="lg:w-80 overflow-x-auto">
+            {/* Table: DSR per year + OOS dot */}
+            <div className="lg:w-72 overflow-x-auto">
               <table className="w-full text-xs">
-                <thead><tr className="text-gray-500">
-                  <th className="py-1 px-1 text-left">Mo</th>
+                <thead><tr className="text-gray-500 border-b border-gray-700">
+                  <th className="py-1.5 px-1 text-left">Mo</th>
                   {yrs.map(y => (
-                    <th key={y} className="py-1 px-1 text-right" style={{ color: YC[y] || "#6b7280" }}>{y}</th>
+                    <th key={y} className="py-1.5 px-2 text-right font-semibold" style={{ color: YC[y] || "#6b7280" }}>{y}</th>
                   ))}
-                  <th className="py-1 px-1 text-right text-red-400">OOS</th>
                 </tr></thead>
                 <tbody>
                   {dsrCh.map((r, i) => {
-                    const oosTotal = yrs.reduce((s, y) => s + (r["oos_" + y] || 0), 0);
+                    const hasOos = yrs.some(y => r["oos_" + y] > 0);
                     return (
-                      <tr key={i} className={i % 2 === 0 ? "bg-gray-800/20" : ""}>
-                        <td className="py-0.5 px-1 text-gray-300">{r.month}</td>
-                        {yrs.map(y => (
-                          <td key={y} className="py-0.5 px-1 text-right text-white">
-                            {r["d_" + y] != null ? D1(r["d_" + y]) : ""}
-                          </td>
-                        ))}
-                        <td className="py-0.5 px-1 text-right text-red-400">
-                          {oosTotal > 0 ? oosTotal : ""}
-                        </td>
+                      <tr key={i} className={`${i % 2 === 0 ? "bg-gray-800/20" : ""} ${hasOos ? "border-l-2 border-red-500/60" : ""}`}>
+                        <td className="py-0.5 px-1 text-gray-400">{r.month}</td>
+                        {yrs.map(y => {
+                          const oos = r["oos_" + y] || 0;
+                          return (
+                            <td key={y} className="py-0.5 px-2 text-right">
+                              <span className="text-white">{r["d_" + y] != null ? D1(r["d_" + y]) : ""}</span>
+                              {oos > 0 && <span className="ml-1 text-red-400 text-[9px]" title={oos + " OOS days"}>●</span>}
+                            </td>
+                          );
+                        })}
                       </tr>
                     );
                   })}
-                  <tr className="border-t border-gray-700 font-semibold">
-                    <td className="py-1 px-1">Avg</td>
+                  <tr className="border-t border-gray-600 font-semibold">
+                    <td className="py-1.5 px-1 text-gray-300">Avg</td>
                     {yrs.map(y => {
                       const vals = cHF.filter(h => h.y === y);
                       const avg = vals.length > 0
                         ? vals.reduce((s, x) => s + (getDsr(x) || 0), 0) / vals.length
                         : 0;
                       return (
-                        <td key={y} className="py-1 px-1 text-right text-white">
+                        <td key={y} className="py-1.5 px-2 text-right text-white">
                           {avg > 0 ? D1(avg) : ""}
                         </td>
                       );
                     })}
-                    <td className="py-1 px-1 text-right text-red-400">
-                      {cHF.reduce((s, x) => s + (x.oosDays || 0), 0) || ""}
-                    </td>
                   </tr>
+                  {/* OOS summary row */}
+                  {cHF.some(x => x.oosDays > 0) && (
+                    <tr className="border-t border-gray-700/50">
+                      <td className="py-1 px-1 text-red-400 text-[10px]">OOS</td>
+                      {yrs.map(y => {
+                        const tot = cHF.filter(h => h.y === y).reduce((s, x) => s + (x.oosDays || 0), 0);
+                        return (
+                          <td key={y} className="py-1 px-2 text-right text-red-400 text-[10px]">
+                            {tot > 0 ? tot + "d" : ""}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  )}
                 </tbody>
               </table>
             </div>
