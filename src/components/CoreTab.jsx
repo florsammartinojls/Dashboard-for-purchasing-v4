@@ -17,8 +17,13 @@ export default function CoreTab({ data, stg, hist, daily, coreId, onBack, goBund
   const cHF = cH;
   const yrs = useMemo(() => gY(cHF), [cHF]);
   const dsrCh = useMemo(() => MN.map((m, i) => { const r = { month: m }; yrs.forEach(y => { const h = cHF.find(x => x.y === y && x.m === i + 1); r["d_" + y] = h?.avgDsr ?? null }); return r }), [cHF, yrs]);
-  const cBA = useMemo(() => { if (!core) return []; const b1 = (data.bundles || []).filter(b => b.core1 === sel); if (b1.length > 0) return b1; const jls = (core.jlsList || "").split(/[,\n]/).filter(Boolean).map(j => j.trim()); return (data.bundles || []).filter(b => jls.includes(b.j)) }, [core, sel, data.bundles]);
-  const bIds = useMemo(() => cBA.map(b => b.j), [cBA]);
+  const cBA = useMemo(() => { if (!core) return []; const filt = b => {
+  if (stg.bA === "yes" && b.active !== "Yes") return false;
+  if (stg.bA === "no" && b.active === "Yes") return false;
+  if (stg.bI === "blank" && !!b.ignoreUntil) return false;
+  if (stg.bI === "set" && !b.ignoreUntil) return false;
+  return true;
+}; const b1 = (data.bundles || []).filter(b => b.core1 === sel && filt(b)); if (b1.length > 0) return b1; const jls = (core.jlsList || "").split(/[,\n]/).filter(Boolean).map(j => j.trim()); return (data.bundles || []).filter(b => jls.includes(b.j) && filt(b)) }, [core, sel, data.bundles, stg]);
   const inbS = useMemo(() => { if (!sel || !data.inbound) return []; const ids = new Set([sel, ...bIds].map(x => (x || "").trim().toLowerCase())); return data.inbound.filter(s => ids.has((s.core || "").trim().toLowerCase())) }, [data.inbound, sel, bIds]);
   const bSH = useMemo(() => (hist?.bundleSales || []).filter(h => bIds.includes(h.j)), [hist, bIds]);
   const bSHF = bSH;
