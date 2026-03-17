@@ -1,14 +1,16 @@
 import React, { useState, useMemo, useCallback, useEffect } from "react";
 import { api, apiPost } from "./lib/api";
-import { R, D1, gS, fTs } from "./lib/utils";
+import { R, D1, gS, fTs, gTD, isD, cAI, cNQ } from "./lib/utils";
 import { Loader, Stg, QuickSum, SumCtx, SlidePanel, Dot, WorkflowChip } from "./components/Shared";
 import PurchTab from "./components/PurchTab";
 import CoreTab from "./components/CoreTab";
 import BundleTab from "./components/BundleTab";
 
-// === Vendors Tab (updated: search + sort + fix empty area) ===
+// === Vendors Tab ===
 function VendorsTab({ data, stg, goVendor, workflow, saveWorkflow, deleteWorkflow }) {
   const [vSearch, setVSearch] = useState("");
+  const [sortBy, setSortBy] = useState("alpha");
+  const [filterNeed, setFilterNeed] = useState(false);
   const vMap = useMemo(() => { const m = {}; (data.vendors || []).forEach(v => m[v.name] = v); return m }, [data.vendors]);
   const vS = useMemo(() => {
     const g = {};
@@ -21,22 +23,43 @@ function VendorsTab({ data, stg, goVendor, workflow, saveWorkflow, deleteWorkflo
       if (stg.fI === "set" && !c.ignoreUntil) return false;
       return true;
     }).forEach(c => {
-      if (!g[c.ven]) g[c.ven] = { name: c.ven, cr: 0, wa: 0, he: 0, cores: 0, dsr: 0 };
+      if (!g[c.ven]) g[c.ven] = { name: c.ven, cr: 0, wa: 0, he: 0, cores: 0, dsr: 0, needBuy: 0 };
       const v = vMap[c.ven] || {};
       const st = gS(c.doc, v.lt || 30, c.buf || 14, stg);
       g[c.ven][st === "critical" ? "cr" : st === "warning" ? "wa" : "he"]++;
       g[c.ven].cores++; g[c.ven].dsr += c.dsr;
+      const tg = gTD(v, stg);
+      const nq = cNQ(c, tg);
+      if (nq > 0) g[c.ven].needBuy++;
     });
-    return Object.values(g).sort((a, b) => a.name.localeCompare(b.name));
+    return Object.values(g);
   }, [data.cores, vMap, stg]);
-  const vSF = useMemo(() => vSearch
-    ? vS.filter(v => v.name.toLowerCase().includes(vSearch.toLowerCase()))
-    : vS, [vS, vSearch]);
+
+  const vSF = useMemo(() => {
+    let arr = vSearch ? vS.filter(v => v.name.toLowerCase().includes(vSearch.toLowerCase())) : [...vS];
+    if (filterNeed) arr = arr.filter(v => v.needBuy > 0);
+    if (sortBy === "alpha") arr.sort((a, b) => a.name.localeCompare(b.name));
+    else if (sortBy === "critical") arr.sort((a, b) => b.cr - a.cr || b.wa - a.wa || a.name.localeCompare(b.name));
+    else if (sortBy === "cores") arr.sort((a, b) => b.cores - a.cores || a.name.localeCompare(b.name));
+    return arr;
+  }, [vS, vSearch, sortBy, filterNeed]);
 
   return <div className="p-4 max-w-4xl mx-auto">
     <h2 className="text-xl font-bold text-white mb-4">Vendor Overview ({vSF.length})</h2>
-    <input type="text" placeholder="Search vendor..." value={vSearch} onChange={e => setVSearch(e.target.value)}
-      className="bg-gray-800 border border-gray-700 text-white rounded-lg px-4 py-2 w-full max-w-md text-sm mb-4" />
+    <div className="flex flex-wrap gap-2 mb-4 items-center">
+      <input type="text" placeholder="Search vendor..." value={vSearch} onChange={e => setVSearch(e.target.value)}
+        className="bg-gray-800 border border-gray-700 text-white rounded-lg px-4 py-2 w-full max-w-xs text-sm" />
+      <select value={sortBy} onChange={e => setSortBy(e.target.value)}
+        className="bg-gray-800 border border-gray-700 text-gray-300 text-sm rounded-lg px-2 py-2">
+        <option value="alpha">A → Z</option>
+        <option value="critical">Critical ↓</option>
+        <option value="cores">Cores ↓</option>
+      </select>
+      <button onClick={() => setFilterNeed(!filterNeed)}
+        className={`text-xs px-3 py-2 rounded-lg font-medium ${filterNeed ? "bg-amber-600 text-white" : "bg-gray-800 border border-gray-700 text-gray-400"}`}>
+        {filterNeed ? "Needs Buy ✓" : "Needs Buy"}
+      </button>
+    </div>
     {vSF.length > 0 ? (
       <div className="space-y-1">
         {vSF.map(v => (
@@ -48,7 +71,11 @@ function VendorsTab({ data, stg, goVendor, workflow, saveWorkflow, deleteWorkflo
                 <span className="text-xs bg-emerald-500/20 text-emerald-400 px-1.5 py-0.5 rounded">{v.he}</span>
               </div>
               <span className="text-white font-medium flex-1">{v.name}</span>
-              <span className="text-gray-500 text-xs">{v.cores} cores · DSR:{D1(v.dsr)}</span>
+              <div className="flex gap-3 text-xs text-gray-500">
+                <span>{v.cores} cores</span>
+                <span>DSR:{D1(v.dsr)}</span>
+                {v.needBuy > 0 && <span className="text-amber-400">{v.needBuy} need</span>}
+              </div>
             </button>
             <div className="relative">
               <WorkflowChip id={v.name} type="vendor" workflow={workflow} onSave={saveWorkflow} onDelete={deleteWorkflow} buyer="" />
@@ -57,13 +84,14 @@ function VendorsTab({ data, stg, goVendor, workflow, saveWorkflow, deleteWorkflo
         ))}
       </div>
     ) : (
-      <p className="text-gray-500 text-sm py-8 text-center">No vendors match "{vSearch}"</p>
+      <p className="text-gray-500 text-sm py-8 text-center">No vendors match filters</p>
     )}
   </div>;
 }
+
 // === Glossary Tab ===
 const DEFAULT_GL = [
-  { term: "C.DSR", desc: "Complete Daily Sales Rate (1 decimal)." },
+  { term: "C.DSR", desc: "Composite Daily Sales Rate (1 decimal)." },
   { term: "DOC", desc: "Days of Coverage — how many days current inventory will last at current sales rate." },
   { term: "Critical", desc: "DOC ≤ Lead Time. Needs immediate action — you may run out before new stock arrives." },
   { term: "Warning", desc: "DOC ≤ Lead Time + Buffer Days. Monitor closely — tight but not yet critical." },
@@ -75,15 +103,16 @@ const DEFAULT_GL = [
   { term: "Fill Rec: Mix", desc: "1) For each bundle: Effective DOC = current DOC + (core inbound ÷ qty_per_bundle ÷ bundle DSR). 2) Need = (Target DOC − Effective DOC) × bundle DSR. 3) If need < vendor MOQ → don't order bundle, convert to core pieces instead. 4) Core order = own need + converted bundle pieces, rounded to case pack." },
   { term: "FIBDOC", desc: "FBA Inbound Days of Coverage." },
   { term: "PFIBDOC", desc: "Projected FIB DOC after restock." },
-  { term: "+RS", desc: "Toggle Bundle Inventory columns: B.FIB, B.SC, B.Res, B.Inb, 7f Missing Pieces." },
+  { term: "+RS", desc: "Toggle Bundle detail columns: FIB Pcs, SC Inv, Reserved, Inbound, 7f Missing." },
   { term: "+$", desc: "Toggle cost columns: InbS, CogP, CogC." },
+  { term: "FBA Pcs", desc: "Total FBA & Inbound Pieces for the core." },
   { term: "7f", desc: "Receiving Ledger (clipboard copy for spreadsheet)." },
   { term: "7g", desc: "COGS Ledger (clipboard copy for spreadsheet)." },
   { term: "7f Miss", desc: "Pieces Missing from 7f Receiving — inbound shipments not fully received." },
-  { term: "B.FIB", desc: "Aggregate FIB Inventory across all active bundles for a core." },
-  { term: "B.SC", desc: "Aggregate SC Inventory across all active bundles for a core." },
-  { term: "B.Res", desc: "Aggregate Reserved units across all active bundles for a core." },
-  { term: "B.Inb", desc: "Aggregate Inbound units across all active bundles for a core." },
+  { term: "B.FIB", desc: "Bundle FIB Inventory (sum of all active bundles for a core)." },
+  { term: "B.SC", desc: "Bundle SC Inventory (sum of all active bundles for a core)." },
+  { term: "B.Res", desc: "Bundle Reserved units (sum of all active bundles for a core)." },
+  { term: "B.Inb", desc: "Bundle Inbound units (sum of all active bundles for a core)." },
   { term: "RFQ", desc: "Request for Quote — like PO but without pricing columns." },
   { term: "AICOGS", desc: "All-In Cost of Goods Sold." },
   { term: "InbS", desc: "Inbound Shipping cost." },
@@ -98,6 +127,7 @@ const DEFAULT_GL = [
   { term: "+/−", desc: "Expand or collapse detail columns per core row." },
   { term: "✕", desc: "Dismiss a core row (hide it temporarily while reviewing). 'Show All' brings them back." },
   { term: "PO#", desc: "Auto-generated: PO-MMDDYY-VendorCode. Override with manual entry." },
+  { term: "Quick Sum", desc: "Click numeric cells to select them. Sum & Avg appear in the bottom bar. Click ✕ to clear." },
 ];
 
 function GlossTab() {
