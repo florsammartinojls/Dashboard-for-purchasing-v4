@@ -1,7 +1,17 @@
 import React, { useState, useMemo, useEffect } from "react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
 import { R, D1, $, $2, P, MN, YC, TTP, BL, TL, gS, cAI, cNQ, cOQ, cDA, gTD, dc, fE, fD, cMo, gY, cSeas } from "../lib/utils";
-import { Dot, TH } from "./Shared";
+import { Dot, TH, SumCtx } from "./Shared";
+
+// Clickable cell for Quick Sum
+function SC({ v, children, className }) {
+  const { addCell } = React.useContext(SumCtx);
+  const [sel, setSel] = React.useState(false);
+  const raw = typeof v === "number" ? v : parseFloat(v);
+  const ok = !isNaN(raw) && raw !== 0;
+  const tog = () => { if (!ok) return; if (sel) { addCell(raw, true); setSel(false) } else { addCell(raw, false); setSel(true) } };
+  return <td className={`${className || ''} ${sel ? "bg-blue-500/20 ring-1 ring-blue-500" : ""} ${ok ? "cursor-pointer select-none" : ""}`} onClick={tog}>{children}</td>;
+}
 
 // Derive DSR: use avgDsr if available, otherwise units/dataDays
 const getDsr = (h) => {
@@ -288,11 +298,12 @@ export default function CoreTab({ data, stg, hist, daily, coreId, onBack, goBund
                         <td className="py-0.5 px-1 text-gray-400">{r.month}</td>
                         {yrs.map(y => {
                           const oos = r["oos_" + y] || 0;
+                          const val = r["d_" + y];
                           return (
-                            <td key={y} className="py-0.5 px-2 text-right">
-                              <span className="text-white">{r["d_" + y] != null ? D1(r["d_" + y]) : ""}</span>
+                            <SC key={y} v={val} className="py-0.5 px-2 text-right">
+                              <span className="text-white">{val != null ? D1(val) : ""}</span>
                               {oos > 0 && <span className="ml-1 text-red-400 text-[9px]" title={oos + " OOS days"}>●</span>}
-                            </td>
+                            </SC>
                           );
                         })}
                       </tr>
@@ -306,9 +317,20 @@ export default function CoreTab({ data, stg, hist, daily, coreId, onBack, goBund
                         ? vals.reduce((s, x) => s + (getDsr(x) || 0), 0) / vals.length
                         : 0;
                       return (
-                        <td key={y} className="py-1.5 px-2 text-right text-white">
+                        <SC key={y} v={avg} className="py-1.5 px-2 text-right text-white">
                           {avg > 0 ? D1(avg) : ""}
-                        </td>
+                        </SC>
+                      );
+                    })}
+                  </tr>
+                  <tr className="border-t border-gray-700/50">
+                    <td className="py-1 px-1 text-gray-400">Total</td>
+                    {yrs.map(y => {
+                      const tot = cHF.filter(h => h.y === y).reduce((s, x) => s + (x.units || 0), 0);
+                      return (
+                        <SC key={y} v={tot} className="py-1 px-2 text-right text-gray-300">
+                          {tot > 0 ? R(tot) : ""}
+                        </SC>
                       );
                     })}
                   </tr>
