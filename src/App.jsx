@@ -225,7 +225,7 @@ export default function App() {
         {tab === "vendors" && <VendorsTab data={data} stg={stg} goVendor={goVendor} workflow={data.workflow} saveWorkflow={saveWorkflow} deleteWorkflow={deleteWorkflow} />}
         {tab === "glossary" && <GlossTab />}
       </main>
-      {showS && <Stg s={stg} setS={setStg} onClose={() => setShowS(false)} />}
+      {showS && <Stg s={{ bA: "yes", bI: "blank", ...stg }} setS={setStg} onClose={() => setShowS(false)} />}
       <SlidePanel open={!!(panelCoreId || panelBundleId)} onClose={() => { setPanelCoreId(null); setPanelBundleId(null) }}>
         {panelBundleId ? <BundleTab data={data} stg={stg} hist={hist} daily={daily} bundleId={panelBundleId} onBack={() => { setPanelBundleId(null); if (!panelCoreId) { setPanelCoreId(null) } }} goCore={id => { setPanelBundleId(null); setPanelCoreId(id) }} />
         : panelCoreId ? <CoreTab data={data} stg={stg} hist={hist} daily={daily} coreId={panelCoreId} onBack={() => setPanelCoreId(null)} goBundle={id => setPanelBundleId(id)} />
