@@ -37,11 +37,18 @@ export function NumInput({ value, onChange, placeholder, className }) {
     if (!focused) setLocal(value || '');
   }, [value, focused]);
 
+  const fmt = v => {
+    if (!v && v !== 0) return '';
+    const n = parseFloat(String(v).replace(/,/g, ''));
+    if (isNaN(n) || n === 0) return '';
+    return n.toLocaleString('en-US');
+  };
+
   return <input
     ref={ref}
     type="text"
     inputMode="decimal"
-    value={focused ? local : (value || '')}
+    value={focused ? local : fmt(value)}
     onFocus={() => { setFocused(true); setLocal(value || '') }}
     onChange={e => { const v = e.target.value.replace(/[^0-9.]/g, ''); setLocal(v) }}
     onBlur={() => { setFocused(false); onChange(Math.max(0, parseFloat(local) || 0)) }}
