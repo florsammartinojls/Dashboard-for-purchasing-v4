@@ -1,6 +1,16 @@
-import React, { useState, useMemo, useCallback, useEffect, Fragment } from "react";
+import React, { useState, useMemo, useCallback, useEffect, useContext, Fragment } from "react";
 import { R, D1, $, $2, $4, P, gS, cAI, cNQ, cOQ, cDA, bNQ, isD, gTD, dc, cSeas, fSl, fMY, fE, fDateUS, effectiveDSR, roundToCasePack, genPO, genRFQ, cp7f, cp7g } from "../lib/utils";
-import { Dot, Toast, TH, SS, WorkflowChip, NumInput } from "./Shared";
+import { Dot, Toast, TH, SS, WorkflowChip, NumInput, SumCtx } from "./Shared";
+
+// Clickable numeric cell for Quick Sum
+function SC({ v, children, className }) {
+  const { addCell } = useContext(SumCtx);
+  const [sel, setSel] = useState(false);
+  const raw = typeof v === "number" ? v : parseFloat(v);
+  const ok = !isNaN(raw) && raw !== 0;
+  const tog = () => { if (!ok) return; if (sel) { addCell(raw, true); setSel(false) } else { addCell(raw, false); setSel(true) } };
+  return <td className={`${className || ''} ${sel ? "bg-blue-500/20 ring-1 ring-blue-500" : ""} ${ok ? "cursor-pointer select-none" : ""}`} onClick={tog}>{children}</td>;
+}
 
 export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, setOv, initV, clearIV, saveWorkflow, deleteWorkflow }) {
   const [vm, setVm] = useState(initV ? "vendor" : "core");
@@ -31,7 +41,6 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
     return !isNaN(until.getTime()) && until >= new Date(new Date().toDateString());
   }, [data.workflow]);
 
-  // === MAPS ===
   const vMap = useMemo(() => { const m = {}; (data.vendors || []).forEach(v => m[v.name] = v); return m }, [data.vendors]);
   const vNames = useMemo(() => (data.vendors || []).map(v => v.name).sort(), [data.vendors]);
   const feMap = useMemo(() => { const m = {}; (data.fees || []).forEach(f => m[f.j] = f); return m }, [data.fees]);
@@ -43,49 +52,22 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
   }, [data.priceComp]);
   const agedMap = useMemo(() => { const m = {}; (data.agedInv || []).forEach(r => m[r.j] = r); return m }, [data.agedInv]);
   const killMap = useMemo(() => { const m = {}; (data.killMgmt || []).forEach(r => m[r.j] = r); return m }, [data.killMgmt]);
-  const recMap = useMemo(() => {
-    const m = {};
-    (data.receiving || []).forEach(r => { if (!m[r.core]) m[r.core] = []; m[r.core].push(r) });
-    return m;
-  }, [data.receiving]);
+  const recMap = useMemo(() => { const m = {}; (data.receiving || []).forEach(r => { if (!m[r.core]) m[r.core] = []; m[r.core].push(r) }); return m }, [data.receiving]);
 
   const bA = stg.bA || "yes"; const bI = stg.bI || "blank";
 
-  // === BUNDLE AGGREGATE MAP (for +RS columns) ===
-  const bundleAggMap = useMemo(() => {
+  // 7f missing map by JLS#
+  const missingMap = useMemo(() => {
     const m = {};
-    const activeBundles = (data.bundles || []).filter(b => {
-      if (bA === "yes" && b.active !== "Yes") return false;
-      if (bA === "no" && b.active === "Yes") return false;
-      return true;
-    });
-    activeBundles.forEach(b => {
-      const cid = b.core1;
-      if (!cid) return;
-      if (!m[cid]) m[cid] = { fib: 0, sc: 0, res: 0, inb: 0, miss: 0 };
-      m[cid].fib += b.fibInv || 0;
-      m[cid].sc += b.scInv || 0;
-      m[cid].res += b.reserved || 0;
-      m[cid].inb += b.inbound || 0;
-    });
-    // 7f missing: receiving where piecesMissing > 0
     (data.receiving || []).forEach(r => {
-      if (!(r.piecesMissing > 0)) return;
-      const rid = (r.core || "").trim().toLowerCase();
-      // Direct core match
-      Object.keys(m).forEach(cid => {
-        if (cid.trim().toLowerCase() === rid) m[cid].miss += r.piecesMissing;
-      });
-      // Bundle match → attribute to parent core
-      const parentBundle = activeBundles.find(b => b.j.trim().toLowerCase() === rid);
-      if (parentBundle && parentBundle.core1 && m[parentBundle.core1]) {
-        m[parentBundle.core1].miss += r.piecesMissing;
+      if (r.piecesMissing > 0) {
+        const k = (r.core || "").trim();
+        m[k] = (m[k] || 0) + r.piecesMissing;
       }
     });
     return m;
-  }, [data.bundles, data.receiving, bA]);
+  }, [data.receiving]);
 
-  // === ENRICHED CORES ===
   const enr = useMemo(() => (data.cores || []).filter(c => {
     if (stg.fA === "yes" && c.active !== "Yes") return false;
     if (stg.fA === "no" && c.active === "Yes") return false;
@@ -126,11 +108,10 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
     if (bI === "set" && !b.ignoreUntil) return false;
     if (vf && (b.vendors || "").indexOf(vf) < 0) return false;
     return true;
-  }).map(b => { const f = feMap[b.j]; const margin = f && f.aicogs > 0 ? ((f.gp / f.aicogs) * 100) : 0; return { ...b, fee: f, margin } }), [data.bundles, vf, feMap, bA, bI]);
+  }).map(b => { const f = feMap[b.j]; return { ...b, fee: f } }), [data.bundles, vf, feMap, bA, bI]);
 
   const sc = useMemo(() => { const c = { critical: 0, warning: 0, healthy: 0 }; enr.forEach(x => c[x.status]++); return c }, [enr]);
 
-  // === OV ACCESS ===
   const gO = id => ov[id] || {};
   const setF = (id, f, v) => setOv(p => ({ ...p, [id]: { ...(p[id] || {}), [f]: v } }));
   const gPcs = id => (gO(id).pcs ?? 0);
@@ -145,7 +126,6 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
   const aftD = (allIn, q, dsr) => q > 0 && dsr > 0 ? Math.round((allIn + q) / dsr) : null;
   const tot = useMemo(() => { let d = 0, a = 0, n = 0, o = 0, co = 0; enr.forEach(c => { d += c.dsr; a += c.allIn; n += c.needQty; o += c.orderQty; co += c.needDollar }); return { d, a, n, o, co } }, [enr]);
 
-  // === VENDOR GROUPS ===
   const vG = useMemo(() => {
     if (vm !== "vendor") return [];
     const g = {};
@@ -154,7 +134,6 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
     return Object.values(g).filter(grp => showIgnored || !isIgnored(grp.v.name)).sort((a, b) => b.cores.filter(c => c.status === "critical").length - a.cores.filter(c => c.status === "critical").length);
   }, [enr, vm, vMap, venBundles, isIgnored, showIgnored]);
 
-  // === PO ITEMS ===
   const getPOI = (cores, bundles) => {
     const items = [];
     cores.filter(c => hasCoreOrd(c)).forEach(c => items.push({ id: c.id, ti: c.ti, vsku: c.vsku, qty: coreEffQ(c), cost: c.cost, cp: c.casePack || 1, inbS: gInbS(c.id), isCoreItem: true }));
@@ -164,44 +143,32 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
 
   const autoPO = (vendorCode) => {
     if (poN) return poN;
-    const d = new Date();
-    const mm = String(d.getMonth() + 1).padStart(2, '0');
-    const dd = String(d.getDate()).padStart(2, '0');
-    const yy = String(d.getFullYear()).slice(2);
+    const d = new Date(); const mm = String(d.getMonth() + 1).padStart(2, '0'); const dd = String(d.getDate()).padStart(2, '0'); const yy = String(d.getFullYear()).slice(2);
     return 'PO-' + mm + dd + yy + '-' + (vendorCode || 'XXX');
   };
 
   const fillR = (cores, bundles, mode) => {
     const u = { ...ov };
     if (mode === "bundles") {
-      (bundles || []).forEach(b => {
-        const tg = cores[0]?.targetDoc || 90;
-        const need = bNQ(b, tg);
-        if (need > 0) u[b.j] = { ...(u[b.j] || {}), pcs: need };
-      });
+      (bundles || []).forEach(b => { const tg = cores[0]?.targetDoc || 90; const need = bNQ(b, tg); if (need > 0) u[b.j] = { ...(u[b.j] || {}), pcs: need } });
     } else if (mode === "mix") {
       const coreMap = {}; cores.forEach(c => { coreMap[c.id] = c });
-      const coreExtras = {}; const coresWithBundleOrders = new Set();
+      const coreExtras = {}; const cwo = new Set();
       (bundles || []).forEach(b => {
-        const tg = cores[0]?.targetDoc || 90; const parentCore = coreMap[b.core1];
-        if (!parentCore) return;
-        const qtyPerBundle = b.qty1 || 1; const coreInb = parentCore.inb || 0;
-        const extraDoc = b.cd > 0 ? Math.floor(coreInb / qtyPerBundle / b.cd) : 0;
-        const effectiveDoc = (b.doc || 0) + extraDoc;
-        const need = Math.ceil(Math.max(0, (tg - effectiveDoc) * b.cd));
+        const tg = cores[0]?.targetDoc || 90; const pc = coreMap[b.core1]; if (!pc) return;
+        const qpb = b.qty1 || 1; const ci = pc.inb || 0;
+        const ed = b.cd > 0 ? Math.floor(ci / qpb / b.cd) : 0;
+        const need = Math.ceil(Math.max(0, (tg - (b.doc || 0) - ed) * b.cd));
         if (need <= 0) return;
-        const moq = parentCore.moq || 0;
-        if (need < moq) { coreExtras[parentCore.id] = (coreExtras[parentCore.id] || 0) + (need * qtyPerBundle) }
-        else { u[b.j] = { ...(u[b.j] || {}), pcs: roundToCasePack(need, parentCore.casePack) }; coresWithBundleOrders.add(parentCore.id) }
+        if (need < (pc.moq || 0)) { coreExtras[pc.id] = (coreExtras[pc.id] || 0) + (need * qpb) }
+        else { u[b.j] = { ...(u[b.j] || {}), pcs: roundToCasePack(need, pc.casePack) }; cwo.add(pc.id) }
       });
       cores.forEach(c => {
         const extra = coreExtras[c.id] || 0;
         if (extra > 0) u[c.id] = { ...(u[c.id] || {}), pcs: cOQ(extra, c.moq, c.casePack) };
-        else if (!coresWithBundleOrders.has(c.id) && c.needQty > 0) u[c.id] = { ...(u[c.id] || {}), pcs: cOQ(c.needQty, c.moq, c.casePack) };
+        else if (!cwo.has(c.id) && c.needQty > 0) u[c.id] = { ...(u[c.id] || {}), pcs: cOQ(c.needQty, c.moq, c.casePack) };
       });
-    } else {
-      cores.filter(c => c.needQty > 0).forEach(c => { u[c.id] = { ...(u[c.id] || {}), pcs: cOQ(c.needQty, c.moq, c.casePack) } });
-    }
+    } else { cores.filter(c => c.needQty > 0).forEach(c => { u[c.id] = { ...(u[c.id] || {}), pcs: cOQ(c.needQty, c.moq, c.casePack) } }) }
     setOv(u);
   };
   const clrV = (cores, bundles) => { const u = { ...ov }; cores.forEach(c => { delete u[c.id] }); (bundles || []).forEach(b => { delete u[b.j] }); setOv(u) };
@@ -211,14 +178,10 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
 
   const getCombinedRec = (coreId) => {
     const recs = [...(recMap[coreId] || [])];
-    const bundleJls = (data.bundles || []).filter(b => b.core1 === coreId && b.active === "Yes").map(b => b.j);
-    bundleJls.forEach(j => { if (recMap[j]) recs.push(...recMap[j]) });
+    (data.bundles || []).filter(b => b.core1 === coreId && b.active === "Yes").forEach(b => { if (recMap[b.j]) recs.push(...recMap[b.j]) });
     return recs.sort((a, b) => (b.date || '').localeCompare(a.date || '')).slice(0, 4);
   };
-  const hasRecData = (coreId) => {
-    if (recMap[coreId]?.length) return true;
-    return (data.bundles || []).some(b => b.core1 === coreId && b.active === "Yes" && recMap[b.j]?.length);
-  };
+  const hasRecData = (coreId) => recMap[coreId]?.length || (data.bundles || []).some(b => b.core1 === coreId && b.active === "Yes" && recMap[b.j]?.length);
 
   // === CORE ROW ===
   const CoreRow = ({ c, mixAdj }) => {
@@ -227,34 +190,26 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
     const ad = aftD(c.allIn + adj, eq, c.dsr);
     const isCol = collapsed[c.id];
     const combinedRec = showPH[c.id] ? getCombinedRec(c.id) : [];
-    const ba = bundleAggMap[c.id] || { fib: 0, sc: 0, res: 0, inb: 0, miss: 0 };
 
     return <><tr className={`border-t border-gray-800/30 hover:bg-gray-800/20 text-xs ${hasCoreOrd(c) ? "bg-emerald-900/10" : ""}`}>
       <td className="py-1 px-1 sticky left-0 bg-gray-950 z-10"><Dot status={c.status} /></td>
-      <td className="py-1 px-1 text-blue-400 font-mono sticky left-5 bg-gray-950 z-10">{c.id}</td>
+      <td className="py-1 px-1 sticky left-5 bg-gray-950 z-10"><button onClick={() => goCore(c.id)} className="text-blue-400 font-mono hover:underline">{c.id}</button></td>
       <td className="py-1 px-1 text-gray-200 truncate max-w-[140px] sticky left-24 bg-gray-950 z-10">{c.ti}</td>
-      <td className="py-1 px-1 text-right">{D1(c.dsr)}</td>
-      <td className="py-1 px-1 text-right">{D1(c.d7)}</td>
-      <td className="py-1 px-1 text-center">{c.d7 > c.dsr ? <span className={c.spike ? "text-orange-400 font-bold" : "text-emerald-400"}>▲</span> : c.d7 < c.dsr ? <span className="text-red-400">▼</span> : "—"}{c.spike && <span className="text-orange-400 text-xs ml-0.5" title="Spike: 7D DSR 25%+ above DSR">⚡</span>}</td>
-      <td className={`py-1 px-1 text-right font-semibold ${dc(c.doc, c.critDays, c.warnDays)}`}>{R(c.doc)}</td>
-      <td className="py-1 px-1 text-right">{R(c.allIn)}</td>
+      <SC v={c.dsr} className="py-1 px-1 text-right">{D1(c.dsr)}</SC>
+      <SC v={c.d7} className="py-1 px-1 text-right">{D1(c.d7)}</SC>
+      <td className="py-1 px-1 text-center">{c.d7 > c.dsr ? <span className={c.spike ? "text-orange-400 font-bold" : "text-emerald-400"}>▲</span> : c.d7 < c.dsr ? <span className="text-red-400">▼</span> : "—"}{c.spike && <span className="text-orange-400 text-xs ml-0.5" title="Spike">⚡</span>}</td>
+      <SC v={c.doc} className={`py-1 px-1 text-right font-semibold ${dc(c.doc, c.critDays, c.warnDays)}`}>{R(c.doc)}</SC>
+      <SC v={c.allIn} className="py-1 px-1 text-right">{R(c.allIn)}</SC>
       <td className="py-1 px-1 text-right text-gray-400">{c.moq > 0 ? R(c.moq) : "—"}</td>
       <td className="py-1 px-1 text-right text-gray-400">{c.casePack > 0 ? R(c.casePack) : "—"}</td>
       <td className="py-1 px-1 text-center">{c.seas && <span className="text-purple-400 font-bold">{c.seas.peak}</span>}</td>
       {!isCol && <>
-        <td className="py-1 px-1 text-right">{R(c.raw)}</td>
-        <td className="py-1 px-1 text-right">{R(c.pp)}</td>
-        <td className="py-1 px-1 text-right">{R(c.inb)}</td>
-        <td className="py-1 px-1 text-right text-gray-400">—</td>
-        <td className="py-1 px-1 text-right text-gray-400">—</td>
+        <SC v={c.raw} className="py-1 px-1 text-right">{R(c.raw)}</SC>
+        <SC v={c.pp} className="py-1 px-1 text-right">{R(c.pp)}</SC>
+        <SC v={c.inb} className="py-1 px-1 text-right">{R(c.inb)}</SC>
+        <SC v={c.fba} className="py-1 px-1 text-right">{R(c.fba)}</SC>
       </>}
-      {showRS && <>
-        <td className="py-1 px-1 text-right text-cyan-300">{ba.fib > 0 ? R(ba.fib) : "—"}</td>
-        <td className="py-1 px-1 text-right">{ba.sc > 0 ? R(ba.sc) : "—"}</td>
-        <td className="py-1 px-1 text-right">{ba.res > 0 ? R(ba.res) : "—"}</td>
-        <td className="py-1 px-1 text-right">{ba.inb > 0 ? R(ba.inb) : "—"}</td>
-        <td className="py-1 px-1 text-right text-red-400">{ba.miss > 0 ? R(ba.miss) : "—"}</td>
-      </>}
+      {showRS && <td colSpan={5} className="py-1 px-1 text-center text-gray-600 text-[9px]">— core —</td>}
       <td className="py-1 border-l-2 border-gray-600 px-1" />
       <td className="py-0.5 px-0.5 sticky right-36 bg-gray-950 z-10"><NumInput value={gPcs(c.id)} onChange={v => setF(c.id, 'pcs', v)} /></td>
       <td className="py-0.5 px-0.5 sticky right-24 bg-gray-950 z-10"><NumInput value={gCas(c.id)} onChange={v => setF(c.id, 'cas', v)} /></td>
@@ -263,7 +218,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
         <td className="py-0.5 px-0.5"><NumInput value={gCogP(c.id)} onChange={v => setF(c.id, 'cogP', v)} /></td>
         <td className="py-0.5 px-0.5"><NumInput value={gCogC(c.id)} onChange={v => setF(c.id, 'cogC', v)} /></td>
       </>}
-      <td className="py-1 px-1 text-right text-amber-300 sticky right-12 bg-gray-950 z-10">{cost > 0 ? $(cost) : "—"}</td>
+      <SC v={cost} className="py-1 px-1 text-right text-amber-300 sticky right-12 bg-gray-950 z-10">{cost > 0 ? $(cost) : "—"}</SC>
       <td className={`py-1 px-1 text-right sticky right-0 bg-gray-950 z-10 ${ad ? dc(ad, c.critDays, c.warnDays) : "text-gray-500"}`}>{ad ? R(ad) : "—"}</td>
       <td className="py-1 px-0.5 flex gap-0.5">
         <button onClick={() => togCollapse(c.id)} className="text-gray-400 hover:text-white text-xs px-0.5">{isCol ? "+" : "−"}</button>
@@ -275,21 +230,26 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
     </tr>
     {showPH[c.id] && (pcMap[c.id] || combinedRec.length > 0) && <tr><td colSpan={40} className="p-0"><div className="bg-gray-800/50 px-4 py-2 space-y-3">
       {pcMap[c.id] && <div><div className="text-gray-500 text-xs font-semibold mb-1">💰 Purchase History (7g)</div><table className="w-full text-xs"><thead><tr className="text-gray-500"><th className="py-0.5 text-left">Date</th><th className="py-0.5 text-right">Pcs</th><th className="py-0.5 text-right">Material</th><th className="py-0.5 text-right">Inb Ship</th><th className="py-0.5 text-right">Tariffs</th><th className="py-0.5 text-right">Total</th><th className="py-0.5 text-right">CPP</th></tr></thead><tbody>{pcMap[c.id].map((r, i) => <tr key={i} className="border-t border-gray-700/30"><td className="py-0.5 text-gray-300">{fDateUS(r.date)}</td><td className="py-0.5 text-right">{R(r.pcs)}</td><td className="py-0.5 text-right">{$2(r.matPrice)}</td><td className="py-0.5 text-right text-gray-400">{$2(r.inbShip)}</td><td className="py-0.5 text-right text-gray-400">{$2(r.tariffs)}</td><td className="py-0.5 text-right">{$2(r.totalCost)}</td><td className="py-0.5 text-right text-amber-300">{$2(r.cpp)}</td></tr>)}</tbody></table></div>}
-      {combinedRec.length > 0 && <div><div className="text-gray-500 text-xs font-semibold mb-1">📦 Receiving (7f) — Last 4 orders</div><table className="w-full text-xs"><thead><tr className="text-gray-500"><th className="py-0.5 text-left">Date</th><th className="py-0.5 text-left">Vendor</th><th className="py-0.5 text-left">ID</th><th className="py-0.5 text-right">Pcs</th><th className="py-0.5 text-right">Cases</th><th className="py-0.5 text-left">Order #</th><th className="py-0.5 text-right">Missing</th></tr></thead><tbody>{combinedRec.map((r, i) => <tr key={i} className="border-t border-gray-700/30"><td className="py-0.5 text-gray-300">{fDateUS(r.date) || "—"}</td><td className="py-0.5 text-gray-300">{r.vendor || "—"}</td><td className="py-0.5 text-blue-400 font-mono">{r.core}</td><td className="py-0.5 text-right text-white">{R(r.pcs)}</td><td className="py-0.5 text-right">{r.cases > 0 ? R(r.cases) : "—"}</td><td className="py-0.5 text-gray-300">{r.orderNum || "—"}</td><td className={`py-0.5 text-right ${r.piecesMissing > 0 ? "text-red-400" : "text-gray-500"}`}>{r.piecesMissing > 0 ? R(r.piecesMissing) : "—"}</td></tr>)}</tbody></table></div>}
+      {combinedRec.length > 0 && <div><div className="text-gray-500 text-xs font-semibold mb-1">📦 Receiving (7f)</div><table className="w-full text-xs"><thead><tr className="text-gray-500"><th className="py-0.5 text-left">Date</th><th className="py-0.5 text-left">Vendor</th><th className="py-0.5 text-left">ID</th><th className="py-0.5 text-right">Pcs</th><th className="py-0.5 text-right">Cases</th><th className="py-0.5 text-left">Order #</th><th className="py-0.5 text-right">Missing</th></tr></thead><tbody>{combinedRec.map((r, i) => <tr key={i} className="border-t border-gray-700/30"><td className="py-0.5 text-gray-300">{fDateUS(r.date) || "—"}</td><td className="py-0.5 text-gray-300">{r.vendor || "—"}</td><td className="py-0.5 text-blue-400 font-mono">{r.core}</td><td className="py-0.5 text-right text-white">{R(r.pcs)}</td><td className="py-0.5 text-right">{r.cases > 0 ? R(r.cases) : "—"}</td><td className="py-0.5 text-gray-300">{r.orderNum || "—"}</td><td className={`py-0.5 text-right ${r.piecesMissing > 0 ? "text-red-400" : "text-gray-500"}`}>{r.piecesMissing > 0 ? R(r.piecesMissing) : "—"}</td></tr>)}</tbody></table></div>}
     </div></td></tr>}
     </>;
   };
 
-  // === BUNDLE ROW ===
+  // === BUNDLE ROW (now shows +RS columns with its own bundle data) ===
   const BundleRow = ({ b, indent }) => {
     const f = b.fee || feMap[b.j]; const eq = bundleEffQ(b); const cost = f ? (eq * (f.aicogs || 0)) : 0;
     const aged = agedMap[b.j]; const kill = killMap[b.j];
-    const isCol = collapsed[b.j];
     const bAfterDoc = eq > 0 && b.cd > 0 ? Math.round(((b.fibInv || 0) + eq) / b.cd) : null;
+    const bMiss = missingMap[b.j] || 0;
+    const scLink = b.asin ? `https://sellercentral.amazon.com/skucentral?mSku=${b.asin}` : null;
 
     return <tr className={`border-t border-gray-800/20 hover:bg-indigo-900/10 text-xs ${hasBundleOrd(b) ? "bg-emerald-900/10" : "bg-indigo-950/20"}`}>
       <td className="py-1 px-1 sticky left-0 bg-indigo-950/20 z-10" />
-      <td className="py-1 px-1 text-indigo-400 font-mono sticky left-5 bg-indigo-950/20 z-10">{indent ? "└ " : ""}{b.j}</td>
+      <td className="py-1 px-1 sticky left-5 bg-indigo-950/20 z-10">
+        {indent ? <span className="text-gray-600 mr-0.5">└</span> : null}
+        <button onClick={() => goBundle(b.j)} className="text-indigo-400 font-mono hover:underline">{b.j}</button>
+        {scLink && <a href={scLink} target="_blank" rel="noopener noreferrer" className="ml-1 text-gray-500 hover:text-blue-400 text-[9px]" title="Open in Seller Central">↗</a>}
+      </td>
       <td className="py-1 px-1 text-indigo-200 truncate max-w-[140px] sticky left-24 bg-indigo-950/20 z-10">
         {b.t}
         {aged && aged.fbaHealth !== "Healthy" && <span className={`ml-1 text-xs ${aged.fbaHealth === "At Risk" ? "text-amber-400" : "text-red-400"}`}>{aged.fbaHealth}</span>}
@@ -297,16 +257,22 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
         {kill && kill.latestEval && kill.latestEval.toLowerCase().includes('kill') && <span className="ml-1 text-xs text-red-400 font-bold">KILL</span>}
         {kill && kill.sellEval && kill.sellEval.toLowerCase().includes('sell') && <span className="ml-1 text-xs text-amber-400 font-bold">ST</span>}
       </td>
-      <td className="py-1 px-1 text-right text-indigo-300">{D1(b.cd)}</td>
-      <td className="py-1 px-1 text-right text-indigo-300">{D1(b.d7comp)}</td>
+      <SC v={b.cd} className="py-1 px-1 text-right text-indigo-300">{D1(b.cd)}</SC>
+      <SC v={b.d7comp} className="py-1 px-1 text-right text-indigo-300">{D1(b.d7comp)}</SC>
       <td className="py-1 px-1 text-center">{b.d7comp > b.cd ? <span className="text-emerald-400">▲</span> : b.d7comp < b.cd ? <span className="text-red-400">▼</span> : "—"}</td>
-      <td className="py-1 px-1 text-right text-indigo-300">{R(b.doc)}</td>
-      <td className="py-1 px-1 text-right text-indigo-300">{R(b.fibInv)}</td>
+      <SC v={b.doc} className="py-1 px-1 text-right text-indigo-300">{R(b.doc)}</SC>
+      <SC v={b.fibInv} className="py-1 px-1 text-right text-indigo-300">{R(b.fibInv)}</SC>
       <td className="py-1 px-1 text-gray-600">—</td>
       <td className="py-1 px-1 text-gray-600">—</td>
       <td className="py-1 px-1 text-center text-indigo-300">{b.replenTag || "—"}</td>
-      {!isCol && <td colSpan={5} />}
-      {showRS && <td colSpan={5} />}
+      {!collapsed[b.j] && <td colSpan={4} />}
+      {showRS && <>
+        <SC v={b.fibInv} className="py-1 px-1 text-right text-cyan-300">{R(b.fibInv)}</SC>
+        <SC v={b.scInv} className="py-1 px-1 text-right">{R(b.scInv)}</SC>
+        <SC v={b.reserved} className="py-1 px-1 text-right">{R(b.reserved)}</SC>
+        <SC v={b.inbound} className="py-1 px-1 text-right">{R(b.inbound)}</SC>
+        <td className="py-1 px-1 text-right text-red-400">{bMiss > 0 ? R(bMiss) : "—"}</td>
+      </>}
       <td className="py-1 border-l-2 border-gray-600 px-1" />
       <td className="py-0.5 px-0.5 sticky right-36 bg-indigo-950/20 z-10"><NumInput value={gPcs(b.j)} onChange={v => setF(b.j, 'pcs', v)} /></td>
       <td className="py-0.5 px-0.5 sticky right-24 bg-indigo-950/20 z-10"><NumInput value={gCas(b.j)} onChange={v => setF(b.j, 'cas', v)} /></td>
@@ -315,15 +281,15 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
         <td className="py-0.5 px-0.5"><NumInput value={gCogP(b.j)} onChange={v => setF(b.j, 'cogP', v)} /></td>
         <td className="py-0.5 px-0.5"><NumInput value={gCogC(b.j)} onChange={v => setF(b.j, 'cogC', v)} /></td>
       </>}
-      <td className="py-1 px-1 text-right text-amber-300 sticky right-12 bg-indigo-950/20 z-10">{cost > 0 ? $(cost) : "—"}</td>
+      <SC v={cost} className="py-1 px-1 text-right text-amber-300 sticky right-12 bg-indigo-950/20 z-10">{cost > 0 ? $(cost) : "—"}</SC>
       <td className={`py-1 px-1 text-right sticky right-0 bg-indigo-950/20 z-10 ${bAfterDoc ? (bAfterDoc <= 30 ? "text-red-400" : bAfterDoc <= 60 ? "text-amber-400" : "text-emerald-400") : ""}`}>{bAfterDoc ? R(bAfterDoc) : R(b.doc)}</td>
       <td className="py-1 px-1"><button onClick={() => goBundle(b.j)} className="text-indigo-400 px-0.5 bg-indigo-400/10 rounded text-xs">V</button></td>
     </tr>;
   };
 
-  // === TABLE HEADER (updated +RS = bundle aggregate columns) ===
-  const rsToggle = <button onClick={() => setShowRS(!showRS)} className={`text-xs px-1 py-0.5 rounded font-bold ${showRS ? "bg-purple-600 text-white" : "bg-gray-700 text-gray-400"}`} title="Toggle Bundle Inventory columns">{showRS ? "−" : "+"}RS</button>;
-  const costsToggle = <button onClick={() => setShowCosts(!showCosts)} className={`text-xs px-1 py-0.5 rounded font-bold ${showCosts ? "bg-teal-600 text-white" : "bg-gray-700 text-gray-400"}`} title="Toggle InbS/CogP/CogC columns">{showCosts ? "−" : "+"}$</button>;
+  // === TABLE HEADER — FibD+FibI merged to FBA Pcs, +RS = bundle detail ===
+  const rsToggle = <button onClick={() => setShowRS(!showRS)} className={`text-xs px-1 py-0.5 rounded font-bold ${showRS ? "bg-purple-600 text-white" : "bg-gray-700 text-gray-400"}`} title="Toggle Bundle detail columns">{showRS ? "−" : "+"}RS</button>;
+  const costsToggle = <button onClick={() => setShowCosts(!showCosts)} className={`text-xs px-1 py-0.5 rounded font-bold ${showCosts ? "bg-teal-600 text-white" : "bg-gray-700 text-gray-400"}`}>{showCosts ? "−" : "+"}$</button>;
 
   const VTH = ({ isCol }) => <tr className="text-gray-500 uppercase bg-gray-900 text-xs sticky top-0 z-20">
     <th className="py-2 px-1 w-5 sticky left-0 bg-gray-900 z-30" />
@@ -341,15 +307,14 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
       <TH tip="Raw / Potential Units" className="py-2 px-1 text-right">Raw</TH>
       <TH tip="PPRC Available" className="py-2 px-1 text-right">PPRC</TH>
       <TH tip="Inbound Pieces" className="py-2 px-1 text-right">Inb</TH>
-      <TH tip="FIB DOC (bundles)" className="py-2 px-1 text-right">FibD</TH>
-      <TH tip="FIB Inventory (bundles)" className="py-2 px-1 text-right">FibI</TH>
+      <TH tip="Total FBA & Inbound Pieces" className="py-2 px-1 text-right">FBA Pcs</TH>
     </>}
     {showRS && <>
-      <TH tip="Bundle FIB Inventory (aggregate)" className="py-2 px-1 text-right text-cyan-400">B.FIB</TH>
-      <TH tip="Bundle SC Inventory" className="py-2 px-1 text-right text-cyan-400">B.SC</TH>
-      <TH tip="Bundle Reserved" className="py-2 px-1 text-right text-cyan-400">B.Res</TH>
-      <TH tip="Bundle Inbound" className="py-2 px-1 text-right text-cyan-400">B.Inb</TH>
-      <TH tip="7f Receiving — Missing Pieces" className="py-2 px-1 text-right text-red-400">7f Miss</TH>
+      <TH tip="Bundle FIB Inventory" className="py-2 px-1 text-right text-cyan-400">FIB</TH>
+      <TH tip="Bundle SC Inventory" className="py-2 px-1 text-right text-cyan-400">SC</TH>
+      <TH tip="Bundle Reserved" className="py-2 px-1 text-right text-cyan-400">Res</TH>
+      <TH tip="Bundle Inbound" className="py-2 px-1 text-right text-cyan-400">Inb</TH>
+      <TH tip="7f Missing Pieces" className="py-2 px-1 text-right text-red-400">7f Miss</TH>
     </>}
     <th className="py-2 border-l-2 border-gray-600 px-1" />
     <TH tip="Pieces to Order" className="py-2 px-1 text-center sticky right-36 bg-gray-900 z-30">Pcs</TH>
@@ -364,7 +329,6 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
     <th className="py-2 px-1 w-16">{rsToggle} {costsToggle}</th>
   </tr>;
 
-  // === RENDER ===
   return <div className="p-4">{toast && <Toast msg={toast} onClose={() => setToast(null)} />}
     <div className="flex flex-wrap gap-2 items-center mb-4">
       <div className="flex bg-gray-800 rounded-lg p-0.5">{["core", "vendor"].map(m => <button key={m} onClick={() => setVm(m)} className={`px-3 py-1.5 rounded-md text-sm font-medium ${vm === m ? "bg-blue-600 text-white" : "text-gray-400"}`}>{m === "core" ? "By Core" : "By Vendor"}</button>)}</div>
@@ -380,13 +344,11 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
     </div>
     {vm === "vendor" && <div className="flex flex-wrap gap-3 mb-4 items-center text-sm"><span className="text-gray-500 text-xs">PO#:</span><input type="text" value={poN} onChange={e => setPoN(e.target.value)} placeholder="Auto" className="bg-gray-800 border border-gray-700 text-white rounded px-2 py-1 w-28 text-sm" /><span className="text-gray-500 text-xs">Date:</span><input type="date" value={poD} onChange={e => setPoD(e.target.value)} className="bg-gray-800 border border-gray-700 text-white rounded px-2 py-1 text-sm" lang="en-US" /><span className="text-gray-500 text-xs">Buyer:</span><span className="text-white font-semibold">{stg.buyer || <span className="text-red-400">Set in ⚙️</span>}</span></div>}
 
-    {/* === BY CORE VIEW === */}
-    {vm === "core" && <div className="overflow-x-auto rounded-xl border border-gray-800"><table className="w-full"><thead><tr className="bg-gray-900/80 text-xs text-gray-400 uppercase sticky top-0 z-20"><th className="py-3 px-2 w-8" /><th className="py-3 px-2 text-left">Core</th><th className="py-3 px-2 text-left cursor-pointer hover:text-white">Vendor</th><th className="py-3 px-2 text-left">Title</th><TH tip="Composite DSR" className="py-3 px-2 text-right">DSR</TH><TH tip="7-Day DSR" className="py-3 px-2 text-right">7D</TH><th className="py-3 px-2 text-center">T</th><TH tip="Days of Coverage" className="py-3 px-2 text-right">DOC</TH><TH tip="All-In Owned Pieces" className="py-3 px-2 text-right">All-In</TH><th className="py-3 px-2 text-right">MOQ</th><th className="py-3 px-2 text-center">S</th><th className="py-3 px-1 border-l-2 border-gray-600" /><th className="py-3 px-2 text-right">Need</th><th className="py-3 px-2 text-right">Order</th><th className="py-3 px-2 text-right">Cost</th><TH tip="DOC After Order" className="py-3 px-2 text-right">After</TH><th className="py-3 px-2 w-10" /></tr></thead>
-        <tbody>{enr.map(c => <tr key={c.id} className="border-b border-gray-800/50 hover:bg-gray-800/30 text-sm"><td className="py-2 px-2"><Dot status={c.status} /></td><td className="py-2 px-2 text-blue-400 font-mono text-xs">{c.id}</td><td className="py-2 px-2 text-blue-300 text-xs truncate max-w-[100px] cursor-pointer hover:underline" onClick={() => goVendor(c.ven)}>{c.ven}</td><td className="py-2 px-2 text-gray-200 truncate max-w-[180px]">{c.ti}</td><td className="py-2 px-2 text-right">{D1(c.dsr)}</td><td className="py-2 px-2 text-right">{D1(c.d7)}</td><td className="py-2 px-2 text-center">{c.d7 > c.dsr ? <span className="text-emerald-400">▲</span> : c.d7 < c.dsr ? <span className="text-red-400">▼</span> : "—"}</td><td className={`py-2 px-2 text-right font-semibold ${dc(c.doc, c.critDays, c.warnDays)}`}>{R(c.doc)}</td><td className="py-2 px-2 text-right">{R(c.allIn)}</td><td className="py-2 px-2 text-right text-gray-400 text-xs">{c.moq > 0 ? R(c.moq) : "—"}</td><td className="py-2 px-2 text-center">{c.seas && <span className="text-purple-400 text-xs font-bold">{c.seas.peak}</span>}</td><td className="py-2 px-1 border-l-2 border-gray-600" /><td className="py-2 px-2 text-right text-gray-300">{c.needQty > 0 ? R(c.needQty) : "—"}</td><td className="py-2 px-2 text-right text-white font-semibold">{c.orderQty > 0 ? R(c.orderQty) : "—"}</td><td className="py-2 px-2 text-right text-amber-300">{c.needDollar > 0 ? $(c.needDollar) : "—"}</td><td className={`py-2 px-2 text-right ${c.orderQty > 0 ? dc(c.docAfter, c.critDays, c.warnDays) : "text-gray-500"}`}>{c.orderQty > 0 ? R(c.docAfter) : "—"}</td><td className="py-2 px-2"><button onClick={() => goCore(c.id)} className="text-blue-400 text-xs px-1.5 py-0.5 bg-blue-400/10 rounded">V</button></td></tr>)}</tbody>
+    {vm === "core" && <div className="overflow-x-auto rounded-xl border border-gray-800"><table className="w-full"><thead><tr className="bg-gray-900/80 text-xs text-gray-400 uppercase sticky top-0 z-20"><th className="py-3 px-2 w-8" /><th className="py-3 px-2 text-left">Core</th><th className="py-3 px-2 text-left">Vendor</th><th className="py-3 px-2 text-left">Title</th><TH tip="Composite DSR" className="py-3 px-2 text-right">DSR</TH><TH tip="7-Day DSR" className="py-3 px-2 text-right">7D</TH><th className="py-3 px-2 text-center">T</th><TH tip="Days of Coverage" className="py-3 px-2 text-right">DOC</TH><TH tip="All-In Owned Pieces" className="py-3 px-2 text-right">All-In</TH><th className="py-3 px-2 text-right">MOQ</th><th className="py-3 px-2 text-center">S</th><th className="py-3 px-1 border-l-2 border-gray-600" /><th className="py-3 px-2 text-right">Need</th><th className="py-3 px-2 text-right">Order</th><th className="py-3 px-2 text-right">Cost</th><TH tip="DOC After Order" className="py-3 px-2 text-right">After</TH><th className="py-3 px-2 w-10" /></tr></thead>
+        <tbody>{enr.map(c => <tr key={c.id} className="border-b border-gray-800/50 hover:bg-gray-800/30 text-sm"><td className="py-2 px-2"><Dot status={c.status} /></td><td className="py-2 px-2"><button onClick={() => goCore(c.id)} className="text-blue-400 font-mono text-xs hover:underline">{c.id}</button></td><td className="py-2 px-2 text-blue-300 text-xs truncate max-w-[100px] cursor-pointer hover:underline" onClick={() => goVendor(c.ven)}>{c.ven}</td><td className="py-2 px-2 text-gray-200 truncate max-w-[180px]">{c.ti}</td><td className="py-2 px-2 text-right">{D1(c.dsr)}</td><td className="py-2 px-2 text-right">{D1(c.d7)}</td><td className="py-2 px-2 text-center">{c.d7 > c.dsr ? <span className="text-emerald-400">▲</span> : c.d7 < c.dsr ? <span className="text-red-400">▼</span> : "—"}</td><td className={`py-2 px-2 text-right font-semibold ${dc(c.doc, c.critDays, c.warnDays)}`}>{R(c.doc)}</td><td className="py-2 px-2 text-right">{R(c.allIn)}</td><td className="py-2 px-2 text-right text-gray-400 text-xs">{c.moq > 0 ? R(c.moq) : "—"}</td><td className="py-2 px-2 text-center">{c.seas && <span className="text-purple-400 text-xs font-bold">{c.seas.peak}</span>}</td><td className="py-2 px-1 border-l-2 border-gray-600" /><td className="py-2 px-2 text-right text-gray-300">{c.needQty > 0 ? R(c.needQty) : "—"}</td><td className="py-2 px-2 text-right text-white font-semibold">{c.orderQty > 0 ? R(c.orderQty) : "—"}</td><td className="py-2 px-2 text-right text-amber-300">{c.needDollar > 0 ? $(c.needDollar) : "—"}</td><td className={`py-2 px-2 text-right ${c.orderQty > 0 ? dc(c.docAfter, c.critDays, c.warnDays) : "text-gray-500"}`}>{c.orderQty > 0 ? R(c.docAfter) : "—"}</td><td className="py-2 px-2"><button onClick={() => goCore(c.id)} className="text-blue-400 text-xs px-1.5 py-0.5 bg-blue-400/10 rounded">V</button></td></tr>)}</tbody>
         <tfoot><tr className="bg-gray-900 border-t-2 border-gray-700 text-sm font-semibold"><td colSpan={4} className="py-3 px-2 text-gray-300">{enr.length}</td><td className="py-3 px-2 text-right text-white">{D1(tot.d)}</td><td colSpan={3} /><td className="py-3 px-2 text-right text-white">{R(tot.a)}</td><td colSpan={2} /><td className="border-l-2 border-gray-600" /><td className="py-3 px-2 text-right">{R(tot.n)}</td><td className="py-3 px-2 text-right text-white">{R(tot.o)}</td><td className="py-3 px-2 text-right text-amber-300">{$(tot.co)}</td><td colSpan={2} /></tr></tfoot>
       </table></div>}
 
-    {/* === BY VENDOR VIEW === */}
     {vm === "vendor" && vG.map(grp => {
       const v = grp.v; const tg = gTD(v, stg);
       const poI = getPOI(grp.cores, vendorSub !== "cores" ? grp.bundles : []);
@@ -414,7 +376,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
             <button onClick={() => clrV(grp.cores, grp.bundles)} className="text-xs bg-gray-700 text-gray-300 px-2.5 py-1 rounded">Clear</button>
             <button onClick={() => setDismissed({})} className="text-xs bg-gray-700 text-gray-300 px-2 py-1 rounded">Show All</button>
             <div className="ml-auto flex gap-2">
-              <button disabled={!poI.length} onClick={() => { genRFQ(v, poI, stg.buyer, poD, vendorPO); setToast("RFQ " + v.name + " — " + vendorPO) }} className={`text-xs px-3 py-1.5 rounded font-medium ${poI.length ? "bg-orange-600 text-white" : "bg-gray-700 text-gray-500 cursor-not-allowed"}`}>RFQ</button>
+              <button disabled={!poI.length} onClick={() => { genRFQ(v, poI, stg.buyer, poD, vendorPO); setToast("RFQ " + vendorPO) }} className={`text-xs px-3 py-1.5 rounded font-medium ${poI.length ? "bg-orange-600 text-white" : "bg-gray-700 text-gray-500 cursor-not-allowed"}`}>RFQ</button>
               <button disabled={!poI.length} onClick={() => { genPO(v, poI, vendorPO, stg.buyer, poD); setToast("PO " + vendorPO) }} className={`text-xs px-3 py-1.5 rounded font-medium ${poI.length ? "bg-emerald-600 text-white" : "bg-gray-700 text-gray-500 cursor-not-allowed"}`}>PO</button>
               <button disabled={!poI.length} onClick={() => { cp7f(v, poI, vendorPO, stg.buyer, poD); setToast("7f copied!") }} className={`text-xs px-3 py-1.5 rounded font-medium ${poI.length ? "bg-teal-600 text-white" : "bg-gray-700 text-gray-500 cursor-not-allowed"}`}>7f</button>
               <button disabled={!poI.length} onClick={() => { cp7g(v, poI, vendorPO, stg.buyer); setToast("7g copied!") }} className={`text-xs px-3 py-1.5 rounded font-medium ${poI.length ? "bg-purple-600 text-white" : "bg-gray-700 text-gray-500 cursor-not-allowed"}`}>7g</button>
@@ -426,7 +388,6 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
             </div>
           </div>
         </div>
-        {/* Scrollable table with sticky header */}
         <div className="overflow-auto max-h-[70vh]"><table className="w-full text-xs"><thead><VTH isCol={anyCol} /></thead><tbody>
           {vendorSub === "bundles" ? <>{grp.bundles.map(b => <BundleRow key={b.j} b={b} />)}{grp.bundles.length === 0 && <tr><td colSpan={40} className="py-4 text-center text-gray-500">No bundles</td></tr>}</>
             : vendorSub === "mix" ? <>{grp.cores.map(c => {
@@ -437,7 +398,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
                 if (bI === "blank" && !!b.ignoreUntil) return false;
                 if (bI === "set" && !b.ignoreUntil) return false;
                 return true;
-              }).map(b => ({ ...b, fee: feMap[b.j], margin: feMap[b.j] && feMap[b.j].aicogs > 0 ? ((feMap[b.j].gp / feMap[b.j].aicogs) * 100) : 0 }));
+              }).map(b => ({ ...b, fee: feMap[b.j] }));
               const bAdj = cBs.reduce((s, b) => s + bundleEffQ(b), 0);
               return <Fragment key={c.id}><CoreRow c={c} mixAdj={bAdj} />{!dismissed[c.id] && cBs.map(b => <BundleRow key={b.j} b={b} indent />)}</Fragment>;
             })}</>
