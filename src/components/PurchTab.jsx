@@ -198,7 +198,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
   const getCombinedRec = (coreId) => {
     const recs = [...(recMap[coreId] || [])];
     (data.bundles || []).filter(b => b.core1 === coreId && b.active === "Yes").forEach(b => { if (recMap[b.j]) recs.push(...recMap[b.j]) });
-    return recs.sort((a, b) => (b.date || '').localeCompare(a.date || '')).slice(0, 4);
+    return recs.sort((a, b) => (b.date || '').localeCompare(a.date || '')).slice(0, 7);
   };
   const hasRecData = (coreId) => recMap[coreId]?.length || (data.bundles || []).some(b => b.core1 === coreId && b.active === "Yes" && recMap[b.j]?.length);
 
