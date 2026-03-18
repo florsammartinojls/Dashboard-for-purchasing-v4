@@ -122,7 +122,7 @@ export default function BundleTab({ data, stg, hist, daily, bundleId, onBack, go
   </div>;
 
   // === DETAIL VIEW ===
-  const allInOwn = (b.fibInv || 0) + (b.scInv || 0) + (b.reserved || 0) + (b.inbound || 0);
+  const potentialUnits = (b.fibInv || 0) + (b.scInv || 0) + (b.reserved || 0) + (b.inbound || 0);
   return <div className="p-4 max-w-7xl mx-auto">
     <button onClick={() => { setSel(null); onBack() }} className="text-gray-400 hover:text-white text-sm mb-4">← Back</button>
     {/* Header */}
@@ -145,7 +145,16 @@ export default function BundleTab({ data, stg, hist, daily, bundleId, onBack, go
     </div>
     {/* KPI Cards */}
     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-      <div className="bg-gray-900 rounded-xl p-4 border border-gray-800"><h4 className="text-gray-500 text-xs uppercase mb-3">Sales & Inventory</h4><div className="grid grid-cols-3 gap-y-4">{[{ l: "C.DSR", v: D1(b.cd) }, { l: "All-In Own", v: R(allInOwn) }, { l: "DOC", v: R(b.doc) }, { l: "FIB DOC", v: R(b.fibDoc) }, { l: "FIB Inventory", v: R(b.fibInv) }, { l: "Reserved", v: R(b.reserved) }].map(k => <div key={k.l}><div className="text-gray-500 text-xs">{k.l}</div><div className="text-white font-bold text-lg">{k.v}</div></div>)}</div></div>
+      <div className="bg-gray-900 rounded-xl p-4 border border-gray-800"><h4 className="text-gray-500 text-xs uppercase mb-3">Sales & Inventory</h4><div className="grid grid-cols-3 gap-y-4">{[
+        { l: "C.DSR", v: D1(b.cd) },
+        { l: "Potential Units", v: R(potentialUnits) },
+        { l: "DOC", v: R(b.doc) },
+        { l: "FIB DOC", v: R(b.fibDoc) },
+        { l: "FIB Inventory", v: R(b.fibInv) },
+        { l: "SC Inventory", v: R(b.scInv) },
+        { l: "Pre-Processed", v: R(b.reserved) },
+        { l: "Inbound", v: R(b.inbound) },
+      ].map(k => <div key={k.l}><div className="text-gray-500 text-xs">{k.l}</div><div className="text-white font-bold text-lg">{k.v}</div></div>)}</div></div>
       <div className="bg-gray-900 rounded-xl p-4 border border-gray-800"><h4 className="text-gray-500 text-xs uppercase mb-3">Profitability</h4><div className="grid grid-cols-3 gap-y-4">{[{ l: "Price", v: fee?.pr }, { l: "COGS", v: fee?.pdmtCogs }, { l: "AICOGS", v: fee?.aicogs }, { l: "Fee", v: fee?.totalFee }, { l: "GP", v: fee?.gp, c: "text-emerald-400" }].map(k => <div key={k.l}><div className="text-gray-500 text-xs">{k.l}</div><div className={`font-bold text-lg ${k.c || "text-white"}`}>{k.v != null ? $2(k.v) : "—"}</div></div>)}</div></div>
     </div>
     {/* Revenue Table */}
