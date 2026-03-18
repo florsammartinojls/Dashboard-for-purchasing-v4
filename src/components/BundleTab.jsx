@@ -42,18 +42,6 @@ export default function BundleTab({ data, stg, hist, daily, bundleId, onBack, go
   const yD = useMemo(() => MN.map((m, i) => { const r = { month: m }; sYrs.forEach(y => { const x = sH.find(h => h.y === y && h.m === i + 1); r["u_" + y] = x?.units ?? null }); return r }), [sH, sYrs]);
   const uYTot = useMemo(() => { const t = {}; sYrs.forEach(y => { t[y] = sH.filter(h => h.y === y).reduce((s, x) => s + x.units, 0) }); return t }, [sH, sYrs]);
 
-  // Monthly DSR from bundleInv (aggregated daily — fills gaps like cores do)
-  const bInv = useMemo(() => (hist?.bundleInv || []).filter(h => h.j === sel), [hist, sel]);
-  const dsrYrs = useMemo(() => gY(bInv), [bInv]);
-  const dsrCh = useMemo(() => MN.map((m, i) => {
-    const r = { month: m };
-    dsrYrs.forEach(y => {
-      const h = bInv.find(x => x.y === y && x.m === i + 1);
-      r["d_" + y] = h?.avgDsr ?? null;
-    });
-    return r;
-  }), [bInv, dsrYrs]);
-
   // Daily (last 14d)
   const bDays = useMemo(() => (daily?.bundleDays || []).filter(d => d.j === sel).sort((a, x) => x.date.localeCompare(a.date)).slice(0, 14), [daily, sel]);
 
