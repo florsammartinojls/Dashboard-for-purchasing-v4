@@ -228,7 +228,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
         <SC v={c.inb} className="py-1 px-1 text-right">{R(c.inb)}</SC>
         <SC v={c.fba} className="py-1 px-1 text-right">{R(c.fba)}</SC>
       </>}
-      {showRS && <td colSpan={7} className="py-1 px-1 text-center text-gray-600 text-[9px]">— core —</td>}
+      {showRS && <td colSpan={7} />}
       <td className="py-1 border-l-2 border-gray-600 px-1" />
       <td className="py-0.5 px-0.5 sticky right-36 bg-gray-950 z-10"><NumInput value={gPcs(c.id)} onChange={v => setF(c.id, 'pcs', v)} /></td>
       <td className="py-0.5 px-0.5 sticky right-24 bg-gray-950 z-10"><NumInput value={gCas(c.id)} onChange={v => setF(c.id, 'cas', v)} /></td>
