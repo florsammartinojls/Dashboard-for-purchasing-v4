@@ -63,12 +63,34 @@ export default function BundleTab({ data, stg, hist, daily, bundleId, onBack, go
   const pCh = useMemo(() => MN.map((m, i) => { const r = { month: m }; pYrs.forEach(y => { const x = priceHist.find(h => h.y === y && h.m === i + 1); r["p_" + y] = x?.avgPrice ?? null }); return r }), [priceHist, pYrs]);
 
   // ABC
+  // Active bundle JLS# set (for filtering ABC, search, etc.)
+  const activeBundleSet = useMemo(() => {
+    const bA = stg.bA || "yes";
+    const bI = stg.bI || "blank";
+    const set = new Set();
+    (data.bundles || []).forEach(b => {
+      if (bA === "yes" && b.active !== "Yes") return;
+      if (bA === "no" && b.active === "Yes") return;
+      if (bI === "blank" && !!b.ignoreUntil) return;
+      if (bI === "set" && !b.ignoreUntil) return;
+      set.add(b.j);
+    });
+    return set;
+  }, [data.bundles, stg]);
+
   const abcSorted = useMemo(() => {
-    let arr = [...abcA];
+    // Sort first, then deduplicate by JLS# (keeps highest per sort)
+    let arr = [...abcA].filter(a => activeBundleSet.has(a.j)).sort((a, b) => abcSort === "rev" ? (b.rev - a.rev) : abcSort === "profit" ? (b.profit - a.profit) : (b.units - a.units));
+    const seen = {};
+    arr = arr.filter(a => {
+      if (seen[a.j]) return false;
+      seen[a.j] = true;
+      return true;
+    });
     if (abcFilter) arr = arr.filter(a => a.profABC === abcFilter);
     if (abcSF) arr = arr.filter(a => a.t.toLowerCase().includes(abcSF.toLowerCase()) || a.j.toLowerCase().includes(abcSF.toLowerCase()));
-    return arr.sort((a, b) => abcSort === "rev" ? (b.rev - a.rev) : abcSort === "profit" ? (b.profit - a.profit) : (b.units - a.units));
-  }, [abcA, abcSort, abcFilter, abcSF]);
+    return arr;
+  }, [abcA, abcSort, abcFilter, abcSF, activeBundleSet]);
 
   // === SEARCH VIEW ===
   if (!b) return <div className="p-4 max-w-5xl mx-auto">
