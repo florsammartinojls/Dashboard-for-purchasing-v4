@@ -227,12 +227,15 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
       (bundles || []).forEach(b => {
         const tg = cores[0]?.targetDoc || 90;
         const pc = coreMap[b.core1]; if (!pc) return;
-        const qpb = b.qty1 || 1; const ci = pc.inb || 0;
-        const ed = b.cd > 0 ? Math.floor(ci / qpb / b.cd) : 0;
-        const need = Math.ceil(Math.max(0, (tg - (b.doc || 0) - ed) * b.cd));
+        const rp = replenMap[b.j];
+        const pprc = rp?.pprcUnits || 0;
+        const baseInv = (b.fibInv || 0) + (b.inbound || 0) + pprc;
+        const baseDOC = b.cd > 0 ? baseInv / b.cd : 9999;
+        const need = Math.ceil(Math.max(0, (tg - baseDOC) * b.cd));
         if (need <= 0) return;
+        const qpb = b.qty1 || 1;
         if (bMoq > 0 && need < bMoq) {
-          if (pc) { coreExtrasFromBundles[pc.id] = (coreExtrasFromBundles[pc.id] || 0) + (need * qpb) }
+          coreExtrasFromBundles[pc.id] = (coreExtrasFromBundles[pc.id] || 0) + (need * qpb);
         } else {
           u[b.j] = { ...(u[b.j] || {}), pcs: bMoq > 0 ? Math.max(need, bMoq) : need };
         }
@@ -246,10 +249,13 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
       const coreExtras = {}; const cwo = new Set();
       (bundles || []).forEach(b => {
         const tg = cores[0]?.targetDoc || 90; const pc = coreMap[b.core1]; if (!pc) return;
-        const qpb = b.qty1 || 1; const ci = pc.inb || 0;
-        const ed = b.cd > 0 ? Math.floor(ci / qpb / b.cd) : 0;
-        const need = Math.ceil(Math.max(0, (tg - (b.doc || 0) - ed) * b.cd));
+        const rp = replenMap[b.j];
+        const pprc = rp?.pprcUnits || 0;
+        const baseInv = (b.fibInv || 0) + (b.inbound || 0) + pprc;
+        const baseDOC = b.cd > 0 ? baseInv / b.cd : 9999;
+        const need = Math.ceil(Math.max(0, (tg - baseDOC) * b.cd));
         if (need <= 0) return;
+        const qpb = b.qty1 || 1;
         const effectiveMoq = bMoq > 0 ? bMoq : (pc.moq || 0);
         if (need < effectiveMoq) {
           coreExtras[pc.id] = (coreExtras[pc.id] || 0) + (need * qpb);
