@@ -222,19 +222,21 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
     const u = { ...ov };
     const bMoq = gBMoq('_bmoq_' + vendorName);
     if (mode === "bundles") {
+      const coreMap = {}; cores.forEach(c => { coreMap[c.id] = c });
       const coreExtrasFromBundles = {};
       (bundles || []).forEach(b => {
-        const tg = cores[0]?.targetDoc || 90; const need = bNQ(b, tg);
+        const tg = cores[0]?.targetDoc || 90;
+        const pc = coreMap[b.core1]; if (!pc) return;
+        const qpb = b.qty1 || 1; const ci = pc.inb || 0;
+        const ed = b.cd > 0 ? Math.floor(ci / qpb / b.cd) : 0;
+        const need = Math.ceil(Math.max(0, (tg - (b.doc || 0) - ed) * b.cd));
         if (need <= 0) return;
         if (bMoq > 0 && need < bMoq) {
-          // Below MOQ → convert to core pieces
-          const pc = cores.find(c => c.id === b.core1);
-          if (pc) { coreExtrasFromBundles[pc.id] = (coreExtrasFromBundles[pc.id] || 0) + (need * (b.qty1 || 1)) }
+          if (pc) { coreExtrasFromBundles[pc.id] = (coreExtrasFromBundles[pc.id] || 0) + (need * qpb) }
         } else {
           u[b.j] = { ...(u[b.j] || {}), pcs: bMoq > 0 ? Math.max(need, bMoq) : need };
         }
       });
-      // Add converted pieces to cores
       cores.forEach(c => {
         const extra = coreExtrasFromBundles[c.id] || 0;
         if (extra > 0) u[c.id] = { ...(u[c.id] || {}), pcs: cOQ(extra, c.moq, c.casePack) };
