@@ -73,62 +73,6 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
     return m;
   }, [data.replenRec]);
 
-  // Raw waterfall allocation: distribute core raw to bundles by lowest effective DOC first
-  const rawAllocMap = useMemo(() => {
-    const map = {};
-    const activeBundles = (data.bundles || []).filter(b => {
-      if (bA === "yes" && b.active !== "Yes") return false;
-      if (bA === "no" && b.active === "Yes") return false;
-      return true;
-    });
-    // Group bundles by core1
-    const coreGroups = {};
-    activeBundles.forEach(b => {
-      if (!b.core1) return;
-      if (!coreGroups[b.core1]) coreGroups[b.core1] = [];
-      coreGroups[b.core1].push(b);
-    });
-    // For each enriched core, allocate raw
-    enr.forEach(c => {
-      const bundles = coreGroups[c.id] || [];
-      if (bundles.length === 0) return;
-      let pool = c.raw || 0;
-      // Compute base DOC for each bundle: (FIB + Inbound + PPRC) / DSR
-      const bData = bundles.map(b => {
-        const rp = replenMap[b.j];
-        const pprc = rp?.pprcUnits || 0;
-        const inv = (b.fibInv || 0) + (b.inbound || 0) + pprc;
-        const dsr = b.cd || 0;
-        const baseDOC = dsr > 0 ? inv / dsr : 9999;
-        const qtyPerBundle = b.qty1 || 1;
-        return { j: b.j, baseDOC, dsr, qtyPerBundle, inv };
-      }).filter(x => x.dsr > 0).sort((a, b) => a.baseDOC - b.baseDOC);
-      const tg = c.targetDoc || 180;
-      // Allocate raw to bundles with lowest DOC first
-      bData.forEach(bd => {
-        if (pool <= 0) { map[bd.j] = { rawUnits: 0, baseDOC: bd.baseDOC, baseInv: bd.inv }; return }
-        const needDOC = Math.max(0, tg - bd.baseDOC);
-        const needBundleUnits = needDOC * bd.dsr;
-        const needCorePieces = needBundleUnits * bd.qtyPerBundle;
-        const givePieces = Math.min(needCorePieces, pool);
-        pool -= givePieces;
-        const giveUnits = bd.qtyPerBundle > 0 ? givePieces / bd.qtyPerBundle : 0;
-        map[bd.j] = { rawUnits: giveUnits, baseDOC: bd.baseDOC, baseInv: bd.inv };
-      });
-      // Store baseDOC for bundles that got nothing (DSR=0 etc)
-      bundles.forEach(b => {
-        if (!map[b.j]) {
-          const rp = replenMap[b.j];
-          const pprc = rp?.pprcUnits || 0;
-          const inv = (b.fibInv || 0) + (b.inbound || 0) + pprc;
-          const dsr = b.cd || 0;
-          map[b.j] = { rawUnits: 0, baseDOC: dsr > 0 ? inv / dsr : 0, baseInv: inv };
-        }
-      });
-    });
-    return map;
-  }, [enr, data.bundles, replenMap, bA]);
-
   // 7f missing map by JLS#
   const missingMap = useMemo(() => {
     const m = {};
@@ -184,6 +128,57 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
   }).map(b => { const f = feMap[b.j]; return { ...b, fee: f } }), [data.bundles, vf, feMap, bA, bI]);
 
   const sc = useMemo(() => { const c = { critical: 0, warning: 0, healthy: 0 }; enr.forEach(x => c[x.status]++); return c }, [enr]);
+
+  // Raw waterfall allocation: distribute core raw to bundles by lowest effective DOC first
+  const rawAllocMap = useMemo(() => {
+    const map = {};
+    const activeBundles = (data.bundles || []).filter(b => {
+      if (bA === "yes" && b.active !== "Yes") return false;
+      if (bA === "no" && b.active === "Yes") return false;
+      return true;
+    });
+    const coreGroups = {};
+    activeBundles.forEach(b => {
+      if (!b.core1) return;
+      if (!coreGroups[b.core1]) coreGroups[b.core1] = [];
+      coreGroups[b.core1].push(b);
+    });
+    enr.forEach(c => {
+      const bundles = coreGroups[c.id] || [];
+      if (bundles.length === 0) return;
+      let pool = c.raw || 0;
+      const bData = bundles.map(b => {
+        const rp = replenMap[b.j];
+        const pprc = rp?.pprcUnits || 0;
+        const inv = (b.fibInv || 0) + (b.inbound || 0) + pprc;
+        const dsr = b.cd || 0;
+        const baseDOC = dsr > 0 ? inv / dsr : 9999;
+        const qtyPerBundle = b.qty1 || 1;
+        return { j: b.j, baseDOC, dsr, qtyPerBundle, inv };
+      }).filter(x => x.dsr > 0).sort((a, b) => a.baseDOC - b.baseDOC);
+      const tg = c.targetDoc || 180;
+      bData.forEach(bd => {
+        if (pool <= 0) { map[bd.j] = { rawUnits: 0, baseDOC: bd.baseDOC, baseInv: bd.inv }; return }
+        const needDOC = Math.max(0, tg - bd.baseDOC);
+        const needBundleUnits = needDOC * bd.dsr;
+        const needCorePieces = needBundleUnits * bd.qtyPerBundle;
+        const givePieces = Math.min(needCorePieces, pool);
+        pool -= givePieces;
+        const giveUnits = bd.qtyPerBundle > 0 ? givePieces / bd.qtyPerBundle : 0;
+        map[bd.j] = { rawUnits: giveUnits, baseDOC: bd.baseDOC, baseInv: bd.inv };
+      });
+      bundles.forEach(b => {
+        if (!map[b.j]) {
+          const rp = replenMap[b.j];
+          const pprc = rp?.pprcUnits || 0;
+          const inv = (b.fibInv || 0) + (b.inbound || 0) + pprc;
+          const dsr = b.cd || 0;
+          map[b.j] = { rawUnits: 0, baseDOC: dsr > 0 ? inv / dsr : 0, baseInv: inv };
+        }
+      });
+    });
+    return map;
+  }, [enr, data.bundles, replenMap, bA]);
 
   const gO = id => ov[id] || {};
   const setF = (id, f, v) => setOv(p => ({ ...p, [id]: { ...(p[id] || {}), [f]: v } }));
