@@ -3,7 +3,6 @@ import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, L
 import { R, D1, $, $2, P, MN, YC, TTP, gS, gY, cMo, fD } from "../lib/utils";
 import { Dot, TH, AbcBadge, HealthBadge, KillBadge, SumCtx } from "./Shared";
 
-// Clickable cell for Quick Sum
 function SC({ v, children, className }) {
   const { addCell } = React.useContext(SumCtx);
   const [sel, setSel] = React.useState(false);
@@ -36,11 +35,8 @@ export default function BundleTab({ data, stg, hist, daily, bundleId, onBack, go
   const bKill = sel ? killMap[sel] : null;
   const bStatus = b ? gS(b.doc, 60, 30, { critDays: 30, warnDays: 60 }) : "healthy";
 
-  // Bundle inventory history (merged summary + daily aggregation)
+  // Bundle inventory history (merged summary + daily aggregation) → Units = sum of Complete DSR
   const bInv = useMemo(() => (hist?.bundleInv || []).filter(h => h.j === sel), [hist, sel]);
-  const dsrCh = []; // legacy, no longer used
-
-  // Monthly Units from bundleInv (sum of Complete DSR, merged summary + daily agg)
   const uYrs = useMemo(() => gY(bInv), [bInv]);
   const yD = useMemo(() => MN.map((m, i) => {
     const r = { month: m };
@@ -69,8 +65,7 @@ export default function BundleTab({ data, stg, hist, daily, bundleId, onBack, go
   const pYrs = useMemo(() => gY(priceHist), [priceHist]);
   const pCh = useMemo(() => MN.map((m, i) => { const r = { month: m }; pYrs.forEach(y => { const x = priceHist.find(h => h.y === y && h.m === i + 1); r["p_" + y] = x?.avgPrice ?? null }); return r }), [priceHist, pYrs]);
 
-  // ABC
-  // Active bundle JLS# set (for filtering ABC, search, etc.)
+  // Active bundle filter set
   const activeBundleSet = useMemo(() => {
     const bA = stg.bA || "yes";
     const bI = stg.bI || "blank";
@@ -85,15 +80,11 @@ export default function BundleTab({ data, stg, hist, daily, bundleId, onBack, go
     return set;
   }, [data.bundles, stg]);
 
+  // ABC sorted + deduped + filtered
   const abcSorted = useMemo(() => {
-    // Sort first, then deduplicate by JLS# (keeps highest per sort)
     let arr = [...abcA].filter(a => activeBundleSet.has(a.j)).sort((a, b) => abcSort === "rev" ? (b.rev - a.rev) : abcSort === "profit" ? (b.profit - a.profit) : (b.units - a.units));
     const seen = {};
-    arr = arr.filter(a => {
-      if (seen[a.j]) return false;
-      seen[a.j] = true;
-      return true;
-    });
+    arr = arr.filter(a => { if (seen[a.j]) return false; seen[a.j] = true; return true });
     if (abcFilter) arr = arr.filter(a => a.profABC === abcFilter);
     if (abcSF) arr = arr.filter(a => a.t.toLowerCase().includes(abcSF.toLowerCase()) || a.j.toLowerCase().includes(abcSF.toLowerCase()));
     return arr;
@@ -105,7 +96,10 @@ export default function BundleTab({ data, stg, hist, daily, bundleId, onBack, go
       <button onClick={onBack} className="text-gray-400 hover:text-white text-sm">← Back</button>
       <input type="text" placeholder="Search JLS# or ASIN..." value={s} onChange={e => setS(e.target.value)} className="bg-gray-800 border border-gray-700 text-white rounded-lg px-4 py-2.5 flex-1 max-w-md text-sm" />
     </div>
-    {s.length >= 2 ? <div className="space-y-1">{(data.bundles || []).filter(x => { const q = s.toLowerCase(); return x.j.toLowerCase().includes(q) || x.t.toLowerCase().includes(q) || (x.asin && x.asin.toLowerCase().includes(q)) }).slice(0, 12).map(x => {
+    {s.length >= 2 ? <div className="space-y-1">{(data.bundles || []).filter(x => {
+      if (!activeBundleSet.has(x.j)) return false;
+      const q = s.toLowerCase(); return x.j.toLowerCase().includes(q) || x.t.toLowerCase().includes(q) || (x.asin && x.asin.toLowerCase().includes(q));
+    }).slice(0, 12).map(x => {
       const xS = gS(x.doc, 60, 30, { critDays: 30, warnDays: 60 });
       const xA = agedMap[x.j]; const xK = killMap[x.j];
       return <button key={x.j} onClick={() => setSel(x.j)} className="w-full text-left px-4 py-2.5 rounded-lg bg-gray-900/50 hover:bg-gray-800 flex items-center gap-3">
@@ -174,7 +168,7 @@ export default function BundleTab({ data, stg, hist, daily, bundleId, onBack, go
     </div>
     {/* KPI Cards */}
     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-      <div className="bg-gray-900 rounded-xl p-4 border border-gray-800"><h4 className="text-gray-500 text-xs uppercase mb-3">Sales & Inventory</h4><div className="grid grid-cols-3 gap-y-4">{[
+      <div className="bg-gray-900 rounded-xl p-4 border border-gray-800"><h4 className="text-gray-500 text-xs uppercase mb-3">Sales & Inventory</h4><div className="grid grid-cols-4 gap-y-4">{[
         { l: "C.DSR", v: D1(b.cd) },
         { l: "Potential Units", v: R(potentialUnits) },
         { l: "DOC", v: R(b.doc) },
@@ -192,60 +186,51 @@ export default function BundleTab({ data, stg, hist, daily, bundleId, onBack, go
     {bDays.length > 0 && <div className="bg-gray-900 rounded-xl p-4 mb-4 border border-gray-800"><h3 className="text-white font-semibold text-sm mb-3">Daily ({bDays.length}d)</h3><div className="overflow-x-auto"><table className="w-full text-xs"><thead><tr className="text-gray-500 uppercase"><th className="py-1 px-1 text-left">Date</th><th className="py-1 px-1 text-right">DSR</th><th className="py-1 px-1 text-right">1D</th><th className="py-1 px-1 text-right">3D</th><th className="py-1 px-1 text-right">7D</th><th className="py-1 px-1 text-right">DOC</th><th className="py-1 px-1 text-right">FIB</th><th className="py-1 px-1 text-right">SC</th><th className="py-1 px-1 text-right">Res</th><th className="py-1 px-1 text-right">Inb</th><th className="py-1 px-1 text-right">Cash</th></tr></thead><tbody>{bDays.map((d, i) => <tr key={d.date} className={i % 2 === 0 ? "bg-gray-800/30" : ""}><td className="py-1 px-1 text-gray-300 whitespace-nowrap">{fD(d.date)}</td><td className="py-1 px-1 text-right text-white font-semibold">{D1(d.dsr)}</td><td className="py-1 px-1 text-right">{D1(d.d1)}</td><td className="py-1 px-1 text-right">{D1(d.d3)}</td><td className="py-1 px-1 text-right">{D1(d.d7)}</td><td className="py-1 px-1 text-right">{R(d.doc)}</td><td className="py-1 px-1 text-right">{R(d.fib)}</td><td className="py-1 px-1 text-right">{R(d.sc)}</td><td className="py-1 px-1 text-right">{R(d.res)}</td><td className="py-1 px-1 text-right">{R(d.inb)}</td><td className="py-1 px-1 text-right">{$(d.cash)}</td></tr>)}</tbody></table></div></div>}
     {/* Recent Sales */}
     {sale && <div className="bg-gray-900 rounded-xl p-4 mb-4 border border-gray-800"><h3 className="text-white font-semibold text-sm mb-3">Recent</h3><div className="grid grid-cols-2 sm:grid-cols-4 gap-4">{[{ l: "This Mo", u: sale.tmU, r: sale.tmR, p: sale.tmP }, { l: "Last Mo", u: sale.lmU, r: sale.lmR, p: sale.lmP }, { l: "7d", u: sale.l7U, r: sale.l7R, p: sale.l7P }, { l: "28d", u: sale.l28U, r: sale.l28R, p: sale.l28P }].map(x => <div key={x.l}><div className="text-gray-500 text-xs">{x.l}</div><div className="text-white font-semibold">{R(x.u)} u</div><div className="text-gray-400 text-xs">{$(x.r)}</div><div className="text-emerald-400 text-xs">{$(x.p)}</div></div>)}</div></div>}
-
-    {/* Monthly DSR (YoY) — from bundleInv (aggregated daily, fills gaps) */}
+    {/* YoY Units (sum of Complete DSR) + Price History */}
     {bInv.length > 0 && <div className="bg-gray-900 rounded-xl p-4 mb-4 border border-gray-800">
-      <h3 className="text-white font-semibold text-sm mb-2">Monthly DSR (YoY)</h3>
+      <h3 className="text-white font-semibold text-sm mb-2">YoY Units & Price</h3>
       <div className="flex flex-col lg:flex-row gap-4">
         <div className="flex-1 min-w-0">
           <ResponsiveContainer width="100%" height={240}>
-            <LineChart data={dsrCh}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
-              <XAxis dataKey="month" tick={{ fill: "#9ca3af", fontSize: 11 }} axisLine={{ stroke: "#374151" }} tickLine={false} />
-              <YAxis tick={{ fill: "#9ca3af", fontSize: 11 }} axisLine={false} tickLine={false} domain={['auto', 'auto']} />
-              <Tooltip contentStyle={{ backgroundColor: "#111827", border: "1px solid #374151", borderRadius: "8px", fontSize: 12 }} />
-              <Legend wrapperStyle={{ fontSize: 11 }} />
-              {dsrYrs.map(y => (
-                <Line key={y} dataKey={"d_" + y} stroke={YC[y] || "#6b7280"} strokeWidth={2.5}
-                  dot={{ r: 3, fill: YC[y] || "#6b7280", strokeWidth: 0 }}
-                  activeDot={{ r: 5, strokeWidth: 2, stroke: "#fff" }}
-                  connectNulls name={String(y)} />
-              ))}
-            </LineChart>
+            <BarChart data={yD}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+              <XAxis dataKey="month" tick={{ fill: "#9ca3af", fontSize: 10 }} />
+              <YAxis tick={{ fill: "#9ca3af", fontSize: 10 }} />
+              <Tooltip {...TTP} />
+              <Legend />
+              {uYrs.map(y => <Bar key={y} dataKey={"u_" + y} fill={YC[y] || "#6b7280"} opacity={0.85} radius={[2, 2, 0, 0]} name={"Units " + y} />)}
+            </BarChart>
           </ResponsiveContainer>
+          {priceHist.length > 0 && <ResponsiveContainer width="100%" height={140}>
+            <LineChart data={pCh}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+              <XAxis dataKey="month" tick={{ fill: "#9ca3af", fontSize: 10 }} />
+              <YAxis tick={{ fill: "#9ca3af", fontSize: 10 }} domain={['auto', 'auto']} />
+              <Tooltip {...TTP} />
+              <Legend />
+              {pYrs.map(y => <Line key={y} dataKey={"p_" + y} stroke={YC[y] || "#6b7280"} strokeWidth={2} dot={{ r: 2 }} connectNulls name={"$" + y} />)}
+            </LineChart>
+          </ResponsiveContainer>}
         </div>
         <div className="lg:w-72 overflow-x-auto">
           <table className="w-full text-xs">
-            <thead><tr className="text-gray-500 border-b border-gray-700">
-              <th className="py-1.5 px-1 text-left">Mo</th>
-              {dsrYrs.map(y => <th key={y} className="py-1.5 px-2 text-right font-semibold" style={{ color: YC[y] || "#6b7280" }}>{y}</th>)}
+            <thead><tr className="text-gray-500">
+              <th className="py-1 px-1 text-left">Mo</th>
+              {uYrs.map(y => <th key={y} className="py-1 px-1 text-right" style={{ color: YC[y] || "#6b7280" }}>{y}</th>)}
             </tr></thead>
             <tbody>
-              {dsrCh.map((r, i) => (
-                <tr key={i} className={i % 2 === 0 ? "bg-gray-800/20" : ""}>
-                  <td className="py-0.5 px-1 text-gray-400">{r.month}</td>
-                  {dsrYrs.map(y => (
-                    <SC key={y} v={r["d_" + y]} className="py-0.5 px-2 text-right">
-                      <span className="text-white">{r["d_" + y] != null ? D1(r["d_" + y]) : ""}</span>
-                    </SC>
-                  ))}
-                </tr>
-              ))}
-              <tr className="border-t border-gray-600 font-semibold">
-                <td className="py-1.5 px-1 text-gray-300">Avg</td>
-                {dsrYrs.map(y => {
-                  const vals = bInv.filter(h => h.y === y);
-                  const avg = vals.length > 0 ? vals.reduce((s, x) => s + (x.avgDsr || 0), 0) / vals.length : 0;
-                  return <SC key={y} v={avg} className="py-1.5 px-2 text-right text-white">{avg > 0 ? D1(avg) : ""}</SC>;
-                })}
+              {yD.map((r, i) => <tr key={i} className={i % 2 === 0 ? "bg-gray-800/20" : ""}>
+                <td className="py-0.5 px-1 text-gray-300">{r.month}</td>
+                {uYrs.map(y => <SC key={y} v={r["u_" + y]} className="py-0.5 px-1 text-right text-white">{r["u_" + y] != null ? R(r["u_" + y]) : ""}</SC>)}
+              </tr>)}
+              <tr className="border-t border-gray-700 font-semibold">
+                <td className="py-1 px-1">Total</td>
+                {uYrs.map(y => <SC key={y} v={uYTot[y]} className="py-1 px-1 text-right text-white">{R(uYTot[y])}</SC>)}
               </tr>
             </tbody>
           </table>
         </div>
       </div>
     </div>}
-
-    {/* YoY Units (bars) + Price History (lines) — from bundleSales */}
-    {sH.length > 0 && <div className="bg-gray-900 rounded-xl p-4 mb-4 border border-gray-800"><h3 className="text-white font-semibold text-sm mb-2">YoY Units & Price</h3><div className="flex flex-col lg:flex-row gap-4"><div className="flex-1 min-w-0"><ResponsiveContainer width="100%" height={240}><BarChart data={yD}><CartesianGrid strokeDasharray="3 3" stroke="#374151" /><XAxis dataKey="month" tick={{ fill: "#9ca3af", fontSize: 10 }} /><YAxis tick={{ fill: "#9ca3af", fontSize: 10 }} /><Tooltip {...TTP} /><Legend />{sYrs.map(y => <Bar key={y} dataKey={"u_" + y} fill={YC[y] || "#6b7280"} opacity={0.85} radius={[2, 2, 0, 0]} name={"Units " + y} />)}</BarChart></ResponsiveContainer>{priceHist.length > 0 && <ResponsiveContainer width="100%" height={140}><LineChart data={pCh}><CartesianGrid strokeDasharray="3 3" stroke="#374151" /><XAxis dataKey="month" tick={{ fill: "#9ca3af", fontSize: 10 }} /><YAxis tick={{ fill: "#9ca3af", fontSize: 10 }} domain={['auto', 'auto']} /><Tooltip {...TTP} /><Legend />{pYrs.map(y => <Line key={y} dataKey={"p_" + y} stroke={YC[y] || "#6b7280"} strokeWidth={2} dot={{ r: 2 }} connectNulls name={"$" + y} />)}</LineChart></ResponsiveContainer>}</div><div className="lg:w-72 overflow-x-auto"><table className="w-full text-xs"><thead><tr className="text-gray-500"><th className="py-1 px-1 text-left">Mo</th>{sYrs.map(y => <th key={y} className="py-1 px-1 text-right" style={{ color: YC[y] || "#6b7280" }}>{y}</th>)}</tr></thead><tbody>{yD.map((r, i) => <tr key={i} className={i % 2 === 0 ? "bg-gray-800/20" : ""}><td className="py-0.5 px-1 text-gray-300">{r.month}</td>{sYrs.map(y => <SC key={y} v={r["u_" + y]} className="py-0.5 px-1 text-right text-white">{r["u_" + y] != null ? R(r["u_" + y]) : ""}</SC>)}</tr>)}<tr className="border-t border-gray-700 font-semibold"><td className="py-1 px-1">Total</td>{sYrs.map(y => <SC key={y} v={uYTot[y]} className="py-1 px-1 text-right text-white">{R(uYTot[y])}</SC>)}</tr></tbody></table></div></div></div>}
   </div>;
 }
