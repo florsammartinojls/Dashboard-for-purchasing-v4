@@ -36,14 +36,29 @@ export default function BundleTab({ data, stg, hist, daily, bundleId, onBack, go
   const bKill = sel ? killMap[sel] : null;
   const bStatus = b ? gS(b.doc, 60, 30, { critDays: 30, warnDays: 60 }) : "healthy";
 
-  // Monthly Bundle Sales (YoY units)
-  const sH = useMemo(() => (hist?.bundleSales || []).filter(h => h.j === sel).sort((a, b) => a.y === b.y ? a.m - b.m : a.y - b.y), [hist, sel]);
-  const sYrs = useMemo(() => gY(sH), [sH]);
-  const yD = useMemo(() => MN.map((m, i) => { const r = { month: m }; sYrs.forEach(y => { const x = sH.find(h => h.y === y && h.m === i + 1); r["u_" + y] = x?.units ?? null }); return r }), [sH, sYrs]);
-  const uYTot = useMemo(() => { const t = {}; sYrs.forEach(y => { t[y] = sH.filter(h => h.y === y).reduce((s, x) => s + x.units, 0) }); return t }, [sH, sYrs]);
+  // Monthly Units from bundleInv (sum of Complete DSR, merged summary + daily agg)
+  const uYrs = useMemo(() => gY(bInv), [bInv]);
+  const yD = useMemo(() => MN.map((m, i) => {
+    const r = { month: m };
+    uYrs.forEach(y => {
+      const x = bInv.find(h => h.y === y && h.m === i + 1);
+      r["u_" + y] = x?.units > 0 ? x.units : (x?.avgDsr > 0 && x?.dataDays > 0 ? Math.round(x.avgDsr * x.dataDays) : null);
+    });
+    return r;
+  }), [bInv, uYrs]);
+  const uYTot = useMemo(() => {
+    const t = {};
+    uYrs.forEach(y => {
+      t[y] = bInv.filter(h => h.y === y).reduce((s, x) => {
+        const u = x.units > 0 ? x.units : (x.avgDsr > 0 && x.dataDays > 0 ? Math.round(x.avgDsr * x.dataDays) : 0);
+        return s + u;
+      }, 0);
+    });
+    return t;
+  }, [bInv, uYrs]);
 
   // Daily (last 14d)
-  const bInv = []; // kept for compatibility
+  const bInv = useMemo(() => (hist?.bundleInv || []).filter(h => h.j === sel), [hist, sel]);
   const bDays = useMemo(() => (daily?.bundleDays || []).filter(d => d.j === sel).sort((a, x) => x.date.localeCompare(a.date)).slice(0, 14), [daily, sel]);
 
   // Price history
