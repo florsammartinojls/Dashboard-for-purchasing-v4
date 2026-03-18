@@ -73,6 +73,62 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
     return m;
   }, [data.replenRec]);
 
+  // Raw waterfall allocation: distribute core raw to bundles by lowest effective DOC first
+  const rawAllocMap = useMemo(() => {
+    const map = {};
+    const activeBundles = (data.bundles || []).filter(b => {
+      if (bA === "yes" && b.active !== "Yes") return false;
+      if (bA === "no" && b.active === "Yes") return false;
+      return true;
+    });
+    // Group bundles by core1
+    const coreGroups = {};
+    activeBundles.forEach(b => {
+      if (!b.core1) return;
+      if (!coreGroups[b.core1]) coreGroups[b.core1] = [];
+      coreGroups[b.core1].push(b);
+    });
+    // For each enriched core, allocate raw
+    enr.forEach(c => {
+      const bundles = coreGroups[c.id] || [];
+      if (bundles.length === 0) return;
+      let pool = c.raw || 0;
+      // Compute base DOC for each bundle: (FIB + Inbound + PPRC) / DSR
+      const bData = bundles.map(b => {
+        const rp = replenMap[b.j];
+        const pprc = rp?.pprcUnits || 0;
+        const inv = (b.fibInv || 0) + (b.inbound || 0) + pprc;
+        const dsr = b.cd || 0;
+        const baseDOC = dsr > 0 ? inv / dsr : 9999;
+        const qtyPerBundle = b.qty1 || 1;
+        return { j: b.j, baseDOC, dsr, qtyPerBundle, inv };
+      }).filter(x => x.dsr > 0).sort((a, b) => a.baseDOC - b.baseDOC);
+      const tg = c.targetDoc || 180;
+      // Allocate raw to bundles with lowest DOC first
+      bData.forEach(bd => {
+        if (pool <= 0) { map[bd.j] = { rawUnits: 0, baseDOC: bd.baseDOC, baseInv: bd.inv }; return }
+        const needDOC = Math.max(0, tg - bd.baseDOC);
+        const needBundleUnits = needDOC * bd.dsr;
+        const needCorePieces = needBundleUnits * bd.qtyPerBundle;
+        const givePieces = Math.min(needCorePieces, pool);
+        pool -= givePieces;
+        const giveUnits = bd.qtyPerBundle > 0 ? givePieces / bd.qtyPerBundle : 0;
+        map[bd.j] = { rawUnits: giveUnits, baseDOC: bd.baseDOC, baseInv: bd.inv };
+      });
+      // Store baseDOC for bundles that got nothing (DSR=0 etc)
+      bundles.forEach(b => {
+        if (!map[b.j]) {
+          const rp = replenMap[b.j];
+          const pprc = rp?.pprcUnits || 0;
+          const inv = (b.fibInv || 0) + (b.inbound || 0) + pprc;
+          const dsr = b.cd || 0;
+          map[b.j] = { rawUnits: 0, baseDOC: dsr > 0 ? inv / dsr : 0, baseInv: inv };
+        }
+      });
+    });
+    return map;
+  }, [enr, data.bundles, replenMap, bA]);
+
   // 7f missing map by JLS#
   const missingMap = useMemo(() => {
     const m = {};
@@ -136,6 +192,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
   const gInbS = id => (gO(id).inbS ?? 0);
   const gCogP = id => (gO(id).cogP ?? 0);
   const gCogC = id => (gO(id).cogC ?? 0);
+  const gBMoq = id => (gO(id).bMoq ?? 0); // Bundle MOQ per vendor
   const hasCoreOrd = c => (gPcs(c.id) > 0 || gCas(c.id) > 0);
   const coreEffQ = c => gPcs(c.id) || gCas(c.id) * (c.casePack || 1);
   const hasBundleOrd = b => (gPcs(b.j) > 0 || gCas(b.j) > 0);
@@ -166,10 +223,27 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
     return 'PO-' + serial + '-' + (vendorCode || 'XXX');
   };
 
-  const fillR = (cores, bundles, mode) => {
+  const fillR = (cores, bundles, mode, vendorName) => {
     const u = { ...ov };
+    const bMoq = gBMoq('_bmoq_' + vendorName);
     if (mode === "bundles") {
-      (bundles || []).forEach(b => { const tg = cores[0]?.targetDoc || 90; const need = bNQ(b, tg); if (need > 0) u[b.j] = { ...(u[b.j] || {}), pcs: need } });
+      const coreExtrasFromBundles = {};
+      (bundles || []).forEach(b => {
+        const tg = cores[0]?.targetDoc || 90; const need = bNQ(b, tg);
+        if (need <= 0) return;
+        if (bMoq > 0 && need < bMoq) {
+          // Below MOQ → convert to core pieces
+          const pc = cores.find(c => c.id === b.core1);
+          if (pc) { coreExtrasFromBundles[pc.id] = (coreExtrasFromBundles[pc.id] || 0) + (need * (b.qty1 || 1)) }
+        } else {
+          u[b.j] = { ...(u[b.j] || {}), pcs: bMoq > 0 ? Math.max(need, bMoq) : need };
+        }
+      });
+      // Add converted pieces to cores
+      cores.forEach(c => {
+        const extra = coreExtrasFromBundles[c.id] || 0;
+        if (extra > 0) u[c.id] = { ...(u[c.id] || {}), pcs: cOQ(extra, c.moq, c.casePack) };
+      });
     } else if (mode === "mix") {
       const coreMap = {}; cores.forEach(c => { coreMap[c.id] = c });
       const coreExtras = {}; const cwo = new Set();
@@ -179,15 +253,22 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
         const ed = b.cd > 0 ? Math.floor(ci / qpb / b.cd) : 0;
         const need = Math.ceil(Math.max(0, (tg - (b.doc || 0) - ed) * b.cd));
         if (need <= 0) return;
-        if (need < (pc.moq || 0)) { coreExtras[pc.id] = (coreExtras[pc.id] || 0) + (need * qpb) }
-        else { u[b.j] = { ...(u[b.j] || {}), pcs: roundToCasePack(need, pc.casePack) }; cwo.add(pc.id) }
+        const effectiveMoq = bMoq > 0 ? bMoq : (pc.moq || 0);
+        if (need < effectiveMoq) {
+          coreExtras[pc.id] = (coreExtras[pc.id] || 0) + (need * qpb);
+        } else {
+          u[b.j] = { ...(u[b.j] || {}), pcs: bMoq > 0 ? Math.max(need, bMoq) : roundToCasePack(need, pc.casePack) };
+          cwo.add(pc.id);
+        }
       });
       cores.forEach(c => {
         const extra = coreExtras[c.id] || 0;
         if (extra > 0) u[c.id] = { ...(u[c.id] || {}), pcs: cOQ(extra, c.moq, c.casePack) };
         else if (!cwo.has(c.id) && c.needQty > 0) u[c.id] = { ...(u[c.id] || {}), pcs: cOQ(c.needQty, c.moq, c.casePack) };
       });
-    } else { cores.filter(c => c.needQty > 0).forEach(c => { u[c.id] = { ...(u[c.id] || {}), pcs: cOQ(c.needQty, c.moq, c.casePack) } }) }
+    } else {
+      cores.filter(c => c.needQty > 0).forEach(c => { u[c.id] = { ...(u[c.id] || {}), pcs: cOQ(c.needQty, c.moq, c.casePack) } });
+    }
     setOv(u);
   };
   const clrV = (cores, bundles) => { const u = { ...ov }; cores.forEach(c => { delete u[c.id] }); (bundles || []).forEach(b => { delete u[b.j] }); setOv(u) };
@@ -305,7 +386,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
         <td className="py-0.5 px-0.5"><NumInput value={gCogC(b.j)} onChange={v => setF(b.j, 'cogC', v)} /></td>
       </>}
       <SC v={cost} className="py-1 px-1 text-right text-amber-300 sticky right-12 bg-indigo-950/20 z-10">{cost > 0 ? $(cost) : "—"}</SC>
-      <td className={`py-1 px-1 text-right sticky right-0 bg-indigo-950/20 z-10 ${bAfterDoc ? (bAfterDoc <= 30 ? "text-red-400" : bAfterDoc <= 60 ? "text-amber-400" : "text-emerald-400") : "text-gray-600"}`}>{bAfterDoc ? R(bAfterDoc) : "—"}</td>
+      <td className={`py-1 px-1 text-right sticky right-0 bg-indigo-950/20 z-10 ${showAfterDoc && effectiveDOC ? (effectiveDOC <= 30 ? "text-red-400" : effectiveDOC <= 60 ? "text-amber-400" : "text-emerald-400") : "text-gray-600"}`}>{showAfterDoc && effectiveDOC ? R(effectiveDOC) : "—"}</td>
       <td className="py-1 px-1"><button onClick={() => goBundle(b.j)} className="text-indigo-400 px-0.5 bg-indigo-400/10 rounded text-xs">V</button></td>
     </tr>;
   };
@@ -395,10 +476,11 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
             <span className="text-xs text-gray-400">MOQ:{$(v.moqDollar)}</span>
             <span className="text-xs text-gray-400">Tgt:{tg}d</span>
             <span className="text-xs text-gray-400">{v.payment}</span>
+            {(vendorSub === "bundles" || vendorSub === "mix") && <span className="flex items-center gap-1 text-xs text-gray-400">B.MOQ:<NumInput value={gBMoq('_bmoq_' + v.name)} onChange={val => setF('_bmoq_' + v.name, 'bMoq', val)} placeholder="0" className="bg-gray-800 border border-gray-600 text-white rounded px-1 py-0.5 w-14 text-center text-xs" /></span>}
             {poI.length === 0 ? <span className="ml-auto text-xs text-gray-400 bg-gray-700 px-2 py-0.5 rounded">—</span> : <span className={`ml-auto text-xs font-semibold px-2 py-0.5 rounded ${meets ? "text-emerald-400 bg-emerald-400/10" : "text-red-400 bg-red-400/10"}`}>{meets ? "✓" : "!"} {$(poT)}{poC > 0 ? " / " + poC + "cs" : ""}</span>}
           </div>
           <div className="flex flex-wrap gap-2 items-center">
-            <button onClick={() => fillR(grp.cores, grp.bundles, vendorSub)} className="text-xs bg-blue-600/80 text-white px-2.5 py-1 rounded">Fill Rec</button>
+            <button onClick={() => fillR(grp.cores, grp.bundles, vendorSub, v.name)} className="text-xs bg-blue-600/80 text-white px-2.5 py-1 rounded">Fill Rec</button>
             <button onClick={() => clrV(grp.cores, grp.bundles)} className="text-xs bg-gray-700 text-gray-300 px-2.5 py-1 rounded">Clear</button>
             <button onClick={() => setDismissed({})} className="text-xs bg-gray-700 text-gray-300 px-2 py-1 rounded">Show All</button>
             <div className="ml-auto flex gap-2">
