@@ -143,8 +143,10 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
 
   const autoPO = (vendorCode) => {
     if (poN) return poN;
-    const d = new Date(); const mm = String(d.getMonth() + 1).padStart(2, '0'); const dd = String(d.getDate()).padStart(2, '0'); const yy = String(d.getFullYear()).slice(2);
-    return 'PO-' + mm + dd + yy + '-' + (vendorCode || 'XXX');
+    // Excel serial date number (days since 1/1/1900, with Excel's leap year bug)
+    const d = new Date();
+    const serial = Math.floor((d - new Date(1899, 11, 30)) / 86400000);
+    return 'PO-' + serial + '-' + (vendorCode || 'XXX');
   };
 
   const fillR = (cores, bundles, mode) => {
