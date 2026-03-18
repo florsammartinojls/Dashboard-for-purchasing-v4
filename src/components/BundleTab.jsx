@@ -43,6 +43,7 @@ export default function BundleTab({ data, stg, hist, daily, bundleId, onBack, go
   const uYTot = useMemo(() => { const t = {}; sYrs.forEach(y => { t[y] = sH.filter(h => h.y === y).reduce((s, x) => s + x.units, 0) }); return t }, [sH, sYrs]);
 
   // Daily (last 14d)
+  const bInv = []; // kept for compatibility
   const bDays = useMemo(() => (daily?.bundleDays || []).filter(d => d.j === sel).sort((a, x) => x.date.localeCompare(a.date)).slice(0, 14), [daily, sel]);
 
   // Price history
