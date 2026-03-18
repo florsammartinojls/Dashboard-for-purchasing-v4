@@ -66,6 +66,13 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
     return m;
   }, [data.restock]);
 
+  // Replen Recommendations map by JLS#
+  const replenMap = useMemo(() => {
+    const m = {};
+    (data.replenRec || []).forEach(r => { m[r.j] = r });
+    return m;
+  }, [data.replenRec]);
+
   // 7f missing map by JLS#
   const missingMap = useMemo(() => {
     const m = {};
@@ -254,7 +261,8 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
     const bAfterDoc = eq > 0 && b.cd > 0 ? Math.round(((b.fibInv || 0) + eq) / b.cd) : null;
     const bMiss = missingMap[b.j] || 0;
     const rs = rsBundleMap[b.j];
-    const margin = f && f.pr > 0 ? ((f.gp / f.pr) * 100) : 0;
+    const rp = replenMap[b.j];
+    const margin = f && f.aicogs > 0 ? ((f.gp / f.aicogs) * 100) : 0;
 
     return <tr className={`border-t border-gray-800/20 hover:bg-indigo-900/10 text-xs ${hasBundleOrd(b) ? "bg-emerald-900/10" : "bg-indigo-950/20"}`}>
       <td className="py-1 px-1 sticky left-0 bg-indigo-950/20 z-10" />
@@ -282,10 +290,10 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
       {showRS && <>
         <SC v={b.fibDoc} className="py-1 px-1 text-right text-cyan-300">{R(b.fibDoc)}</SC>
         <td className={`py-1 px-1 text-right ${margin >= 30 ? "text-emerald-400" : margin >= 15 ? "text-amber-400" : margin > 0 ? "text-red-400" : "text-gray-600"}`}>{margin > 0 ? P(margin) : "—"}</td>
-        <SC v={rs?.rawPcs} className="py-1 px-1 text-right">{rs?.rawPcs > 0 ? R(rs.rawPcs) : "—"}</SC>
-        <SC v={b.scInv} className="py-1 px-1 text-right">{R(b.scInv)}</SC>
+        <SC v={rp?.rawUnits} className="py-1 px-1 text-right">{rp?.rawUnits > 0 ? R(rp.rawUnits) : "—"}</SC>
+        <SC v={rp?.batched} className="py-1 px-1 text-right">{rp?.batched > 0 ? R(rp.batched) : "—"}</SC>
         <SC v={b.fibInv} className="py-1 px-1 text-right text-cyan-300">{R(b.fibInv)}</SC>
-        <SC v={rs?.pprcAvail} className="py-1 px-1 text-right">{rs?.pprcAvail > 0 ? R(rs.pprcAvail) : "—"}</SC>
+        <SC v={rp?.pprcUnits} className="py-1 px-1 text-right">{rp?.pprcUnits > 0 ? R(rp.pprcUnits) : "—"}</SC>
         <td className="py-1 px-1 text-right text-red-400">{bMiss > 0 ? R(bMiss) : "—"}</td>
       </>}
       <td className="py-1 border-l-2 border-gray-600 px-1" />
