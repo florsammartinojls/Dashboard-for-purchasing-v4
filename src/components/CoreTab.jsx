@@ -35,12 +35,12 @@ export default function CoreTab({ data, stg, hist, daily, coreId, onBack, goBund
   const cHF = cH;
   const yrs = useMemo(() => gY(cHF), [cHF]);
 
-  // Monthly DSR chart data — derive DSR + include OOS
+  // Monthly DSR chart data — show raw sum (units = sum of 1-day DSR)
   const dsrCh = useMemo(() => MN.map((m, i) => {
     const r = { month: m };
     yrs.forEach(y => {
       const h = cHF.find(x => x.y === y && x.m === i + 1);
-      r["d_" + y] = getDsr(h);
+      r["d_" + y] = h?.units > 0 ? h.units : null;
       r["oos_" + y] = (h?.oosDays && h.oosDays > 0) ? h.oosDays : null;
     });
     return r;
@@ -260,14 +260,14 @@ export default function CoreTab({ data, stg, hist, daily, coreId, onBack, goBund
       {/* Monthly DSR (YoY) — clean line chart, OOS as subtle indicator in table */}
       {cHF.length > 0 && (
         <div className="bg-gray-900 rounded-xl p-4 mb-4 border border-gray-800">
-          <h3 className="text-white font-semibold text-sm mb-2">Monthly DSR (YoY)</h3>
+          <h3 className="text-white font-semibold text-sm mb-2">Monthly 1-Day DSR (YoY)</h3>
           <div className="flex flex-col lg:flex-row gap-4">
             <div className="flex-1 min-w-0">
               <ResponsiveContainer width="100%" height={240}>
                 <LineChart data={dsrCh}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
                   <XAxis dataKey="month" tick={{ fill: "#9ca3af", fontSize: 11 }} axisLine={{ stroke: "#374151" }} tickLine={false} />
-                  <YAxis tick={{ fill: "#9ca3af", fontSize: 11 }} axisLine={false} tickLine={false} domain={['auto', 'auto']} />
+                  <YAxis tick={{ fill: "#9ca3af", fontSize: 11 }} axisLine={false} tickLine={false} domain={['auto', 'auto']} tickFormatter={v => v >= 1000 ? Math.round(v / 1000) + 'K' : v} />
                   <Tooltip contentStyle={{ backgroundColor: "#111827", border: "1px solid #374151", borderRadius: "8px", fontSize: 12 }} />
                   <Legend wrapperStyle={{ fontSize: 11 }} />
                   {yrs.map(y => (
@@ -282,7 +282,7 @@ export default function CoreTab({ data, stg, hist, daily, coreId, onBack, goBund
             </div>
 
             {/* Table: DSR per year + OOS dot */}
-            <div className="lg:w-72 overflow-x-auto">
+            <div className="lg:w-80 overflow-x-auto">
               <table className="w-full text-xs">
                 <thead><tr className="text-gray-500 border-b border-gray-700">
                   <th className="py-1.5 px-1 text-left">Mo</th>
@@ -301,7 +301,7 @@ export default function CoreTab({ data, stg, hist, daily, coreId, onBack, goBund
                           const val = r["d_" + y];
                           return (
                             <SC key={y} v={val} className="py-0.5 px-2 text-right">
-                              <span className="text-white">{val != null ? D1(val) : ""}</span>
+                              <span className="text-white">{val != null ? R(val) : ""}</span>
                               {oos > 0 && <span className="ml-1 text-red-400 text-[9px]" title={oos + " OOS days"}>●</span>}
                             </SC>
                           );
@@ -312,13 +312,13 @@ export default function CoreTab({ data, stg, hist, daily, coreId, onBack, goBund
                   <tr className="border-t border-gray-600 font-semibold">
                     <td className="py-1.5 px-1 text-gray-300">Avg</td>
                     {yrs.map(y => {
-                      const vals = cHF.filter(h => h.y === y);
+                      const vals = cHF.filter(h => h.y === y && h.units > 0);
                       const avg = vals.length > 0
-                        ? vals.reduce((s, x) => s + (getDsr(x) || 0), 0) / vals.length
+                        ? vals.reduce((s, x) => s + (x.units || 0), 0) / vals.length
                         : 0;
                       return (
                         <SC key={y} v={avg} className="py-1.5 px-2 text-right text-white">
-                          {avg > 0 ? D1(avg) : ""}
+                          {avg > 0 ? R(avg) : ""}
                         </SC>
                       );
                     })}
