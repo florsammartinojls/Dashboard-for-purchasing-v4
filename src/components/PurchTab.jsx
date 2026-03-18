@@ -213,7 +213,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
     return <><tr className={`border-t border-gray-800/30 hover:bg-gray-800/20 text-xs ${hasCoreOrd(c) ? "bg-emerald-900/10" : ""}`}>
       <td className="py-1 px-1 sticky left-0 bg-gray-950 z-10"><Dot status={c.status} /></td>
       <td className="py-1 px-1 sticky left-5 bg-gray-950 z-10"><button onClick={() => goCore(c.id)} className="text-blue-400 font-mono hover:underline">{c.id}</button></td>
-      <td className="py-1 px-1 text-gray-200 truncate max-w-[140px] sticky left-24 bg-gray-950 z-10">{c.ti}</td>
+      <td className="py-1 px-1 text-gray-200 truncate max-w-[100px] sticky left-24 bg-gray-950 z-10">{c.ti}</td>
       <SC v={c.dsr} className="py-1 px-1 text-right">{D1(c.dsr)}</SC>
       <SC v={c.d7} className="py-1 px-1 text-right">{D1(c.d7)}</SC>
       <td className="py-1 px-1 text-center">{c.d7 > c.dsr ? <span className={c.spike ? "text-orange-400 font-bold" : "text-emerald-400"}>▲</span> : c.d7 < c.dsr ? <span className="text-red-400">▼</span> : "—"}{c.spike && <span className="text-orange-400 text-xs ml-0.5" title="Spike">⚡</span>}</td>
@@ -228,7 +228,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
         <SC v={c.inb} className="py-1 px-1 text-right">{R(c.inb)}</SC>
         <SC v={c.fba} className="py-1 px-1 text-right">{R(c.fba)}</SC>
       </>}
-      {showRS && <td colSpan={7} />}
+      {showRS && <td colSpan={8} />}
       <td className="py-1 border-l-2 border-gray-600 px-1" />
       <td className="py-0.5 px-0.5 sticky right-36 bg-gray-950 z-10"><NumInput value={gPcs(c.id)} onChange={v => setF(c.id, 'pcs', v)} /></td>
       <td className="py-0.5 px-0.5 sticky right-24 bg-gray-950 z-10"><NumInput value={gCas(c.id)} onChange={v => setF(c.id, 'cas', v)} /></td>
@@ -269,7 +269,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
       <td className="py-1 px-1 sticky left-5 bg-indigo-950/20 z-10">
         <button onClick={() => goBundle(b.j)} className="text-indigo-400 font-mono hover:underline">{b.j}</button>
       </td>
-      <td className="py-1 px-1 text-indigo-200 truncate max-w-[140px] sticky left-24 bg-indigo-950/20 z-10">
+      <td className="py-1 px-1 text-indigo-200 truncate max-w-[100px] sticky left-24 bg-indigo-950/20 z-10">
         {b.t}
         {b.asin && <a href={`https://sellercentral.amazon.com/skucentral?mSku=${b.asin}`} target="_blank" rel="noopener noreferrer" className="ml-1 text-gray-500 hover:text-blue-400 text-[9px] font-mono" title="Open in Seller Central">{b.asin}</a>}
         {aged && aged.fbaHealth !== "Healthy" && <span className={`ml-1 text-xs ${aged.fbaHealth === "At Risk" ? "text-amber-400" : "text-red-400"}`}>{aged.fbaHealth}</span>}
@@ -287,6 +287,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
       <td className="py-1 px-1 text-center text-indigo-300">{b.replenTag || ""}</td>
       {!collapsed[b.j] && <td colSpan={4} />}
       {showRS && <>
+        <td className="py-1 border-l-2 border-cyan-800 px-0.5" />
         <SC v={b.fibDoc} className="py-1 px-1 text-right text-cyan-300">{R(b.fibDoc)}</SC>
         <td className={`py-1 px-1 text-right ${margin >= 30 ? "text-emerald-400" : margin >= 15 ? "text-amber-400" : margin > 0 ? "text-red-400" : "text-gray-600"}`}>{margin > 0 ? Math.round(margin) + "%" : "—"}</td>
         <SC v={rp?.rawUnits} className="py-1 px-1 text-right">{R(rp?.rawUnits || 0)}</SC>
@@ -332,10 +333,11 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
       <TH tip="Total FBA & Inbound Pieces" className="py-2 px-1 text-right">FBA Pcs</TH>
     </>}
     {showRS && <>
+      <th className="py-2 border-l-2 border-cyan-800 px-0.5" />
       <TH tip="Bundle FIB DOC" className="py-2 px-1 text-right text-cyan-400">FibDoc</TH>
-      <TH tip="Margin % (GP/Price)" className="py-2 px-1 text-right text-cyan-400">Mrgn</TH>
-      <TH tip="Raw Units (Restocker)" className="py-2 px-1 text-right text-cyan-400">Raw</TH>
-      <TH tip="Batched / SC Inventory" className="py-2 px-1 text-right text-cyan-400">Batch</TH>
+      <TH tip="Margin % (GP/AICOGS)" className="py-2 px-1 text-right text-cyan-400">Mrgn</TH>
+      <TH tip="Raw Units (Replen Rec)" className="py-2 px-1 text-right text-cyan-400">Raw</TH>
+      <TH tip="Batched (Replen Rec)" className="py-2 px-1 text-right text-cyan-400">Batch</TH>
       <TH tip="FIB Inventory" className="py-2 px-1 text-right text-cyan-400">FIB</TH>
       <TH tip="PPRC Available Units" className="py-2 px-1 text-right text-cyan-400">PPRC</TH>
       <TH tip="7f Missing Pieces" className="py-2 px-1 text-right text-red-400">7f Miss</TH>
