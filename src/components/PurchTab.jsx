@@ -267,7 +267,6 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
     return <tr className={`border-t border-gray-800/20 hover:bg-indigo-900/10 text-xs ${hasBundleOrd(b) ? "bg-emerald-900/10" : "bg-indigo-950/20"}`}>
       <td className="py-1 px-1 sticky left-0 bg-indigo-950/20 z-10" />
       <td className="py-1 px-1 sticky left-5 bg-indigo-950/20 z-10">
-        {indent ? <span className="text-gray-600 mr-0.5">└</span> : null}
         <button onClick={() => goBundle(b.j)} className="text-indigo-400 font-mono hover:underline">{b.j}</button>
       </td>
       <td className="py-1 px-1 text-indigo-200 truncate max-w-[140px] sticky left-24 bg-indigo-950/20 z-10">
@@ -282,19 +281,19 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
       <SC v={b.d7comp} className="py-1 px-1 text-right text-indigo-300">{D1(b.d7comp)}</SC>
       <td className="py-1 px-1 text-center">{b.d7comp > b.cd ? <span className="text-emerald-400">▲</span> : b.d7comp < b.cd ? <span className="text-red-400">▼</span> : "—"}</td>
       <SC v={b.doc} className="py-1 px-1 text-right text-indigo-300">{R(b.doc)}</SC>
-      <td className="py-1 px-1 text-right text-gray-600">—</td>
-      <td className="py-1 px-1 text-gray-600">—</td>
-      <td className="py-1 px-1 text-gray-600">—</td>
-      <td className="py-1 px-1 text-center text-indigo-300">{b.replenTag || "—"}</td>
+      <td className="py-1 px-1 text-right text-gray-700" />
+      <td className="py-1 px-1 text-gray-700" />
+      <td className="py-1 px-1 text-gray-700" />
+      <td className="py-1 px-1 text-center text-indigo-300">{b.replenTag || ""}</td>
       {!collapsed[b.j] && <td colSpan={4} />}
       {showRS && <>
         <SC v={b.fibDoc} className="py-1 px-1 text-right text-cyan-300">{R(b.fibDoc)}</SC>
-        <td className={`py-1 px-1 text-right ${margin >= 30 ? "text-emerald-400" : margin >= 15 ? "text-amber-400" : margin > 0 ? "text-red-400" : "text-gray-600"}`}>{margin > 0 ? P(margin) : "—"}</td>
-        <SC v={rp?.rawUnits} className="py-1 px-1 text-right">{rp?.rawUnits > 0 ? R(rp.rawUnits) : "—"}</SC>
-        <SC v={rp?.batched} className="py-1 px-1 text-right">{rp?.batched > 0 ? R(rp.batched) : "—"}</SC>
-        <SC v={b.fibInv} className="py-1 px-1 text-right text-cyan-300">{R(b.fibInv)}</SC>
-        <SC v={rp?.pprcUnits} className="py-1 px-1 text-right">{rp?.pprcUnits > 0 ? R(rp.pprcUnits) : "—"}</SC>
-        <td className="py-1 px-1 text-right text-red-400">{bMiss > 0 ? R(bMiss) : "—"}</td>
+        <td className={`py-1 px-1 text-right ${margin >= 30 ? "text-emerald-400" : margin >= 15 ? "text-amber-400" : margin > 0 ? "text-red-400" : "text-gray-600"}`}>{margin > 0 ? Math.round(margin) + "%" : "—"}</td>
+        <SC v={rp?.rawUnits} className="py-1 px-1 text-right">{R(rp?.rawUnits || 0)}</SC>
+        <SC v={rp?.batched} className="py-1 px-1 text-right">{R(rp?.batched || 0)}</SC>
+        <SC v={b.fibInv} className="py-1 px-1 text-right text-cyan-300">{R(b.fibInv || 0)}</SC>
+        <SC v={rp?.pprcUnits} className="py-1 px-1 text-right">{R(rp?.pprcUnits || 0)}</SC>
+        <td className="py-1 px-1 text-right text-red-400">{bMiss > 0 ? R(bMiss) : "0"}</td>
       </>}
       <td className="py-1 border-l-2 border-gray-600 px-1" />
       <td className="py-0.5 px-0.5 sticky right-36 bg-indigo-950/20 z-10"><NumInput value={gPcs(b.j)} onChange={v => setF(b.j, 'pcs', v)} /></td>
