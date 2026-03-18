@@ -56,6 +56,16 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
 
   const bA = stg.bA || "yes"; const bI = stg.bI || "blank";
 
+  // Restocker map by bundle JLS#
+  const rsBundleMap = useMemo(() => {
+    const m = {};
+    (data.restock || []).forEach(r => {
+      const bk = (r.bundle || "").trim();
+      if (bk) m[bk] = r;
+    });
+    return m;
+  }, [data.restock]);
+
   // 7f missing map by JLS#
   const missingMap = useMemo(() => {
     const m = {};
@@ -211,7 +221,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
         <SC v={c.inb} className="py-1 px-1 text-right">{R(c.inb)}</SC>
         <SC v={c.fba} className="py-1 px-1 text-right">{R(c.fba)}</SC>
       </>}
-      {showRS && <td colSpan={5} className="py-1 px-1 text-center text-gray-600 text-[9px]">— core —</td>}
+      {showRS && <td colSpan={7} className="py-1 px-1 text-center text-gray-600 text-[9px]">— core —</td>}
       <td className="py-1 border-l-2 border-gray-600 px-1" />
       <td className="py-0.5 px-0.5 sticky right-36 bg-gray-950 z-10"><NumInput value={gPcs(c.id)} onChange={v => setF(c.id, 'pcs', v)} /></td>
       <td className="py-0.5 px-0.5 sticky right-24 bg-gray-950 z-10"><NumInput value={gCas(c.id)} onChange={v => setF(c.id, 'cas', v)} /></td>
@@ -243,6 +253,8 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
     const aged = agedMap[b.j]; const kill = killMap[b.j];
     const bAfterDoc = eq > 0 && b.cd > 0 ? Math.round(((b.fibInv || 0) + eq) / b.cd) : null;
     const bMiss = missingMap[b.j] || 0;
+    const rs = rsBundleMap[b.j];
+    const margin = f && f.pr > 0 ? ((f.gp / f.pr) * 100) : 0;
 
     return <tr className={`border-t border-gray-800/20 hover:bg-indigo-900/10 text-xs ${hasBundleOrd(b) ? "bg-emerald-900/10" : "bg-indigo-950/20"}`}>
       <td className="py-1 px-1 sticky left-0 bg-indigo-950/20 z-10" />
@@ -262,16 +274,18 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
       <SC v={b.d7comp} className="py-1 px-1 text-right text-indigo-300">{D1(b.d7comp)}</SC>
       <td className="py-1 px-1 text-center">{b.d7comp > b.cd ? <span className="text-emerald-400">▲</span> : b.d7comp < b.cd ? <span className="text-red-400">▼</span> : "—"}</td>
       <SC v={b.doc} className="py-1 px-1 text-right text-indigo-300">{R(b.doc)}</SC>
-      <SC v={b.fibInv} className="py-1 px-1 text-right text-indigo-300">{R(b.fibInv)}</SC>
+      <td className="py-1 px-1 text-right text-gray-600">—</td>
       <td className="py-1 px-1 text-gray-600">—</td>
       <td className="py-1 px-1 text-gray-600">—</td>
       <td className="py-1 px-1 text-center text-indigo-300">{b.replenTag || "—"}</td>
       {!collapsed[b.j] && <td colSpan={4} />}
       {showRS && <>
-        <SC v={b.fibInv} className="py-1 px-1 text-right text-cyan-300">{R(b.fibInv)}</SC>
+        <SC v={b.fibDoc} className="py-1 px-1 text-right text-cyan-300">{R(b.fibDoc)}</SC>
+        <td className={`py-1 px-1 text-right ${margin >= 30 ? "text-emerald-400" : margin >= 15 ? "text-amber-400" : margin > 0 ? "text-red-400" : "text-gray-600"}`}>{margin > 0 ? P(margin) : "—"}</td>
+        <SC v={rs?.rawPcs} className="py-1 px-1 text-right">{rs?.rawPcs > 0 ? R(rs.rawPcs) : "—"}</SC>
         <SC v={b.scInv} className="py-1 px-1 text-right">{R(b.scInv)}</SC>
-        <SC v={b.reserved} className="py-1 px-1 text-right">{R(b.reserved)}</SC>
-        <SC v={b.inbound} className="py-1 px-1 text-right">{R(b.inbound)}</SC>
+        <SC v={b.fibInv} className="py-1 px-1 text-right text-cyan-300">{R(b.fibInv)}</SC>
+        <SC v={rs?.pprcAvail} className="py-1 px-1 text-right">{rs?.pprcAvail > 0 ? R(rs.pprcAvail) : "—"}</SC>
         <td className="py-1 px-1 text-right text-red-400">{bMiss > 0 ? R(bMiss) : "—"}</td>
       </>}
       <td className="py-1 border-l-2 border-gray-600 px-1" />
@@ -311,10 +325,12 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
       <TH tip="Total FBA & Inbound Pieces" className="py-2 px-1 text-right">FBA Pcs</TH>
     </>}
     {showRS && <>
-      <TH tip="Bundle FIB Inventory" className="py-2 px-1 text-right text-cyan-400">FIB</TH>
-      <TH tip="Bundle SC Inventory" className="py-2 px-1 text-right text-cyan-400">SC</TH>
-      <TH tip="Bundle Reserved" className="py-2 px-1 text-right text-cyan-400">Res</TH>
-      <TH tip="Bundle Inbound" className="py-2 px-1 text-right text-cyan-400">Inb</TH>
+      <TH tip="Bundle FIB DOC" className="py-2 px-1 text-right text-cyan-400">FibDoc</TH>
+      <TH tip="Margin % (GP/Price)" className="py-2 px-1 text-right text-cyan-400">Mrgn</TH>
+      <TH tip="Raw Units (Restocker)" className="py-2 px-1 text-right text-cyan-400">Raw</TH>
+      <TH tip="Batched / SC Inventory" className="py-2 px-1 text-right text-cyan-400">Batch</TH>
+      <TH tip="FIB Inventory" className="py-2 px-1 text-right text-cyan-400">FIB</TH>
+      <TH tip="PPRC Available Units" className="py-2 px-1 text-right text-cyan-400">PPRC</TH>
       <TH tip="7f Missing Pieces" className="py-2 px-1 text-right text-red-400">7f Miss</TH>
     </>}
     <th className="py-2 border-l-2 border-gray-600 px-1" />
