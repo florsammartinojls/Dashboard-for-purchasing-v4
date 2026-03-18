@@ -36,6 +36,9 @@ export default function BundleTab({ data, stg, hist, daily, bundleId, onBack, go
   const bKill = sel ? killMap[sel] : null;
   const bStatus = b ? gS(b.doc, 60, 30, { critDays: 30, warnDays: 60 }) : "healthy";
 
+  // Bundle inventory history (merged summary + daily aggregation)
+  const bInv = useMemo(() => (hist?.bundleInv || []).filter(h => h.j === sel), [hist, sel]);
+
   // Monthly Units from bundleInv (sum of Complete DSR, merged summary + daily agg)
   const uYrs = useMemo(() => gY(bInv), [bInv]);
   const yD = useMemo(() => MN.map((m, i) => {
@@ -58,7 +61,6 @@ export default function BundleTab({ data, stg, hist, daily, bundleId, onBack, go
   }, [bInv, uYrs]);
 
   // Daily (last 14d)
-  const bInv = useMemo(() => (hist?.bundleInv || []).filter(h => h.j === sel), [hist, sel]);
   const bDays = useMemo(() => (daily?.bundleDays || []).filter(d => d.j === sel).sort((a, x) => x.date.localeCompare(a.date)).slice(0, 14), [daily, sel]);
 
   // Price history
