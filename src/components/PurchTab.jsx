@@ -334,11 +334,15 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
   const BundleRow = ({ b, indent }) => {
     const f = b.fee || feMap[b.j]; const eq = bundleEffQ(b); const cost = f ? (eq * (f.aicogs || 0)) : 0;
     const aged = agedMap[b.j]; const kill = killMap[b.j];
-    const bAfterDoc = eq > 0 && b.cd > 0 ? Math.round(((b.fibInv || 0) + eq) / b.cd) : null;
     const bMiss = missingMap[b.j] || 0;
     const rs = rsBundleMap[b.j];
     const rp = replenMap[b.j];
     const margin = f && f.aicogs > 0 ? ((f.gp / f.aicogs) * 100) : 0;
+    // After DOC with raw waterfall allocation
+    const alloc = rawAllocMap[b.j] || { rawUnits: 0, baseDOC: 0, baseInv: 0 };
+    const effectiveInv = alloc.baseInv + alloc.rawUnits;
+    const effectiveDOC = b.cd > 0 ? Math.round((effectiveInv + eq) / b.cd) : null;
+    const showAfterDoc = eq > 0 || alloc.rawUnits > 0;
 
     return <tr className={`border-t border-gray-800/20 hover:bg-indigo-900/10 text-xs ${hasBundleOrd(b) ? "bg-emerald-900/10" : "bg-indigo-950/20"}`}>
       <td className="py-1 px-1 sticky left-0 bg-indigo-950/20 z-10" />
