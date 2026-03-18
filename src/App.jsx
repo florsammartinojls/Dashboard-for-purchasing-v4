@@ -126,7 +126,10 @@ const DEFAULT_GL = [
   { term: "ST", desc: "Sell-Through — ASIN in sell-through evaluation mode." },
   { term: "+/−", desc: "Expand or collapse detail columns per core row." },
   { term: "✕", desc: "Dismiss a core row (hide it temporarily while reviewing). 'Show All' brings them back." },
-  { term: "PO#", desc: "Auto-generated: PO-MMDDYY-VendorCode. Override with manual entry." },
+  { term: "B.MOQ", desc: "Bundle MOQ per vendor (editable, only in Bundles/Mix view). When Fill Rec runs: if a bundle's need ≥ B.MOQ → order as bundle (rounded up to B.MOQ). If need < B.MOQ → skip bundle, convert to core pieces instead (need × qty_per_bundle)." },
+  { term: "After DOC (Bundle)", desc: "Effective DOC after raw allocation. Base = (FIB Inv + Inbound + PPRC) ÷ DSR. Core raw units are distributed to bundles starting with the lowest DOC first (waterfall). If you enter an order qty, it adds to the total." },
+  { term: "Raw Waterfall", desc: "Core raw units are allocated across its bundles by priority: lowest effective DOC gets raw first until reaching Target DOC, then next bundle. When raw runs out, remaining bundles get nothing." },
+  { term: "PO#", desc: "Auto-generated: PO-ExcelSerial-VendorCode. Override with manual entry." },
   { term: "Quick Sum", desc: "Click numeric cells to select them. Sum & Avg appear in the bottom bar. Click ✕ to clear." },
 ];
 
