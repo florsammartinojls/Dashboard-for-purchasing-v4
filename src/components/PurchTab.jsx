@@ -274,7 +274,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
         if (need < effectiveMoq) {
           coreExtras[pc.id] = (coreExtras[pc.id] || 0) + (need * qpb);
         } else {
-          let ord = bMoq > 0 ? Math.max(need, bMoq) : roundToCasePack(need, pc.casePack);
+          let ord = bMoq > 0 ? Math.max(need, bMoq) : need;
           const bcp = casePackFromRec[b.j] || 0;
           if (bcp > 0) ord = Math.ceil(ord / bcp) * bcp;
           u[b.j] = { ...(u[b.j] || {}), pcs: ord };
