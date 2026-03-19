@@ -274,7 +274,10 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
         if (need < effectiveMoq) {
           coreExtras[pc.id] = (coreExtras[pc.id] || 0) + (need * qpb);
         } else {
-          u[b.j] = { ...(u[b.j] || {}), pcs: bMoq > 0 ? Math.max(need, bMoq) : roundToCasePack(need, pc.casePack) };
+          let ord = bMoq > 0 ? Math.max(need, bMoq) : roundToCasePack(need, pc.casePack);
+          const bcp = casePackFromRec[b.j] || 0;
+          if (bcp > 0) ord = Math.ceil(ord / bcp) * bcp;
+          u[b.j] = { ...(u[b.j] || {}), pcs: ord };
           cwo.add(pc.id);
         }
       });
@@ -396,8 +399,8 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
       <td className="py-1 px-1 text-center">{b.d7comp > b.cd ? <span className="text-emerald-400">▲</span> : b.d7comp < b.cd ? <span className="text-red-400">▼</span> : "—"}</td>
       <SC v={b.doc} className="py-1 px-1 text-right text-indigo-300">{R(b.doc)}</SC>
       <td className="py-1 px-1 text-right text-gray-700" />
-      <td className="py-1 px-1 text-gray-500 text-right">{bCasePack > 0 ? R(bCasePack) : ""}</td>
       <td className="py-1 px-1 text-gray-700" />
+      <td className="py-1 px-1 text-gray-500 text-right">{bCasePack > 0 ? R(bCasePack) : ""}</td>
       <td className="py-1 px-1 text-center text-indigo-300">{b.replenTag || ""}</td>
       {!collapsed[b.j] && <td colSpan={4} />}
       {showRS && <>
