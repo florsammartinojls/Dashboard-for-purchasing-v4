@@ -388,7 +388,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
       </td>
       <td className="py-1 px-1 text-indigo-200 truncate max-w-[100px] sticky left-24 bg-indigo-950/20 z-10">
         {b.t}
-        {b.asin && <a href={`https://sellercentral.amazon.com/skucentral?mSku=${b.asin}`} target="_blank" rel="noopener noreferrer" className="ml-1 text-gray-500 hover:text-blue-400 text-[9px] font-mono" title="Open in Seller Central">{b.asin}</a>}
+        {b.asin && <a href={`https://sellercentral.amazon.com/myinventory/inventory?fulfilledBy=all&page=1&pageSize=25&searchField=all&searchTerm=${b.asin}&sort=date_created_desc&status=all`} target="_blank" rel="noopener noreferrer" className="ml-1 text-gray-500 hover:text-blue-400 text-[9px] font-mono" title="Open in Seller Central">{b.asin}</a>}
         {aged && aged.fbaHealth !== "Healthy" && <span className={`ml-1 text-xs ${aged.fbaHealth === "At Risk" ? "text-amber-400" : "text-red-400"}`}>{aged.fbaHealth}</span>}
         {aged && aged.storageLtsf > 0 && <span className="ml-1 text-xs text-red-300">${aged.storageLtsf.toFixed(0)}</span>}
         {kill && kill.latestEval && kill.latestEval.toLowerCase().includes('kill') && <span className="ml-1 text-xs text-red-400 font-bold">KILL</span>}
