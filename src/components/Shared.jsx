@@ -297,4 +297,69 @@ export function WorkflowChip({ id, type, workflow, onSave, onDelete, buyer }) {
       </div>
     </div>
   );
+// === Vendor Comments Panel ===
+const VC_CATS = ["Communication", "Lead Time", "Pricing", "Discount", "Quality", "Other"];
+const VC_COLORS = { Communication: "text-blue-400", "Lead Time": "text-amber-400", Pricing: "text-emerald-400", Discount: "text-purple-400", Quality: "text-red-400", Other: "text-gray-400" };
+
+export function VendorNotes({ vendor, comments, onSave, buyer }) {
+  const [open, setOpen] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const [cat, setCat] = useState("Other");
+  const [text, setText] = useState("");
+  const notes = (comments || []).filter(c => c.vendor === vendor).sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+  const count = notes.length;
+
+  const save = () => {
+    if (!text.trim()) return;
+    onSave({ vendor, author: buyer || "", category: cat, comment: text.trim() });
+    setText(""); setAdding(false);
+  };
+
+  if (!open) {
+    return (
+      <button onClick={() => setOpen(true)} className={`text-xs px-1.5 py-0.5 rounded ${count > 0 ? "bg-blue-500/20 text-blue-400" : "bg-gray-800 text-gray-500 hover:text-gray-300"}`}>
+        💬{count > 0 ? " " + count : ""}
+      </button>
+    );
+  }
+
+  return (
+    <div className="absolute z-50 mt-1 right-0 bg-gray-900 border border-gray-700 rounded-lg shadow-xl w-80 max-h-96 overflow-hidden" onClick={e => e.stopPropagation()}>
+      <div className="flex items-center justify-between px-3 py-2 border-b border-gray-700">
+        <span className="text-white text-sm font-semibold">Notes — {vendor}</span>
+        <div className="flex gap-2">
+          <button onClick={() => setAdding(!adding)} className="text-xs bg-blue-600 text-white px-2 py-0.5 rounded">+ Add</button>
+          <button onClick={() => setOpen(false)} className="text-gray-400 hover:text-white text-xs">✕</button>
+        </div>
+      </div>
+      {adding && (
+        <div className="px-3 py-2 border-b border-gray-700 space-y-2">
+          <div className="flex gap-1 flex-wrap">
+            {VC_CATS.map(c => (
+              <button key={c} onClick={() => setCat(c)} className={`text-[10px] px-1.5 py-0.5 rounded ${cat === c ? "bg-blue-600 text-white" : "bg-gray-800 text-gray-400"}`}>{c}</button>
+            ))}
+          </div>
+          <textarea value={text} onChange={e => setText(e.target.value)} placeholder="Add a note..." rows={2}
+            className="w-full bg-gray-800 border border-gray-600 text-white rounded px-2 py-1 text-xs resize-none" />
+          <div className="flex gap-2">
+            <button onClick={save} className="text-xs bg-emerald-600 text-white px-3 py-1 rounded">Save</button>
+            <button onClick={() => { setAdding(false); setText("") }} className="text-xs bg-gray-700 text-gray-300 px-2 py-1 rounded">Cancel</button>
+          </div>
+        </div>
+      )}
+      <div className="overflow-y-auto max-h-60">
+        {notes.length > 0 ? notes.map((n, i) => (
+          <div key={i} className={`px-3 py-2 ${i > 0 ? "border-t border-gray-800/50" : ""}`}>
+            <div className="flex items-center gap-2 mb-0.5">
+              <span className={`text-[10px] font-semibold ${VC_COLORS[n.category] || "text-gray-400"}`}>{n.category}</span>
+              <span className="text-gray-500 text-[10px]">{n.date}</span>
+              {n.author && <span className="text-gray-600 text-[10px]">— {n.author}</span>}
+            </div>
+            <p className="text-gray-300 text-xs">{n.comment}</p>
+          </div>
+        )) : <p className="text-gray-500 text-xs text-center py-4">No notes yet</p>}
+      </div>
+    </div>
+  );
+}
 }
