@@ -313,12 +313,12 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
   // === CORE ROW ===
   const CoreRow = ({ c, mixAdj }) => {
     if (dismissed[c.id]) return <tr className="border-t border-gray-800/20 bg-gray-900/30 text-xs opacity-40"><td className="py-1 px-1" colSpan={2}><Dot status={c.status} /></td><td className="py-1 px-1 text-gray-500 font-mono">{c.id}</td><td className="py-1 px-1 text-gray-600 truncate max-w-[110px]">{c.ti}</td><td colSpan={20} className="py-1 px-1 text-right"><button onClick={() => togDismiss(c.id)} className="text-xs text-gray-500 hover:text-white px-1">+</button></td></tr>;
-    const eq = coreEffQ(c); const cost = eq * c.cost; const adj = mixAdj || 0;
-    // Core After DOC: add bundle orders (they add to pipeline as core pieces)
+    const eq = coreEffQ(c); const cost = eq * c.cost;
+    // Core After DOC: add bundle orders converted to core pieces
     const bundleOrderPieces = (data.bundles || []).filter(b => b.core1 === c.id && b.active === "Yes").reduce((s, b) => {
       return s + (bundleEffQ(b) * (b.qty1 || 1));
     }, 0);
-    const coreAfterInv = c.allIn + eq + adj + bundleOrderPieces;
+    const coreAfterInv = c.allIn + eq + bundleOrderPieces;
     const ad = (eq > 0 || bundleOrderPieces > 0) && c.dsr > 0 ? Math.round(coreAfterInv / c.dsr) : null;
     const isCol = collapsed[c.id];
     const combinedRec = showPH[c.id] ? getCombinedRec(c.id) : [];
