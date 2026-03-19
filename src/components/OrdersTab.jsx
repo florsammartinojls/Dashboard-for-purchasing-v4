@@ -73,6 +73,33 @@ export default function OrdersTab({ data }) {
     return arr;
   }, [vendorGroups, vendorF, q]);
 
+  // Group by Core/JLS
+  const coreGroups = useMemo(() => {
+    const g = {};
+    rows.forEach(r => {
+      const cid = r.core || "Unknown";
+      if (!g[cid]) g[cid] = { core: cid, title: r.shortTitle || "", orders: [], totalPcs: 0, totalValue: 0, vendors: new Set() };
+      g[cid].orders.push(r);
+      g[cid].totalPcs += r.pcs || 0;
+      g[cid].totalValue += (r.pcs || 0) * (r.price || 0);
+      if (r.vendor) g[cid].vendors.add(r.vendor);
+      if (!g[cid].title && r.shortTitle) g[cid].title = r.shortTitle;
+    });
+    return Object.values(g).map(c => ({ ...c, vendors: [...c.vendors].join(", "), orderCount: c.orders.length }))
+      .sort((a, b) => b.totalValue - a.totalValue);
+  }, [rows]);
+
+  const filteredCores = useMemo(() => {
+    let arr = coreGroups;
+    if (vendorF) arr = arr.filter(c => c.orders.some(o => o.vendor === vendorF));
+    if (q) arr = arr.filter(c =>
+      c.core.toLowerCase().includes(q) ||
+      c.title.toLowerCase().includes(q) ||
+      c.vendors.toLowerCase().includes(q)
+    );
+    return arr;
+  }, [coreGroups, vendorF, q]);
+
   const tog = id => setExpanded(p => ({ ...p, [id]: !p[id] }));
 
   // Summary
@@ -87,7 +114,7 @@ export default function OrdersTab({ data }) {
         className="bg-gray-800 border border-gray-700 text-white rounded-lg px-4 py-2 w-full max-w-xs text-sm" />
       <SS value={vendorF} onChange={setVendorF} options={vendors} placeholder="All Vendors" />
       <div className="flex bg-gray-800 rounded-lg p-0.5">
-        {[["po", "By PO"], ["vendor", "By Vendor"]].map(([k, l]) =>
+        {[["po", "By PO"], ["vendor", "By Vendor"], ["core", "By Core/JLS"]].map(([k, l]) =>
           <button key={k} onClick={() => setViewBy(k)} className={`px-3 py-1.5 rounded-md text-sm font-medium ${viewBy === k ? "bg-blue-600 text-white" : "text-gray-400"}`}>{l}</button>
         )}
       </div>
@@ -229,6 +256,68 @@ export default function OrdersTab({ data }) {
           </div>}
         </div>;
       })}
+    </div>}
+
+    {/* === BY CORE/JLS VIEW === */}
+    {viewBy === "core" && <div className="space-y-1">
+      {filteredCores.slice(0, limit).map(cg => {
+        const isOpen = expanded["_c_" + cg.core];
+        return <div key={cg.core} className="border border-gray-800 rounded-lg overflow-hidden">
+          <button onClick={() => tog("_c_" + cg.core)}
+            className="w-full flex items-center gap-3 px-4 py-3 bg-gray-900/50 hover:bg-gray-800 text-left">
+            <span className="text-xs text-gray-500 w-5">{isOpen ? "▼" : "▶"}</span>
+            <span className="text-blue-400 font-mono text-sm min-w-[100px]">{cg.core}</span>
+            <span className="text-gray-300 text-sm flex-1 truncate">{cg.title}</span>
+            <span className="text-gray-500 text-xs truncate max-w-[150px]">{cg.vendors}</span>
+            <span className="text-gray-400 text-xs">{cg.orderCount} orders</span>
+            <span className="text-gray-300 text-xs">{R(cg.totalPcs)} pcs</span>
+            <span className="text-amber-300 text-xs font-semibold">{$(cg.totalValue)}</span>
+          </button>
+          {isOpen && <div className="bg-gray-900/30 px-4 py-2">
+            <table className="w-full text-xs">
+              <thead><tr className="text-gray-500 uppercase">
+                <th className="py-1 px-2 text-left">Date</th>
+                <th className="py-1 px-2 text-left">Vendor</th>
+                <th className="py-1 px-2 text-left">PO#</th>
+                <th className="py-1 px-2 text-left">VSKU</th>
+                <th className="py-1 px-2 text-right">Pcs</th>
+                <th className="py-1 px-2 text-right">Cases</th>
+                <th className="py-1 px-2 text-right">Price</th>
+                <th className="py-1 px-2 text-right">Total</th>
+                <th className="py-1 px-2 text-right">ETA</th>
+                <th className="py-1 px-2 text-right">Missing</th>
+              </tr></thead>
+              <tbody>{cg.orders.sort((a, b) => (b.date || "").localeCompare(a.date || "")).map((r, i) => {
+                const lt = (r.pcs || 0) * (r.price || 0);
+                return <tr key={i} className={`border-t border-gray-800/30 ${i % 2 === 0 ? "bg-gray-800/20" : ""}`}>
+                  <td className="py-1.5 px-2 text-gray-300">{fDateUS(r.date)}</td>
+                  <td className="py-1.5 px-2 text-gray-300 truncate max-w-[150px]">{r.vendor}</td>
+                  <td className="py-1.5 px-2 text-blue-400 font-mono">{r.orderNum}</td>
+                  <td className="py-1.5 px-2 text-gray-500">{r.vsku}</td>
+                  <SC v={r.pcs} className="py-1.5 px-2 text-right text-white">{R(r.pcs)}</SC>
+                  <td className="py-1.5 px-2 text-right">{r.cases > 0 ? R(r.cases) : "—"}</td>
+                  <td className="py-1.5 px-2 text-right text-gray-400">{r.price > 0 ? "$" + r.price.toFixed(4) : "—"}</td>
+                  <SC v={lt} className="py-1.5 px-2 text-right text-amber-300">{lt > 0 ? $(lt) : "—"}</SC>
+                  <td className="py-1.5 px-2 text-right text-emerald-400">{r.eta ? fE(r.eta) : "—"}</td>
+                  <td className={`py-1.5 px-2 text-right ${r.piecesMissing > 0 ? "text-red-400" : "text-gray-600"}`}>{r.piecesMissing > 0 ? R(r.piecesMissing) : "—"}</td>
+                </tr>;
+              })}</tbody>
+              <tfoot><tr className="border-t-2 border-gray-700 font-semibold">
+                <td colSpan={4} className="py-2 px-2 text-gray-400">{cg.orderCount} orders</td>
+                <td className="py-2 px-2 text-right text-white">{R(cg.totalPcs)}</td>
+                <td colSpan={2} />
+                <td className="py-2 px-2 text-right text-amber-300">{$(cg.totalValue)}</td>
+                <td colSpan={2} />
+              </tr></tfoot>
+            </table>
+          </div>}
+        </div>;
+      })}
+      {limit < filteredCores.length && <div className="mt-4 text-center">
+        <button onClick={() => setLimit(p => p + 30)} className="text-sm text-blue-400 hover:text-white bg-blue-400/10 px-4 py-2 rounded">
+          Load More ({filteredCores.length - limit} remaining)
+        </button>
+      </div>}
     </div>}
 
     {filteredPOs.length === 0 && <p className="text-gray-500 text-sm py-8 text-center">No orders match filters</p>}
