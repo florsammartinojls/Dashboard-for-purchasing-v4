@@ -162,7 +162,7 @@ export default function BundleTab({ data, stg, hist, daily, bundleId, onBack, go
       </div>
       <p className="text-gray-300 text-sm">{b.t}</p>
       <p className="text-gray-500 text-xs">
-        {b.asin && <a href={`https://sellercentral.amazon.com/skucentral?mSku=${b.asin}`} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline underline decoration-dotted">ASIN:{b.asin} ↗</a>}
+        {b.asin && <a href={`https://sellercentral.amazon.com/myinventory/inventory?fulfilledBy=all&page=1&pageSize=25&searchField=all&searchTerm=${b.asin}&sort=date_created_desc&status=all`} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline underline decoration-dotted">{b.asin} ↗</a>}
         {b.asin && " · "}{b.vendors}
       </p>
     </div>
