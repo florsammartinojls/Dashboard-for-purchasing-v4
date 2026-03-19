@@ -270,7 +270,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
         const need = Math.ceil(Math.max(0, (tg - baseDOC) * b.cd));
         if (need <= 0) return;
         const qpb = b.qty1 || 1;
-        const effectiveMoq = bMoq > 0 ? bMoq : (pc.moq || 0);
+        const effectiveMoq = bMoq > 0 ? bMoq : 0; // Only use B.MOQ for bundles, not core MOQ
         if (need < effectiveMoq) {
           coreExtras[pc.id] = (coreExtras[pc.id] || 0) + (need * qpb);
         } else {
