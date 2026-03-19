@@ -314,12 +314,24 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
   const CoreRow = ({ c, mixAdj }) => {
     if (dismissed[c.id]) return <tr className="border-t border-gray-800/20 bg-gray-900/30 text-xs opacity-40"><td className="py-1 px-1" colSpan={2}><Dot status={c.status} /></td><td className="py-1 px-1 text-gray-500 font-mono">{c.id}</td><td className="py-1 px-1 text-gray-600 truncate max-w-[110px]">{c.ti}</td><td colSpan={20} className="py-1 px-1 text-right"><button onClick={() => togDismiss(c.id)} className="text-xs text-gray-500 hover:text-white px-1">+</button></td></tr>;
     const eq = coreEffQ(c); const cost = eq * c.cost;
-    // Core After DOC: add bundle orders converted to core pieces
-    const bundleOrderPieces = (data.bundles || []).filter(b => b.core1 === c.id && b.active === "Yes").reduce((s, b) => {
-      return s + (bundleEffQ(b) * (b.qty1 || 1));
-    }, 0);
-    const coreAfterInv = c.allIn + eq + bundleOrderPieces;
-    const ad = (eq > 0 || bundleOrderPieces > 0) && c.dsr > 0 ? Math.round(coreAfterInv / c.dsr) : null;
+    // Core After DOC
+    const activeBundlesForCore = (data.bundles || []).filter(b => b.core1 === c.id && b.active === "Yes");
+    const bundleOrderPieces = activeBundlesForCore.reduce((s, b) => s + (bundleEffQ(b) * (b.qty1 || 1)), 0);
+    let ad = null;
+    if (eq > 0 && c.dsr > 0) {
+      if (activeBundlesForCore.length === 1) {
+        // Single bundle: use bundle's effective DOC formula for consistency
+        const sb = activeBundlesForCore[0];
+        const alloc = rawAllocMap[sb.j] || { rawUnits: 0, baseInv: 0 };
+        const bOrd = bundleEffQ(sb);
+        const bInv = alloc.baseInv + alloc.rawUnits + bOrd + (eq * (sb.qty1 || 1) > 0 ? eq / (sb.qty1 || 1) : 0);
+        ad = sb.cd > 0 ? Math.round(bInv / sb.cd) : null;
+      } else {
+        // Multiple bundles: use core-level formula
+        const coreAfterInv = c.allIn + eq + bundleOrderPieces;
+        ad = Math.round(coreAfterInv / c.dsr);
+      }
+    }
     const isCol = collapsed[c.id];
     const combinedRec = showPH[c.id] ? getCombinedRec(c.id) : [];
 
