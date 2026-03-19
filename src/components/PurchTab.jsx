@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useCallback, useEffect, useContext, Fragment } from "react";
 import { R, D1, $, $2, $4, P, gS, cAI, cNQ, cOQ, cDA, bNQ, isD, gTD, dc, cSeas, fSl, fMY, fE, fDateUS, effectiveDSR, roundToCasePack, genPO, genRFQ, cp7f, cp7g } from "../lib/utils";
-import { Dot, Toast, TH, SS, WorkflowChip, NumInput, SumCtx } from "./Shared";
+import { Dot, Toast, TH, SS, WorkflowChip, NumInput, SumCtx, VendorNotes } from "./Shared";
 
 // Clickable numeric cell for Quick Sum
 function SC({ v, children, className }) {
@@ -12,7 +12,7 @@ function SC({ v, children, className }) {
   return <td className={`${className || ''} ${sel ? "bg-blue-500/20 ring-1 ring-blue-500" : ""} ${ok ? "cursor-pointer select-none" : ""}`} onClick={tog}>{children}</td>;
 }
 
-export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, setOv, initV, clearIV, saveWorkflow, deleteWorkflow }) {
+export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, setOv, initV, clearIV, saveWorkflow, deleteWorkflow, saveVendorComment }) {
   const [vm, setVm] = useState(initV ? "vendor" : "core");
   const [sort, setSort] = useState("status");
   const [vf, setVf] = useState(initV || "");
@@ -506,6 +506,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
           <div className="flex flex-wrap items-center gap-3 mb-2">
             <span className="text-white font-semibold cursor-pointer hover:text-blue-400 hover:underline" onClick={() => window.open(window.location.pathname + '?vendor=' + encodeURIComponent(v.name), '_blank')}>{v.name}</span>
             <div className="relative"><WorkflowChip id={v.name} type="vendor" workflow={data.workflow} onSave={saveWorkflow} onDelete={deleteWorkflow} buyer={stg.buyer} /></div>
+            <div className="relative"><VendorNotes vendor={v.name} comments={data.vendorComments} onSave={saveVendorComment} buyer={stg.buyer} /></div>
             {v.country && <span className="text-xs text-gray-500">{v.country}</span>}
             <span className="text-xs text-gray-400">LT:{v.lt}d</span>
             <span className="text-xs text-gray-400">Buf:{grp.cores[0]?.buf || 14}d</span>
