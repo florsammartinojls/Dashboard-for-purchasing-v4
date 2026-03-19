@@ -300,6 +300,7 @@ export function WorkflowChip({ id, type, workflow, onSave, onDelete, buyer }) {
 // === Vendor Comments Panel ===
 const VC_CATS = ["Communication", "Lead Time", "Pricing", "Discount", "Quality", "Other"];
 const VC_COLORS = { Communication: "text-blue-400", "Lead Time": "text-amber-400", Pricing: "text-emerald-400", Discount: "text-purple-400", Quality: "text-red-400", Other: "text-gray-400" };
+}
 
 export function VendorNotes({ vendor, comments, onSave, buyer }) {
   const [open, setOpen] = useState(false);
@@ -362,4 +363,4 @@ export function VendorNotes({ vendor, comments, onSave, buyer }) {
     </div>
   );
 }
-}
+
