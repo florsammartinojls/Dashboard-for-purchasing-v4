@@ -5,6 +5,7 @@ import { Loader, Stg, QuickSum, SumCtx, SlidePanel, Dot, WorkflowChip } from "./
 import PurchTab from "./components/PurchTab";
 import CoreTab from "./components/CoreTab";
 import BundleTab from "./components/BundleTab";
+import OrdersTab from "./components/OrdersTab";
 
 // === Vendors Tab ===
 function VendorsTab({ data, stg, goVendor, workflow, saveWorkflow, deleteWorkflow }) {
@@ -134,6 +135,7 @@ const DEFAULT_GL = [
   { term: "Raw 20d Min", desc: "When Fill Rec recommends core, minimum order covers 20 days of DSR as raw material = DSR × 20." },
   { term: "Raw Waterfall", desc: "Core raw units are allocated across its bundles by priority: lowest effective DOC gets raw first until reaching Target DOC, then next bundle. When raw runs out, remaining bundles get nothing." },
   { term: "PO#", desc: "Auto-generated: PO-ExcelSerial-VendorCode. Override with manual entry." },
+  { term: "Orders Tab", desc: "PO History from 7f Receiving. View by PO (newest first) or by Vendor (highest spend first). Click to expand and see line items. Search by PO#, vendor, or core/JLS#." },
   { term: "Quick Sum", desc: "Click numeric cells to select them. Sum & Avg appear in the bottom bar. Click ✕ to clear." },
 ];
 
@@ -176,7 +178,7 @@ function GlossTab() {
 }
 
 // === MAIN APP ===
-const TABS = [{ id: "purchasing", l: "Purchasing" }, { id: "core", l: "Core Detail" }, { id: "bundle", l: "Bundle Detail" }, { id: "vendors", l: "Vendors" }, { id: "glossary", l: "Glossary" }];
+const TABS = [{ id: "purchasing", l: "Purchasing" }, { id: "core", l: "Core Detail" }, { id: "bundle", l: "Bundle Detail" }, { id: "orders", l: "Orders" }, { id: "vendors", l: "Vendors" }, { id: "glossary", l: "Glossary" }];
 
 export default function App() {
   const urlParams = useMemo(() => new URLSearchParams(window.location.search), []);
@@ -188,7 +190,7 @@ export default function App() {
   const [stg, setStg] = useState({ buyer: '', domesticDoc: 90, intlDoc: 180, fA: "yes", fI: "blank", fV: "yes" });
   const [coreId, setCoreId] = useState(initCore || null);
   const [bundleId, setBundleId] = useState(initBundle || null);
-  const [data, setData] = useState({ cores: [], bundles: [], vendors: [], sales: [], fees: [], inbound: [], abcA: [], abcT: [], abcSub: '', restock: [], priceComp: [], agedInv: [], killMgmt: [], workflow: [], receiving: [], replenRec: [] });
+  const [data, setData] = useState({ cores: [], bundles: [], vendors: [], sales: [], fees: [], inbound: [], abcA: [], abcT: [], abcSub: '', restock: [], priceComp: [], agedInv: [], killMgmt: [], workflow: [], receiving: [], replenRec: [], receivingFull: [] });
   const [hist, setHist] = useState({ bundleSales: [], coreInv: [], bundleInv: [], priceHist: [] });
   const [daily, setDaily] = useState({ coreDays: [], bundleDays: [] });
   const [ov, setOv] = useState({});
@@ -207,7 +209,7 @@ export default function App() {
   const load = useCallback(() => {
     setLoading(true); setError(null);
     api('live').then(d => {
-      setData({ cores: d.cores || [], bundles: d.bundles || [], vendors: d.vendors || [], sales: d.sales || [], fees: d.fees || [], inbound: d.inbound || [], abcA: d.abcA || [], abcT: d.abcT || [], abcSub: d.abcSub || '', restock: d.restock || [], priceComp: d.priceComp || [], agedInv: d.agedInv || [], killMgmt: d.killMgmt || [], workflow: d.workflow || [], receiving: d.receiving || [], replenRec: d.replenRec || [] });
+      setData({ cores: d.cores || [], bundles: d.bundles || [], vendors: d.vendors || [], sales: d.sales || [], fees: d.fees || [], inbound: d.inbound || [], abcA: d.abcA || [], abcT: d.abcT || [], abcSub: d.abcSub || '', restock: d.restock || [], priceComp: d.priceComp || [], agedInv: d.agedInv || [], killMgmt: d.killMgmt || [], workflow: d.workflow || [], receiving: d.receiving || [], replenRec: d.replenRec || [], receivingFull: d.receivingFull || [] });
       setTs(d.timestamp || ""); setLoading(false);
       api('history').then(h => { setHist(h); setRdy(r => ({ ...r, h: true })) }).catch(() => setRdy(r => ({ ...r, h: true })));
       api('daily').then(d => { setDaily(d); setRdy(r => ({ ...r, d: true })) }).catch(() => setRdy(r => ({ ...r, d: true })));
@@ -296,6 +298,7 @@ export default function App() {
         {tab === "purchasing" && <PurchTab data={dataH} stg={stg} goCore={goCore} goBundle={goBundle} goVendor={goVendor} ov={ov} setOv={setOv} initV={initV} clearIV={clearIV} saveWorkflow={saveWorkflow} deleteWorkflow={deleteWorkflow} />}
         {tab === "core" && <CoreTab data={data} stg={stg} hist={hist} daily={daily} coreId={coreId} onBack={handleBackFromCore} goBundle={goBundle} />}
         {tab === "bundle" && <BundleTab data={data} stg={stg} hist={hist} daily={daily} bundleId={bundleId} onBack={handleBackFromBundle} goCore={goCore} />}
+        {tab === "orders" && <OrdersTab data={data} />}
         {tab === "vendors" && <VendorsTab data={data} stg={stg} goVendor={goVendor} workflow={data.workflow} saveWorkflow={saveWorkflow} deleteWorkflow={deleteWorkflow} />}
         {tab === "glossary" && <GlossTab />}
       </main>
