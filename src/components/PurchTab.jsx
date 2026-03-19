@@ -73,13 +73,25 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
     return m;
   }, [data.replenRec]);
 
-  // 7f missing map by JLS#
+  // 7f missing map by JLS# (= inbound in transit)
   const missingMap = useMemo(() => {
     const m = {};
     (data.receiving || []).forEach(r => {
       if (r.piecesMissing > 0) {
         const k = (r.core || "").trim();
         m[k] = (m[k] || 0) + r.piecesMissing;
+      }
+    });
+    return m;
+  }, [data.receiving]);
+
+  // 7f case pack by JLS# (derive from pcs/cases in receiving)
+  const casePackFromRec = useMemo(() => {
+    const m = {};
+    (data.receiving || []).forEach(r => {
+      const k = (r.core || "").trim();
+      if (k && r.pcs > 0 && r.cases > 0 && !m[k]) {
+        m[k] = Math.round(r.pcs / r.cases);
       }
     });
     return m;
@@ -130,6 +142,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
   const sc = useMemo(() => { const c = { critical: 0, warning: 0, healthy: 0 }; enr.forEach(x => c[x.status]++); return c }, [enr]);
 
   // Raw waterfall allocation: distribute core raw to bundles by lowest effective DOC first
+  // baseDOC = (FIB + 7f_inbound + PPRC) / DSR — always calculated for ALL bundles
   const rawAllocMap = useMemo(() => {
     const map = {};
     const activeBundles = (data.bundles || []).filter(b => {
@@ -150,15 +163,20 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
       const bData = bundles.map(b => {
         const rp = replenMap[b.j];
         const pprc = rp?.pprcUnits || 0;
-        const inv = (b.fibInv || 0) + (b.inbound || 0) + pprc;
+        const inb7f = missingMap[b.j] || 0;
+        const inv = (b.fibInv || 0) + inb7f + pprc;
         const dsr = b.cd || 0;
         const baseDOC = dsr > 0 ? inv / dsr : 9999;
         const qtyPerBundle = b.qty1 || 1;
         return { j: b.j, baseDOC, dsr, qtyPerBundle, inv };
-      }).filter(x => x.dsr > 0).sort((a, b) => a.baseDOC - b.baseDOC);
+      }).sort((a, b) => a.baseDOC - b.baseDOC);
       const tg = c.targetDoc || 180;
+      // Allocate raw — even DSR=0 bundles get a baseDOC entry
       bData.forEach(bd => {
-        if (pool <= 0) { map[bd.j] = { rawUnits: 0, baseDOC: bd.baseDOC, baseInv: bd.inv }; return }
+        if (bd.dsr <= 0 || pool <= 0) {
+          map[bd.j] = { rawUnits: 0, baseDOC: bd.baseDOC, baseInv: bd.inv };
+          return;
+        }
         const needDOC = Math.max(0, tg - bd.baseDOC);
         const needBundleUnits = needDOC * bd.dsr;
         const needCorePieces = needBundleUnits * bd.qtyPerBundle;
@@ -167,18 +185,9 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
         const giveUnits = bd.qtyPerBundle > 0 ? givePieces / bd.qtyPerBundle : 0;
         map[bd.j] = { rawUnits: giveUnits, baseDOC: bd.baseDOC, baseInv: bd.inv };
       });
-      bundles.forEach(b => {
-        if (!map[b.j]) {
-          const rp = replenMap[b.j];
-          const pprc = rp?.pprcUnits || 0;
-          const inv = (b.fibInv || 0) + (b.inbound || 0) + pprc;
-          const dsr = b.cd || 0;
-          map[b.j] = { rawUnits: 0, baseDOC: dsr > 0 ? inv / dsr : 0, baseInv: inv };
-        }
-      });
     });
     return map;
-  }, [enr, data.bundles, replenMap, bA]);
+  }, [enr, data.bundles, replenMap, missingMap, bA]);
 
   const gO = id => ov[id] || {};
   const setF = (id, f, v) => setOv(p => ({ ...p, [id]: { ...(p[id] || {}), [f]: v } }));
@@ -229,7 +238,8 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
         const pc = coreMap[b.core1]; if (!pc) return;
         const rp = replenMap[b.j];
         const pprc = rp?.pprcUnits || 0;
-        const baseInv = (b.fibInv || 0) + (b.inbound || 0) + pprc;
+        const inb7f = missingMap[b.j] || 0;
+        const baseInv = (b.fibInv || 0) + inb7f + pprc;
         const baseDOC = b.cd > 0 ? baseInv / b.cd : 9999;
         const need = Math.ceil(Math.max(0, (tg - baseDOC) * b.cd));
         if (need <= 0) return;
@@ -240,9 +250,12 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
           u[b.j] = { ...(u[b.j] || {}), pcs: bMoq > 0 ? Math.max(need, bMoq) : need };
         }
       });
+      // Core: converted bundle pieces + 20d raw minimum
       cores.forEach(c => {
         const extra = coreExtrasFromBundles[c.id] || 0;
-        if (extra > 0) u[c.id] = { ...(u[c.id] || {}), pcs: cOQ(extra, c.moq, c.casePack) };
+        const raw20d = Math.ceil((c.dsr || 0) * 20);
+        const coreNeed = Math.max(extra, raw20d);
+        if (coreNeed > 0) u[c.id] = { ...(u[c.id] || {}), pcs: cOQ(coreNeed, c.moq, c.casePack) };
       });
     } else if (mode === "mix") {
       const coreMap = {}; cores.forEach(c => { coreMap[c.id] = c });
@@ -251,7 +264,8 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
         const tg = cores[0]?.targetDoc || 90; const pc = coreMap[b.core1]; if (!pc) return;
         const rp = replenMap[b.j];
         const pprc = rp?.pprcUnits || 0;
-        const baseInv = (b.fibInv || 0) + (b.inbound || 0) + pprc;
+        const inb7f = missingMap[b.j] || 0;
+        const baseInv = (b.fibInv || 0) + inb7f + pprc;
         const baseDOC = b.cd > 0 ? baseInv / b.cd : 9999;
         const need = Math.ceil(Math.max(0, (tg - baseDOC) * b.cd));
         if (need <= 0) return;
@@ -264,10 +278,17 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
           cwo.add(pc.id);
         }
       });
+      // Core: converted pieces + own need + 20d raw minimum
       cores.forEach(c => {
         const extra = coreExtras[c.id] || 0;
-        if (extra > 0) u[c.id] = { ...(u[c.id] || {}), pcs: cOQ(extra, c.moq, c.casePack) };
-        else if (!cwo.has(c.id) && c.needQty > 0) u[c.id] = { ...(u[c.id] || {}), pcs: cOQ(c.needQty, c.moq, c.casePack) };
+        const raw20d = Math.ceil((c.dsr || 0) * 20);
+        if (extra > 0) {
+          const coreNeed = Math.max(extra, raw20d);
+          u[c.id] = { ...(u[c.id] || {}), pcs: cOQ(coreNeed, c.moq, c.casePack) };
+        } else if (!cwo.has(c.id) && c.needQty > 0) {
+          const coreNeed = Math.max(c.needQty, raw20d);
+          u[c.id] = { ...(u[c.id] || {}), pcs: cOQ(coreNeed, c.moq, c.casePack) };
+        }
       });
     } else {
       cores.filter(c => c.needQty > 0).forEach(c => { u[c.id] = { ...(u[c.id] || {}), pcs: cOQ(c.needQty, c.moq, c.casePack) } });
@@ -290,7 +311,13 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
   const CoreRow = ({ c, mixAdj }) => {
     if (dismissed[c.id]) return <tr className="border-t border-gray-800/20 bg-gray-900/30 text-xs opacity-40"><td className="py-1 px-1" colSpan={2}><Dot status={c.status} /></td><td className="py-1 px-1 text-gray-500 font-mono">{c.id}</td><td className="py-1 px-1 text-gray-600 truncate max-w-[110px]">{c.ti}</td><td colSpan={20} className="py-1 px-1 text-right"><button onClick={() => togDismiss(c.id)} className="text-xs text-gray-500 hover:text-white px-1">+</button></td></tr>;
     const eq = coreEffQ(c); const cost = eq * c.cost; const adj = mixAdj || 0;
-    const ad = aftD(c.allIn + adj, eq, c.dsr);
+    // Core After DOC: subtract bundle orders that consume core pieces
+    const bundleConsumption = (data.bundles || []).filter(b => b.core1 === c.id && b.active === "Yes").reduce((s, b) => {
+      const bOrd = bundleEffQ(b);
+      return s + (bOrd * (b.qty1 || 1));
+    }, 0);
+    const coreAfterInv = c.allIn + eq + adj - bundleConsumption;
+    const ad = (eq > 0 || bundleConsumption > 0) && c.dsr > 0 ? Math.round(Math.max(0, coreAfterInv) / c.dsr) : null;
     const isCol = collapsed[c.id];
     const combinedRec = showPH[c.id] ? getCombinedRec(c.id) : [];
 
@@ -342,15 +369,15 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
   const BundleRow = ({ b, indent }) => {
     const f = b.fee || feMap[b.j]; const eq = bundleEffQ(b); const cost = f ? (eq * (f.aicogs || 0)) : 0;
     const aged = agedMap[b.j]; const kill = killMap[b.j];
-    const bMiss = missingMap[b.j] || 0;
+    const inb7f = missingMap[b.j] || 0;
     const rs = rsBundleMap[b.j];
     const rp = replenMap[b.j];
     const margin = f && f.aicogs > 0 ? ((f.gp / f.aicogs) * 100) : 0;
-    // After DOC with raw waterfall allocation
+    const bCasePack = casePackFromRec[b.j] || 0;
+    // After DOC: always show — base = (FIB + 7f_inbound + PPRC + raw_waterfall + order) / DSR
     const alloc = rawAllocMap[b.j] || { rawUnits: 0, baseDOC: 0, baseInv: 0 };
-    const effectiveInv = alloc.baseInv + alloc.rawUnits;
-    const effectiveDOC = b.cd > 0 ? Math.round((effectiveInv + eq) / b.cd) : null;
-    const showAfterDoc = eq > 0 || alloc.rawUnits > 0;
+    const effectiveInv = alloc.baseInv + alloc.rawUnits + eq;
+    const effectiveDOC = b.cd > 0 ? Math.round(effectiveInv / b.cd) : null;
 
     return <tr className={`border-t border-gray-800/20 hover:bg-indigo-900/10 text-xs ${hasBundleOrd(b) ? "bg-emerald-900/10" : "bg-indigo-950/20"}`}>
       <td className="py-1 px-1 sticky left-0 bg-indigo-950/20 z-10" />
@@ -370,7 +397,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
       <td className="py-1 px-1 text-center">{b.d7comp > b.cd ? <span className="text-emerald-400">▲</span> : b.d7comp < b.cd ? <span className="text-red-400">▼</span> : "—"}</td>
       <SC v={b.doc} className="py-1 px-1 text-right text-indigo-300">{R(b.doc)}</SC>
       <td className="py-1 px-1 text-right text-gray-700" />
-      <td className="py-1 px-1 text-gray-700" />
+      <td className="py-1 px-1 text-gray-500 text-right">{bCasePack > 0 ? R(bCasePack) : ""}</td>
       <td className="py-1 px-1 text-gray-700" />
       <td className="py-1 px-1 text-center text-indigo-300">{b.replenTag || ""}</td>
       {!collapsed[b.j] && <td colSpan={4} />}
@@ -382,7 +409,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
         <SC v={rp?.batched} className="py-1 px-1 text-right">{R(rp?.batched || 0)}</SC>
         <SC v={b.fibInv} className="py-1 px-1 text-right text-cyan-300">{R(b.fibInv || 0)}</SC>
         <SC v={rp?.pprcUnits} className="py-1 px-1 text-right">{R(rp?.pprcUnits || 0)}</SC>
-        <td className="py-1 px-1 text-right text-red-400">{bMiss > 0 ? R(bMiss) : "0"}</td>
+        <td className="py-1 px-1 text-right text-red-400">{inb7f > 0 ? R(inb7f) : "0"}</td>
       </>}
       <td className="py-1 border-l-2 border-gray-600 px-1" />
       <td className="py-0.5 px-0.5 sticky right-36 bg-indigo-950/20 z-10"><NumInput value={gPcs(b.j)} onChange={v => setF(b.j, 'pcs', v)} /></td>
@@ -393,7 +420,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
         <td className="py-0.5 px-0.5"><NumInput value={gCogC(b.j)} onChange={v => setF(b.j, 'cogC', v)} /></td>
       </>}
       <SC v={cost} className="py-1 px-1 text-right text-amber-300 sticky right-12 bg-indigo-950/20 z-10">{cost > 0 ? $(cost) : "—"}</SC>
-      <td className={`py-1 px-1 text-right sticky right-0 bg-indigo-950/20 z-10 ${showAfterDoc && effectiveDOC ? (effectiveDOC <= 30 ? "text-red-400" : effectiveDOC <= 60 ? "text-amber-400" : "text-emerald-400") : "text-gray-600"}`}>{showAfterDoc && effectiveDOC ? R(effectiveDOC) : "—"}</td>
+      <td className={`py-1 px-1 text-right sticky right-0 bg-indigo-950/20 z-10 ${effectiveDOC ? (effectiveDOC <= 30 ? "text-red-400" : effectiveDOC <= 60 ? "text-amber-400" : "text-emerald-400") : "text-gray-600"}`}>{effectiveDOC ? R(effectiveDOC) : "—"}</td>
       <td className="py-1 px-1"><button onClick={() => goBundle(b.j)} className="text-indigo-400 px-0.5 bg-indigo-400/10 rounded text-xs">V</button></td>
     </tr>;
   };
