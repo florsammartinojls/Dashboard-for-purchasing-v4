@@ -35,6 +35,17 @@ export default function BundleTab({ data, stg, hist, daily, bundleId, onBack, go
   const bKill = sel ? killMap[sel] : null;
   const bStatus = b ? gS(b.doc, 60, 30, { critDays: 30, warnDays: 60 }) : "healthy";
 
+  // === INBOUND TO WAREHOUSE (from 7f inbound data, filtered by bundle's cores) ===
+  const coreInbound = useMemo(() => {
+    if (!b) return { pcs: 0, eta: null };
+    const cores = [b.core1, b.core2, b.core3].filter(Boolean);
+    const inbs = (data.inbound || []).filter(i => cores.includes(i.core));
+    const totalPcs = inbs.reduce((s, i) => s + (i.pieces || 0), 0);
+    // Get earliest future ETA
+    const etas = inbs.map(i => i.eta).filter(Boolean).sort();
+    return { pcs: totalPcs, eta: etas.length > 0 ? etas[etas.length - 1] : null };
+  }, [data.inbound, b]);
+
   // Bundle inventory history (merged summary + daily aggregation) → Units = sum of Complete DSR
   const bInv = useMemo(() => (hist?.bundleInv || []).filter(h => h.j === sel), [hist, sel]);
   const uYrs = useMemo(() => gY(bInv), [bInv]);
@@ -145,7 +156,6 @@ export default function BundleTab({ data, stg, hist, daily, bundleId, onBack, go
   </div>;
 
   // === DETAIL VIEW ===
-  const potentialUnits = (b.fibInv || 0) + (b.scInv || 0) + (b.reserved || 0) + (b.inbound || 0);
   return <div className="p-4 max-w-7xl mx-auto">
     <button onClick={() => { setSel(null); onBack() }} className="text-gray-400 hover:text-white text-sm mb-4">← Back</button>
     {/* Header */}
@@ -170,14 +180,15 @@ export default function BundleTab({ data, stg, hist, daily, bundleId, onBack, go
     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
       <div className="bg-gray-900 rounded-xl p-4 border border-gray-800"><h4 className="text-gray-500 text-xs uppercase mb-3">Sales & Inventory</h4><div className="grid grid-cols-4 gap-y-4">{[
         { l: "C.DSR", v: D1(b.cd) },
-        { l: "Potential Units", v: R(potentialUnits) },
         { l: "DOC", v: R(b.doc) },
         { l: "FIB DOC", v: R(b.fibDoc) },
         { l: "FIB Inventory", v: R(b.fibInv) },
         { l: "SC Inventory", v: R(b.scInv) },
         { l: "Pre-Processed", v: R(b.reserved) },
-        { l: "Inbound", v: R(b.inbound) },
-      ].map(k => <div key={k.l}><div className="text-gray-500 text-xs">{k.l}</div><div className="text-white font-bold text-lg">{k.v}</div></div>)}</div></div>
+        { l: "Inbound to FBA", v: R(b.inbound) },
+        { l: "Raw Pieces", v: R(core?.raw ?? 0) },
+        ...(coreInbound.pcs > 0 ? [{ l: "Inbound to WH", v: R(coreInbound.pcs), sub: coreInbound.eta ? "ETA: " + fD(coreInbound.eta) : null }] : []),
+      ].map(k => <div key={k.l}><div className="text-gray-500 text-xs">{k.l}</div><div className="text-white font-bold text-lg">{k.v}</div>{k.sub && <div className="text-blue-400 text-xs">{k.sub}</div>}</div>)}</div></div>
       <div className="bg-gray-900 rounded-xl p-4 border border-gray-800"><h4 className="text-gray-500 text-xs uppercase mb-3">Profitability</h4><div className="grid grid-cols-3 gap-y-4">{[{ l: "Price", v: fee?.pr }, { l: "COGS", v: fee?.pdmtCogs }, { l: "AICOGS", v: fee?.aicogs }, { l: "Fee", v: fee?.totalFee }, { l: "GP", v: fee?.gp, c: "text-emerald-400" }].map(k => <div key={k.l}><div className="text-gray-500 text-xs">{k.l}</div><div className={`font-bold text-lg ${k.c || "text-white"}`}>{k.v != null ? $2(k.v) : "—"}</div></div>)}</div></div>
     </div>
     {/* Revenue Table */}
