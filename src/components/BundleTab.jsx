@@ -35,16 +35,16 @@ export default function BundleTab({ data, stg, hist, daily, bundleId, onBack, go
   const bKill = sel ? killMap[sel] : null;
   const bStatus = b ? gS(b.doc, 60, 30, { critDays: 30, warnDays: 60 }) : "healthy";
 
-  // === INBOUND TO WAREHOUSE (from 7f inbound data, filtered by bundle's cores) ===
+  // === INBOUND TO WAREHOUSE (core.inb + ETA from inbound sheet) ===
   const coreInbound = useMemo(() => {
-    if (!b) return { pcs: 0, eta: null };
+    if (!b || !core) return { pcs: 0, eta: null };
+    const pcs = core.inb || 0;
+    // Try to find ETA from inbound data matching any of the bundle's cores
     const cores = [b.core1, b.core2, b.core3].filter(Boolean);
     const inbs = (data.inbound || []).filter(i => cores.includes(i.core));
-    const totalPcs = inbs.reduce((s, i) => s + (i.pieces || 0), 0);
-    // Get earliest future ETA
     const etas = inbs.map(i => i.eta).filter(Boolean).sort();
-    return { pcs: totalPcs, eta: etas.length > 0 ? etas[etas.length - 1] : null };
-  }, [data.inbound, b]);
+    return { pcs, eta: etas.length > 0 ? etas[etas.length - 1] : null };
+  }, [data.inbound, b, core]);
 
   // Bundle inventory history (merged summary + daily aggregation) → Units = sum of Complete DSR
   const bInv = useMemo(() => (hist?.bundleInv || []).filter(h => h.j === sel), [hist, sel]);
