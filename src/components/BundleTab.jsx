@@ -35,16 +35,18 @@ export default function BundleTab({ data, stg, hist, daily, bundleId, onBack, go
   const bKill = sel ? killMap[sel] : null;
   const bStatus = b ? gS(b.doc, 60, 30, { critDays: 30, warnDays: 60 }) : "healthy";
 
-  // === INBOUND TO WAREHOUSE (core.inb + ETA from inbound sheet) ===
-  const coreInbound = useMemo(() => {
-    if (!b || !core) return { pcs: 0, eta: null };
-    const pcs = core.inb || 0;
-    // Try to find ETA from inbound data matching any of the bundle's cores
+  // === INBOUND 7f (match by JLS# and core IDs, same logic as CoreTab) ===
+  const bundleInbound = useMemo(() => {
+    if (!b) return [];
     const cores = [b.core1, b.core2, b.core3].filter(Boolean);
-    const inbs = (data.inbound || []).filter(i => cores.includes(i.core));
-    const etas = inbs.map(i => i.eta).filter(Boolean).sort();
-    return { pcs, eta: etas.length > 0 ? etas[etas.length - 1] : null };
-  }, [data.inbound, b, core]);
+    const ids = new Set([b.j, ...cores].map(x => (x || "").trim().toLowerCase()));
+    return (data.inbound || []).filter(i => ids.has((i.core || "").trim().toLowerCase()));
+  }, [data.inbound, b]);
+  const inb7fTotal = useMemo(() => bundleInbound.reduce((s, i) => s + (i.pieces || 0), 0), [bundleInbound]);
+  const inb7fEta = useMemo(() => {
+    const etas = bundleInbound.map(i => i.eta).filter(Boolean).sort();
+    return etas.length > 0 ? etas[etas.length - 1] : null;
+  }, [bundleInbound]);
 
   // Bundle inventory history (merged summary + daily aggregation) → Units = sum of Complete DSR
   const bInv = useMemo(() => (hist?.bundleInv || []).filter(h => h.j === sel), [hist, sel]);
@@ -187,7 +189,7 @@ export default function BundleTab({ data, stg, hist, daily, bundleId, onBack, go
         { l: "Pre-Processed", v: R(b.reserved) },
         { l: "Inbound to FBA", v: R(b.inbound) },
         { l: "Raw Pieces (core)", v: R(core?.raw ?? 0) },
-        { l: "Inbound 7f", v: R(coreInbound.pcs), sub: coreInbound.eta ? fD(coreInbound.eta) : null },
+        { l: "Inbound 7f", v: R(inb7fTotal), sub: inb7fEta ? fD(inb7fEta) : null },
       ].map(k => <div key={k.l}><div className="text-gray-500 text-xs">{k.l}</div><div className="text-white font-bold text-lg">{k.v}</div>{k.sub && <div className="text-blue-400 text-xs">{k.sub}</div>}</div>)}</div></div>
       <div className="bg-gray-900 rounded-xl p-4 border border-gray-800"><h4 className="text-gray-500 text-xs uppercase mb-3">Profitability</h4><div className="grid grid-cols-3 gap-y-4">{[{ l: "Price", v: fee?.pr }, { l: "COGS", v: fee?.pdmtCogs }, { l: "AICOGS", v: fee?.aicogs }, { l: "Fee", v: fee?.totalFee }, { l: "GP", v: fee?.gp, c: "text-emerald-400" }].map(k => <div key={k.l}><div className="text-gray-500 text-xs">{k.l}</div><div className={`font-bold text-lg ${k.c || "text-white"}`}>{k.v != null ? $2(k.v) : "—"}</div></div>)}</div></div>
     </div>
