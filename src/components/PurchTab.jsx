@@ -1,569 +1,291 @@
-import React, { useState, useMemo, useCallback, useEffect, useContext, Fragment } from "react";
-import { R, D1, $, $2, $4, P, gS, cAI, cNQ, cOQ, cDA, bNQ, isD, gTD, dc, cSeas, fSl, fMY, fE, fDateUS, effectiveDSR, roundToCasePack, genPO, genRFQ, cp7f, cp7g } from "../lib/utils";
-import { Dot, Toast, TH, SS, WorkflowChip, NumInput, SumCtx, VendorNotes } from "./Shared";
+import React, { useState, useEffect, useRef, createContext, useContext } from "react";
+import { dotCls } from "../lib/utils";
 
-// Clickable numeric cell for Quick Sum
-function SC({ v, children, className }) {
+// === Quick Sum Context ===
+export const SumCtx = createContext({ addCell: () => {} });
+
+// === Dot indicator ===
+export function Dot({ status }) {
+  return <span className={`inline-block w-3 h-3 rounded-full flex-shrink-0 ${dotCls(status)}`} />;
+}
+
+// === Loading spinner ===
+export function Loader({ text }) {
+  return (
+    <div className="flex items-center justify-center py-20">
+      <div className="text-center">
+        <div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
+        <p className="text-gray-400 text-sm">{text}</p>
+      </div>
+    </div>
+  );
+}
+
+// === Toast notification ===
+export function Toast({ msg, onClose }) {
+  useEffect(() => { const t = setTimeout(onClose, 2500); return () => clearTimeout(t) }, [onClose]);
+  return <div className="fixed bottom-4 right-4 bg-emerald-600 text-white px-4 py-3 rounded-lg shadow-xl z-50">✅ {msg}</div>;
+}
+
+// === Editable Number Input ===
+export function NumInput({ value, onChange, placeholder, className }) {
+  const [local, setLocal] = useState(value || '');
+  const [focused, setFocused] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => { if (!focused) setLocal(value || '') }, [value, focused]);
+  const fmt = v => { if (!v && v !== 0) return ''; const n = parseFloat(String(v).replace(/,/g, '')); if (isNaN(n) || n === 0) return ''; return n.toLocaleString('en-US') };
+  const fmtLive = v => { const clean = String(v).replace(/[^0-9.]/g, ''); if (!clean) return ''; const parts = clean.split('.'); parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ','); return parts.join('.') };
+  return <input ref={ref} type="text" inputMode="decimal"
+    value={focused ? fmtLive(local) : fmt(value)}
+    onFocus={() => { setFocused(true); setLocal(value || '') }}
+    onChange={e => { const raw = e.target.value.replace(/[^0-9.,]/g, ''); setLocal(raw.replace(/,/g, '')) }}
+    onBlur={() => { setFocused(false); onChange(Math.max(0, parseFloat(local) || 0)) }}
+    onKeyDown={e => { if (e.key === 'Enter') e.target.blur() }}
+    placeholder={placeholder || "0"}
+    className={className || "bg-gray-800 border border-gray-600 text-white rounded px-1.5 py-1 w-16 text-center text-xs focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"} />;
+}
+
+// === Tooltip header cell ===
+export function TH({ children, tip, className }) {
+  return <th className={className} title={tip}>{children}</th>;
+}
+
+// === Clickable numeric cell for Quick Sum ===
+export function NC({ v, fmt, className }) {
   const { addCell } = useContext(SumCtx);
   const [sel, setSel] = useState(false);
   const raw = typeof v === "number" ? v : parseFloat(v);
-  const ok = !isNaN(raw) && raw !== 0;
-  const tog = () => { if (!ok) return; if (sel) { addCell(raw, true); setSel(false) } else { addCell(raw, false); setSel(true) } };
-  return <td className={`${className || ''} ${sel ? "bg-blue-500/20 ring-1 ring-blue-500" : ""} ${ok ? "cursor-pointer select-none" : ""}`} onClick={tog}>{children}</td>;
+  const valid = !isNaN(raw) && raw !== 0;
+  const toggle = () => { if (!valid) return; if (sel) { addCell(raw, true); setSel(false) } else { addCell(raw, false); setSel(true) } };
+  return <td className={`${className || ''} ${sel ? "bg-blue-500/20 ring-1 ring-blue-500" : ""} ${valid ? "cursor-pointer select-none" : ""}`} onClick={toggle}>{fmt ? fmt(v) : v}</td>;
 }
 
-export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, setOv, initV, clearIV, saveWorkflow, deleteWorkflow, saveVendorComment }) {
-  const [vm, setVm] = useState(initV ? "vendor" : "core");
-  const [sort, setSort] = useState("status");
-  const [vf, setVf] = useState(initV || "");
-  const [sf, setSf] = useState("");
-  const [nf, setNf] = useState("all");
-  const [minD, setMinD] = useState(0);
-  const [locF, setLocF] = useState("all");
-  const [toast, setToast] = useState(null);
-  const [poN, setPoN] = useState("");
-  const [poD, setPoD] = useState("");
-  const [vendorSub, setVendorSub] = useState("cores");
-  const [showRS, setShowRS] = useState(false);
-  const [showCosts, setShowCosts] = useState(false);
-  const [showPH, setShowPH] = useState({});
-  const [collapsed, setCollapsed] = useState({});
-  const [dismissed, setDismissed] = useState({});
-  const [showIgnored, setShowIgnored] = useState(false);
+// === Quick Sum floating bar ===
+export function QuickSum({ cells, onClear }) {
+  if (!cells.length) return null;
+  const sum = cells.reduce((a, b) => a + b, 0);
+  const avg = sum / cells.length;
+  return (
+    <div className="fixed bottom-4 left-1/2 -translate-x-1/2 bg-gray-800 border border-gray-600 rounded-lg px-5 py-2.5 shadow-xl z-50 flex items-center gap-5 text-sm">
+      <span className="text-gray-400">Selected: <span className="text-white font-semibold">{cells.length}</span></span>
+      <span className="text-gray-400">Sum: <span className="text-emerald-400 font-semibold">{sum.toLocaleString("en-US", { maximumFractionDigits: 2 })}</span></span>
+      <span className="text-gray-400">Avg: <span className="text-blue-400 font-semibold">{avg.toLocaleString("en-US", { maximumFractionDigits: 2 })}</span></span>
+      <button onClick={onClear} className="text-gray-500 hover:text-white text-xs ml-2">✕</button>
+    </div>
+  );
+}
 
-  useEffect(() => { if (initV) { setVm("vendor"); setVf(initV); clearIV() } }, [initV, clearIV]);
+// === Searchable Select ===
+export function SS({ value, onChange, options, placeholder }) {
+  const [o, setO] = useState(false);
+  const [q, setQ] = useState("");
+  const ref = useRef(null);
+  useEffect(() => { function h(e) { if (ref.current && !ref.current.contains(e.target)) setO(false) } document.addEventListener("mousedown", h); return () => document.removeEventListener("mousedown", h) }, []);
+  const f = options.filter(x => x.toLowerCase().includes(q.toLowerCase()));
+  return (
+    <div ref={ref} className="relative">
+      <input type="text" value={o ? q : (value || "")} placeholder={placeholder || "All Vendors"} onFocus={() => { setO(true); setQ("") }} onChange={e => { setQ(e.target.value); setO(true) }} className="bg-gray-800 border border-gray-700 text-gray-300 text-sm rounded-lg px-2 py-1.5 w-48" />
+      {o && <div className="absolute z-40 mt-1 bg-gray-800 border border-gray-700 rounded-lg shadow-xl max-h-80 overflow-auto w-56">
+        <button onClick={() => { onChange(""); setO(false) }} className="w-full text-left px-3 py-1.5 text-sm text-gray-400 hover:bg-gray-700">All</button>
+        {f.map(x => <button key={x} onClick={() => { onChange(x); setO(false); setQ("") }} className={`w-full text-left px-3 py-1.5 text-sm hover:bg-gray-700 ${x === value ? "text-blue-400" : "text-gray-300"}`}>{x}</button>)}
+      </div>}
+    </div>
+  );
+}
 
-  const isIgnored = useCallback((id) => {
-    const wf = (data.workflow || []).find(w => w.id === id);
-    if (!wf || wf.status !== "Ignore") return false;
-    if (!wf.ignoreUntil) return true;
-    const until = new Date(wf.ignoreUntil);
-    return !isNaN(until.getTime()) && until >= new Date(new Date().toDateString());
-  }, [data.workflow]);
-
-  const vMap = useMemo(() => { const m = {}; (data.vendors || []).forEach(v => m[v.name] = v); return m }, [data.vendors]);
-  const vNames = useMemo(() => (data.vendors || []).map(v => v.name).sort(), [data.vendors]);
-  const feMap = useMemo(() => { const m = {}; (data.fees || []).forEach(f => m[f.j] = f); return m }, [data.fees]);
-  const saMap = useMemo(() => { const m = {}; (data.sales || []).forEach(s => m[s.j] = s); return m }, [data.sales]);
-  const pcMap = useMemo(() => {
-    const m = {}; (data.priceComp || []).forEach(r => { if (!m[r.core]) m[r.core] = []; m[r.core].push(r) });
-    Object.keys(m).forEach(k => { m[k].sort((a, b) => (b.date || "").localeCompare(a.date || "")); m[k] = m[k].slice(0, 7) });
-    return m;
-  }, [data.priceComp]);
-  const agedMap = useMemo(() => { const m = {}; (data.agedInv || []).forEach(r => m[r.j] = r); return m }, [data.agedInv]);
-  const killMap = useMemo(() => { const m = {}; (data.killMgmt || []).forEach(r => m[r.j] = r); return m }, [data.killMgmt]);
-  const recMap = useMemo(() => { const m = {}; (data.receiving || []).forEach(r => { if (!m[r.core]) m[r.core] = []; m[r.core].push(r) }); return m }, [data.receiving]);
-
-  const bA = stg.bA || "yes"; const bI = stg.bI || "blank";
-
-  // Restocker map by bundle JLS#
-  const rsBundleMap = useMemo(() => {
-    const m = {};
-    (data.restock || []).forEach(r => {
-      const bk = (r.bundle || "").trim();
-      if (bk) m[bk] = r;
-    });
-    return m;
-  }, [data.restock]);
-
-  // Replen Recommendations map by JLS#
-  const replenMap = useMemo(() => {
-    const m = {};
-    (data.replenRec || []).forEach(r => { m[r.j] = r });
-    return m;
-  }, [data.replenRec]);
-
-  // 7f missing map by JLS# (= inbound in transit)
-  const missingMap = useMemo(() => {
-    const m = {};
-    (data.receiving || []).forEach(r => {
-      if (r.piecesMissing > 0) {
-        const k = (r.core || "").trim();
-        m[k] = (m[k] || 0) + r.piecesMissing;
-      }
-    });
-    return m;
-  }, [data.receiving]);
-
-  // 7f case pack by JLS# (derive from pcs/cases in receiving)
-  const casePackFromRec = useMemo(() => {
-    const m = {};
-    (data.receiving || []).forEach(r => {
-      const k = (r.core || "").trim();
-      if (k && r.pcs > 0 && r.cases > 0 && !m[k]) {
-        m[k] = Math.round(r.pcs / r.cases);
-      }
-    });
-    return m;
-  }, [data.receiving]);
-
-  const enr = useMemo(() => (data.cores || []).filter(c => {
-    if (stg.fA === "yes" && c.active !== "Yes") return false;
-    if (stg.fA === "no" && c.active === "Yes") return false;
-    if (stg.fV === "yes" && c.visible !== "Yes") return false;
-    if (stg.fV === "no" && c.visible === "Yes") return false;
-    if (stg.fI === "blank" && !!c.ignoreUntil) return false;
-    if (stg.fI === "set" && !c.ignoreUntil) return false;
-    return true;
-  }).map(c => {
-    const v = vMap[c.ven] || {}; const lt = v.lt || 30; const tg = gTD(v, stg);
-    const cd = lt; const wd = lt + (c.buf || 14);
-    const st = gS(c.doc, lt, c.buf, { critDays: cd, warnDays: wd });
-    const ai = cAI(c); const nq = cNQ(c, tg); const oq = cOQ(nq, c.moq, c.casePack);
-    const seas = cSeas(c.id, (data._coreInv || []));
-    return { ...c, status: st, allIn: ai, needQty: nq, orderQty: oq, needDollar: +(oq * c.cost).toFixed(2), docAfter: cDA(c, oq), lt, critDays: cd, warnDays: wd, targetDoc: tg, vc: v.country || "", seas, isDom: isD(v.country), spike: c.d7 > 0 && c.dsr > 0 && c.d7 >= c.dsr * 1.25 };
-  }).filter(c => {
-    if (vf && c.ven !== vf) return false;
-    if (sf && c.status !== sf) return false;
-    if (minD > 0 && c.doc < minD) return false;
-    if (nf === "need" && c.needQty <= 0) return false;
-    if (nf === "ok" && c.needQty > 0) return false;
-    if (locF === "us" && !c.isDom) return false;
-    if (locF === "intl" && c.isDom) return false;
-    return true;
-  }).sort((a, b) => {
-    const so = { critical: 0, warning: 1, healthy: 2 };
-    if (sort === "status") return so[a.status] - so[b.status];
-    if (sort === "doc") return a.doc - b.doc;
-    if (sort === "dsr") return b.dsr - a.dsr;
-    if (sort === "need$") return b.needDollar - a.needDollar;
-    return 0;
-  }), [data, stg, vf, sf, sort, vMap, nf, minD, locF]);
-
-  const venBundles = useMemo(() => (data.bundles || []).filter(b => {
-    if (bA === "yes" && b.active !== "Yes") return false;
-    if (bA === "no" && b.active === "Yes") return false;
-    if (bI === "blank" && !!b.ignoreUntil) return false;
-    if (bI === "set" && !b.ignoreUntil) return false;
-    if (vf && (b.vendors || "").indexOf(vf) < 0) return false;
-    return true;
-  }).map(b => { const f = feMap[b.j]; return { ...b, fee: f } }), [data.bundles, vf, feMap, bA, bI]);
-
-  const sc = useMemo(() => { const c = { critical: 0, warning: 0, healthy: 0 }; enr.forEach(x => c[x.status]++); return c }, [enr]);
-
-  // Raw waterfall allocation: distribute core raw to bundles by lowest effective DOC first
-  // baseDOC = (FIB + 7f_inbound + PPRC) / DSR — always calculated for ALL bundles
-  const rawAllocMap = useMemo(() => {
-    const map = {};
-    const activeBundles = (data.bundles || []).filter(b => {
-      if (bA === "yes" && b.active !== "Yes") return false;
-      if (bA === "no" && b.active === "Yes") return false;
-      return true;
-    });
-    const coreGroups = {};
-    activeBundles.forEach(b => {
-      if (!b.core1) return;
-      if (!coreGroups[b.core1]) coreGroups[b.core1] = [];
-      coreGroups[b.core1].push(b);
-    });
-    enr.forEach(c => {
-      const bundles = coreGroups[c.id] || [];
-      if (bundles.length === 0) return;
-      let pool = c.raw || 0;
-      const bData = bundles.map(b => {
-        const rp = replenMap[b.j];
-        const pprc = rp?.pprcUnits || 0;
-        const inb7f = missingMap[b.j] || 0;
-        const inv = (b.fibInv || 0) + inb7f + pprc;
-        const dsr = b.cd || 0;
-        const baseDOC = dsr > 0 ? inv / dsr : 9999;
-        const qtyPerBundle = b.qty1 || 1;
-        return { j: b.j, baseDOC, dsr, qtyPerBundle, inv };
-      }).sort((a, b) => a.baseDOC - b.baseDOC);
-      const tg = c.targetDoc || 180;
-      // Allocate raw — even DSR=0 bundles get a baseDOC entry
-      bData.forEach(bd => {
-        if (bd.dsr <= 0 || pool <= 0) {
-          map[bd.j] = { rawUnits: 0, baseDOC: bd.baseDOC, baseInv: bd.inv };
-          return;
-        }
-        const needDOC = Math.max(0, tg - bd.baseDOC);
-        const needBundleUnits = needDOC * bd.dsr;
-        const needCorePieces = needBundleUnits * bd.qtyPerBundle;
-        const givePieces = Math.min(needCorePieces, pool);
-        pool -= givePieces;
-        const giveUnits = bd.qtyPerBundle > 0 ? givePieces / bd.qtyPerBundle : 0;
-        map[bd.j] = { rawUnits: giveUnits, baseDOC: bd.baseDOC, baseInv: bd.inv };
-      });
-    });
-    return map;
-  }, [enr, data.bundles, replenMap, missingMap, bA]);
-
-  const gO = id => ov[id] || {};
-  const setF = (id, f, v) => setOv(p => ({ ...p, [id]: { ...(p[id] || {}), [f]: v } }));
-  const gPcs = id => (gO(id).pcs ?? 0);
-  const gCas = id => (gO(id).cas ?? 0);
-  const gInbS = id => (gO(id).inbS ?? 0);
-  const gCogP = id => (gO(id).cogP ?? 0);
-  const gCogC = id => (gO(id).cogC ?? 0);
-  const gBMoq = id => (gO(id).bMoq ?? 0); // Bundle MOQ per vendor
-  const hasCoreOrd = c => (gPcs(c.id) > 0 || gCas(c.id) > 0);
-  const coreEffQ = c => gPcs(c.id) || gCas(c.id) * (c.casePack || 1);
-  const hasBundleOrd = b => (gPcs(b.j) > 0 || gCas(b.j) > 0);
-  const bundleEffQ = b => gPcs(b.j) || gCas(b.j) * 1;
-  const aftD = (allIn, q, dsr) => q > 0 && dsr > 0 ? Math.round((allIn + q) / dsr) : null;
-  const tot = useMemo(() => { let d = 0, a = 0, n = 0, o = 0, co = 0; enr.forEach(c => { d += c.dsr; a += c.allIn; n += c.needQty; o += c.orderQty; co += c.needDollar }); return { d, a, n, o, co } }, [enr]);
-
-  const vG = useMemo(() => {
-    if (vm !== "vendor") return [];
-    const g = {};
-    enr.forEach(c => { if (!g[c.ven]) g[c.ven] = { v: vMap[c.ven] || { name: c.ven }, cores: [], bundles: [] }; g[c.ven].cores.push(c) });
-    Object.keys(g).forEach(vn => { g[vn].bundles = venBundles.filter(b => (b.vendors || "").indexOf(vn) >= 0) });
-    return Object.values(g).filter(grp => showIgnored || !isIgnored(grp.v.name)).sort((a, b) => b.cores.filter(c => c.status === "critical").length - a.cores.filter(c => c.status === "critical").length);
-  }, [enr, vm, vMap, venBundles, isIgnored, showIgnored]);
-
-  const getPOI = (cores, bundles) => {
-    const items = [];
-    cores.filter(c => hasCoreOrd(c)).forEach(c => items.push({ id: c.id, ti: c.ti, vsku: c.vsku, qty: coreEffQ(c), cost: c.cost, cp: c.casePack || 1, inbS: gInbS(c.id), isCoreItem: true }));
-    (bundles || []).filter(b => hasBundleOrd(b)).forEach(b => { const f = feMap[b.j]; items.push({ id: b.j, ti: b.t, vsku: b.asin || b.bundleCode, qty: bundleEffQ(b), cost: f?.aicogs || b.aicogs || 0, cp: 1, inbS: gInbS(b.j), isCoreItem: false }) });
-    return items;
-  };
-
-  const autoPO = (vendorCode) => {
-    if (poN) return poN;
-    // Excel serial date number (days since 1/1/1900, with Excel's leap year bug)
-    const d = new Date();
-    const serial = Math.floor((d - new Date(1899, 11, 30)) / 86400000);
-    return 'PO-' + serial + '-' + (vendorCode || 'XXX');
-  };
-
-  const fillR = (cores, bundles, mode, vendorName) => {
-    const u = { ...ov };
-    const bMoq = gBMoq('_bmoq_' + vendorName);
-    if (mode === "bundles") {
-      const coreMap = {}; cores.forEach(c => { coreMap[c.id] = c });
-      const coreExtrasFromBundles = {};
-      (bundles || []).forEach(b => {
-        const tg = cores[0]?.targetDoc || 90;
-        const pc = coreMap[b.core1]; if (!pc) return;
-        const rp = replenMap[b.j];
-        const pprc = rp?.pprcUnits || 0;
-        const inb7f = missingMap[b.j] || 0;
-        const baseInv = (b.fibInv || 0) + inb7f + pprc;
-        const baseDOC = b.cd > 0 ? baseInv / b.cd : 9999;
-        const need = Math.ceil(Math.max(0, (tg - baseDOC) * b.cd));
-        if (need <= 0) return;
-        const qpb = b.qty1 || 1;
-        if (bMoq > 0 && need < bMoq) {
-          coreExtrasFromBundles[pc.id] = (coreExtrasFromBundles[pc.id] || 0) + (need * qpb);
-        } else {
-          u[b.j] = { ...(u[b.j] || {}), pcs: bMoq > 0 ? Math.max(need, bMoq) : need };
-        }
-      });
-      // Core: converted bundle pieces + 20d raw minimum
-      cores.forEach(c => {
-        const extra = coreExtrasFromBundles[c.id] || 0;
-        const raw20d = Math.ceil((c.dsr || 0) * 20);
-        const coreNeed = Math.max(extra, raw20d);
-        if (coreNeed > 0) u[c.id] = { ...(u[c.id] || {}), pcs: cOQ(coreNeed, c.moq, c.casePack) };
-      });
-    } else if (mode === "mix") {
-      const coreMap = {}; cores.forEach(c => { coreMap[c.id] = c });
-      const coreExtras = {}; const cwo = new Set();
-      (bundles || []).forEach(b => {
-        const tg = cores[0]?.targetDoc || 90; const pc = coreMap[b.core1]; if (!pc) return;
-        const rp = replenMap[b.j];
-        const pprc = rp?.pprcUnits || 0;
-        const inb7f = missingMap[b.j] || 0;
-        const baseInv = (b.fibInv || 0) + inb7f + pprc;
-        const baseDOC = b.cd > 0 ? baseInv / b.cd : 9999;
-        const need = Math.ceil(Math.max(0, (tg - baseDOC) * b.cd));
-        if (need <= 0) return;
-        const qpb = b.qty1 || 1;
-        const effectiveMoq = bMoq > 0 ? bMoq : 0; // Only use B.MOQ for bundles, not core MOQ
-        if (need < effectiveMoq) {
-          coreExtras[pc.id] = (coreExtras[pc.id] || 0) + (need * qpb);
-        } else {
-          let ord = bMoq > 0 ? Math.max(need, bMoq) : need;
-          const bcp = casePackFromRec[b.j] || 0;
-          if (bcp > 0) ord = Math.ceil(ord / bcp) * bcp;
-          u[b.j] = { ...(u[b.j] || {}), pcs: ord };
-          cwo.add(pc.id);
-        }
-      });
-      // Core: converted pieces + own need + 20d raw minimum
-      cores.forEach(c => {
-        const extra = coreExtras[c.id] || 0;
-        const raw20d = Math.ceil((c.dsr || 0) * 20);
-        if (extra > 0) {
-          const coreNeed = Math.max(extra, raw20d);
-          u[c.id] = { ...(u[c.id] || {}), pcs: cOQ(coreNeed, c.moq, c.casePack) };
-        } else if (!cwo.has(c.id) && c.needQty > 0) {
-          const coreNeed = Math.max(c.needQty, raw20d);
-          u[c.id] = { ...(u[c.id] || {}), pcs: cOQ(coreNeed, c.moq, c.casePack) };
-        }
-      });
-    } else {
-      cores.filter(c => c.needQty > 0).forEach(c => { u[c.id] = { ...(u[c.id] || {}), pcs: cOQ(c.needQty, c.moq, c.casePack) } });
-    }
-    setOv(u);
-  };
-  const clrV = (cores, bundles) => { const u = { ...ov }; cores.forEach(c => { delete u[c.id] }); (bundles || []).forEach(b => { delete u[b.j] }); setOv(u) };
-  const togPH = id => setShowPH(p => ({ ...p, [id]: !p[id] }));
-  const togCollapse = id => setCollapsed(p => ({ ...p, [id]: !p[id] }));
-  const togDismiss = id => setDismissed(p => ({ ...p, [id]: !p[id] }));
-
-  const getCombinedRec = (coreId) => {
-    const recs = [...(recMap[coreId] || [])];
-    (data.bundles || []).filter(b => b.core1 === coreId && b.active === "Yes").forEach(b => { if (recMap[b.j]) recs.push(...recMap[b.j]) });
-    return recs.sort((a, b) => (b.date || '').localeCompare(a.date || '')).slice(0, 7);
-  };
-  const hasRecData = (coreId) => recMap[coreId]?.length || (data.bundles || []).some(b => b.core1 === coreId && b.active === "Yes" && recMap[b.j]?.length);
-
-  // === CORE ROW ===
-  const CoreRow = ({ c, mixAdj }) => {
-    if (dismissed[c.id]) return <tr className="border-t border-gray-800/20 bg-gray-900/30 text-xs opacity-40"><td className="py-1 px-1" colSpan={2}><Dot status={c.status} /></td><td className="py-1 px-1 text-gray-500 font-mono">{c.id}</td><td className="py-1 px-1 text-gray-600 truncate max-w-[110px]">{c.ti}</td><td colSpan={20} className="py-1 px-1 text-right"><button onClick={() => togDismiss(c.id)} className="text-xs text-gray-500 hover:text-white px-1">+</button></td></tr>;
-    const eq = coreEffQ(c); const cost = eq * c.cost;
-    // Core After DOC
-    const activeBundlesForCore = (data.bundles || []).filter(b => b.core1 === c.id && b.active === "Yes");
-    const bundleOrderPieces = activeBundlesForCore.reduce((s, b) => s + (bundleEffQ(b) * (b.qty1 || 1)), 0);
-    let ad = null;
-    if (eq > 0 && c.dsr > 0) {
-      if (activeBundlesForCore.length === 1) {
-        // Single bundle: use bundle's effective DOC formula for consistency
-        const sb = activeBundlesForCore[0];
-        const alloc = rawAllocMap[sb.j] || { rawUnits: 0, baseInv: 0 };
-        const bOrd = bundleEffQ(sb);
-        const bInv = alloc.baseInv + alloc.rawUnits + bOrd + (eq * (sb.qty1 || 1) > 0 ? eq / (sb.qty1 || 1) : 0);
-        ad = sb.cd > 0 ? Math.round(bInv / sb.cd) : null;
-      } else {
-        // Multiple bundles: use core-level formula
-        const coreAfterInv = c.allIn + eq + bundleOrderPieces;
-        ad = Math.round(coreAfterInv / c.dsr);
-      }
-    }
-    const isCol = collapsed[c.id];
-    const combinedRec = showPH[c.id] ? getCombinedRec(c.id) : [];
-
-    return <><tr className={`border-t border-gray-800/30 hover:bg-gray-800/20 text-xs ${hasCoreOrd(c) ? "bg-emerald-900/10" : ""}`}>
-      <td className="py-1 px-1 sticky left-0 bg-gray-950 z-10"><Dot status={c.status} /></td>
-      <td className="py-1 px-1 sticky left-5 bg-gray-950 z-10"><button onClick={() => goCore(c.id)} className="text-blue-400 font-mono hover:underline">{c.id}</button></td>
-      <td className="py-1 px-1 text-gray-200 truncate max-w-[100px] sticky left-24 bg-gray-950 z-10">{c.ti}</td>
-      <SC v={c.dsr} className="py-1 px-1 text-right">{D1(c.dsr)}</SC>
-      <SC v={c.d7} className="py-1 px-1 text-right">{D1(c.d7)}</SC>
-      <td className="py-1 px-1 text-center">{c.d7 > c.dsr ? <span className={c.spike ? "text-orange-400 font-bold" : "text-emerald-400"}>▲</span> : c.d7 < c.dsr ? <span className="text-red-400">▼</span> : "—"}{c.spike && <span className="text-orange-400 text-xs ml-0.5" title="Spike">⚡</span>}</td>
-      <SC v={c.doc} className={`py-1 px-1 text-right font-semibold ${dc(c.doc, c.critDays, c.warnDays)}`}>{R(c.doc)}</SC>
-      <SC v={c.allIn} className="py-1 px-1 text-right">{R(c.allIn)}</SC>
-      <td className="py-1 px-1 text-right text-gray-400">{c.moq > 0 ? R(c.moq) : "—"}</td>
-      <td className="py-1 px-1 text-right text-gray-400">{c.casePack > 0 ? R(c.casePack) : "—"}</td>
-      <td className="py-1 px-1 text-center">{c.seas && <span className="text-purple-400 font-bold">{c.seas.peak}</span>}</td>
-      {!isCol && <>
-        <SC v={c.raw} className="py-1 px-1 text-right">{R(c.raw)}</SC>
-        <SC v={c.pp} className="py-1 px-1 text-right">{R(c.pp)}</SC>
-        <SC v={c.inb} className="py-1 px-1 text-right">{R(c.inb)}</SC>
-        <SC v={c.fba} className="py-1 px-1 text-right">{R(c.fba)}</SC>
-      </>}
-      {showRS && <td colSpan={8} />}
-      <td className="py-1 border-l-2 border-gray-600 px-1" />
-      <td className="py-0.5 px-0.5 sticky right-36 bg-gray-950 z-10"><NumInput value={gPcs(c.id)} onChange={v => setF(c.id, 'pcs', v)} /></td>
-      <td className="py-0.5 px-0.5 sticky right-24 bg-gray-950 z-10"><NumInput value={gCas(c.id)} onChange={v => setF(c.id, 'cas', v)} /></td>
-      {showCosts && <>
-        <td className="py-0.5 px-0.5"><NumInput value={gInbS(c.id)} onChange={v => setF(c.id, 'inbS', v)} /></td>
-        <td className="py-0.5 px-0.5"><NumInput value={gCogP(c.id)} onChange={v => setF(c.id, 'cogP', v)} /></td>
-        <td className="py-0.5 px-0.5"><NumInput value={gCogC(c.id)} onChange={v => setF(c.id, 'cogC', v)} /></td>
-      </>}
-      <SC v={cost} className="py-1 px-1 text-right text-amber-300 sticky right-12 bg-gray-950 z-10">{cost > 0 ? $(cost) : "—"}</SC>
-      <td className={`py-1 px-1 text-right sticky right-0 bg-gray-950 z-10 ${ad ? dc(ad, c.critDays, c.warnDays) : "text-gray-500"}`}>{ad ? R(ad) : "—"}</td>
-      <td className="py-1 px-0.5 flex gap-0.5">
-        <button onClick={() => togCollapse(c.id)} className="text-gray-400 hover:text-white text-xs px-0.5">{isCol ? "+" : "−"}</button>
-        <button onClick={() => togDismiss(c.id)} className="text-gray-400 hover:text-red-400 text-xs px-0.5">✕</button>
-        {(pcMap[c.id] || hasRecData(c.id)) && <button onClick={() => togPH(c.id)} className={`text-xs px-0.5 rounded ${showPH[c.id] ? "text-amber-300" : "text-gray-500"}`}>$</button>}
-        <button onClick={() => goCore(c.id)} className="text-blue-400 px-0.5 bg-blue-400/10 rounded text-xs">V</button>
-        <div className="relative"><WorkflowChip id={c.id} type="core" workflow={data.workflow} onSave={saveWorkflow} onDelete={deleteWorkflow} buyer={stg.buyer} /></div>
-      </td>
-    </tr>
-    {showPH[c.id] && (pcMap[c.id] || combinedRec.length > 0) && <tr><td colSpan={40} className="p-0"><div className="bg-gray-800/50 px-4 py-2 space-y-3">
-      {pcMap[c.id] && <div><div className="text-gray-500 text-xs font-semibold mb-1">💰 Purchase History (7g)</div><table className="w-full text-xs"><thead><tr className="text-gray-500"><th className="py-0.5 text-left">Date</th><th className="py-0.5 text-right">Pcs</th><th className="py-0.5 text-right">Material</th><th className="py-0.5 text-right">Inb Ship</th><th className="py-0.5 text-right">Tariffs</th><th className="py-0.5 text-right">Total</th><th className="py-0.5 text-right">CPP</th></tr></thead><tbody>{pcMap[c.id].map((r, i) => <tr key={i} className="border-t border-gray-700/30"><td className="py-0.5 text-gray-300">{fDateUS(r.date)}</td><td className="py-0.5 text-right">{R(r.pcs)}</td><td className="py-0.5 text-right">{$2(r.matPrice)}</td><td className="py-0.5 text-right text-gray-400">{$2(r.inbShip)}</td><td className="py-0.5 text-right text-gray-400">{$2(r.tariffs)}</td><td className="py-0.5 text-right">{$2(r.totalCost)}</td><td className="py-0.5 text-right text-amber-300">{$2(r.cpp)}</td></tr>)}</tbody></table></div>}
-      {combinedRec.length > 0 && <div><div className="text-gray-500 text-xs font-semibold mb-1">📦 Receiving (7f)</div><table className="w-full text-xs"><thead><tr className="text-gray-500"><th className="py-0.5 text-left">Date</th><th className="py-0.5 text-left">Vendor</th><th className="py-0.5 text-left">ID</th><th className="py-0.5 text-right">Pcs</th><th className="py-0.5 text-right">Cases</th><th className="py-0.5 text-left">Order #</th><th className="py-0.5 text-right">Missing</th></tr></thead><tbody>{combinedRec.map((r, i) => <tr key={i} className="border-t border-gray-700/30"><td className="py-0.5 text-gray-300">{fDateUS(r.date) || "—"}</td><td className="py-0.5 text-gray-300">{r.vendor || "—"}</td><td className="py-0.5 text-blue-400 font-mono">{r.core}</td><td className="py-0.5 text-right text-white">{R(r.pcs)}</td><td className="py-0.5 text-right">{r.cases > 0 ? R(r.cases) : "—"}</td><td className="py-0.5 text-gray-300">{r.orderNum || "—"}</td><td className={`py-0.5 text-right ${r.piecesMissing > 0 ? "text-red-400" : "text-gray-500"}`}>{r.piecesMissing > 0 ? R(r.piecesMissing) : "—"}</td></tr>)}</tbody></table></div>}
-    </div></td></tr>}
-    </>;
-  };
-
-  // === BUNDLE ROW (now shows +RS columns with its own bundle data) ===
-  const BundleRow = ({ b, indent }) => {
-    const f = b.fee || feMap[b.j]; const eq = bundleEffQ(b); const cost = f ? (eq * (f.aicogs || 0)) : 0;
-    const aged = agedMap[b.j]; const kill = killMap[b.j];
-    const inb7f = missingMap[b.j] || 0;
-    const rs = rsBundleMap[b.j];
-    const rp = replenMap[b.j];
-    const margin = f && f.aicogs > 0 ? ((f.gp / f.aicogs) * 100) : 0;
-    const bCasePack = casePackFromRec[b.j] || 0;
-    // After DOC: always show — base = (FIB + 7f_inbound + PPRC + raw_waterfall + order) / DSR
-    const alloc = rawAllocMap[b.j] || { rawUnits: 0, baseDOC: 0, baseInv: 0 };
-    const effectiveInv = alloc.baseInv + alloc.rawUnits + eq;
-    const effectiveDOC = b.cd > 0 ? Math.round(effectiveInv / b.cd) : null;
-
-    return <tr className={`border-t border-gray-800/20 hover:bg-indigo-900/10 text-xs ${hasBundleOrd(b) ? "bg-emerald-900/10" : "bg-indigo-950/20"}`}>
-      <td className="py-1 px-1 sticky left-0 bg-indigo-950/20 z-10" />
-      <td className="py-1 px-1 sticky left-5 bg-indigo-950/20 z-10">
-        <button onClick={() => goBundle(b.j)} className="text-indigo-400 font-mono hover:underline">{b.j}</button>
-      </td>
-      <td className="py-1 px-1 text-indigo-200 truncate max-w-[100px] sticky left-24 bg-indigo-950/20 z-10">
-        {b.t}
-        {b.asin && <a href={`https://sellercentral.amazon.com/myinventory/inventory?fulfilledBy=all&page=1&pageSize=25&searchField=all&searchTerm=${b.asin}&sort=date_created_desc&status=all`} target="_blank" rel="noopener noreferrer" className="ml-1 text-gray-500 hover:text-blue-400 text-[9px] font-mono" title="Open in Seller Central">{b.asin}</a>}
-        {aged && aged.fbaHealth !== "Healthy" && <span className={`ml-1 text-xs ${aged.fbaHealth === "At Risk" ? "text-amber-400" : "text-red-400"}`}>{aged.fbaHealth}</span>}
-        {aged && aged.storageLtsf > 0 && <span className="ml-1 text-xs text-red-300">${aged.storageLtsf.toFixed(0)}</span>}
-        {kill && kill.latestEval && kill.latestEval.toLowerCase().includes('kill') && <span className="ml-1 text-xs text-red-400 font-bold">KILL</span>}
-        {kill && kill.sellEval && kill.sellEval.toLowerCase().includes('sell') && <span className="ml-1 text-xs text-amber-400 font-bold">ST</span>}
-      </td>
-      <SC v={b.cd} className="py-1 px-1 text-right text-indigo-300">{D1(b.cd)}</SC>
-      <SC v={b.d7comp} className="py-1 px-1 text-right text-indigo-300">{D1(b.d7comp)}</SC>
-      <td className="py-1 px-1 text-center">{b.d7comp > b.cd ? <span className="text-emerald-400">▲</span> : b.d7comp < b.cd ? <span className="text-red-400">▼</span> : "—"}</td>
-      <SC v={b.doc} className="py-1 px-1 text-right text-indigo-300">{R(b.doc)}</SC>
-      <td className="py-1 px-1 text-right text-gray-700" />
-      <td className="py-1 px-1 text-gray-700" />
-      <td className="py-1 px-1 text-gray-500 text-right">{bCasePack > 0 ? R(bCasePack) : ""}</td>
-      <td className="py-1 px-1 text-center text-indigo-300">{b.replenTag || ""}</td>
-      {!collapsed[b.j] && <td colSpan={4} />}
-      {showRS && <>
-        <td className="py-1 border-l-2 border-cyan-800 px-0.5" />
-        <SC v={b.fibDoc} className="py-1 px-1 text-right text-cyan-300">{R(b.fibDoc)}</SC>
-        <td className={`py-1 px-1 text-right ${margin >= 30 ? "text-emerald-400" : margin >= 15 ? "text-amber-400" : margin > 0 ? "text-red-400" : "text-gray-600"}`}>{margin > 0 ? Math.round(margin) + "%" : "—"}</td>
-        <SC v={rp?.rawUnits} className="py-1 px-1 text-right">{R(rp?.rawUnits || 0)}</SC>
-        <SC v={rp?.batched} className="py-1 px-1 text-right">{R(rp?.batched || 0)}</SC>
-        <SC v={b.fibInv} className="py-1 px-1 text-right text-cyan-300">{R(b.fibInv || 0)}</SC>
-        <SC v={rp?.pprcUnits} className="py-1 px-1 text-right">{R(rp?.pprcUnits || 0)}</SC>
-        <td className="py-1 px-1 text-right text-red-400">{inb7f > 0 ? R(inb7f) : "0"}</td>
-      </>}
-      <td className="py-1 border-l-2 border-gray-600 px-1" />
-      <td className="py-0.5 px-0.5 sticky right-36 bg-indigo-950/20 z-10"><NumInput value={gPcs(b.j)} onChange={v => setF(b.j, 'pcs', v)} /></td>
-      <td className="py-0.5 px-0.5 sticky right-24 bg-indigo-950/20 z-10"><NumInput value={gCas(b.j)} onChange={v => setF(b.j, 'cas', v)} /></td>
-      {showCosts && <>
-        <td className="py-0.5 px-0.5"><NumInput value={gInbS(b.j)} onChange={v => setF(b.j, 'inbS', v)} /></td>
-        <td className="py-0.5 px-0.5"><NumInput value={gCogP(b.j)} onChange={v => setF(b.j, 'cogP', v)} /></td>
-        <td className="py-0.5 px-0.5"><NumInput value={gCogC(b.j)} onChange={v => setF(b.j, 'cogC', v)} /></td>
-      </>}
-      <SC v={cost} className="py-1 px-1 text-right text-amber-300 sticky right-12 bg-indigo-950/20 z-10">{cost > 0 ? $(cost) : "—"}</SC>
-      <td className={`py-1 px-1 text-right sticky right-0 bg-indigo-950/20 z-10 ${effectiveDOC ? (effectiveDOC <= 30 ? "text-red-400" : effectiveDOC <= 60 ? "text-amber-400" : "text-emerald-400") : "text-gray-600"}`}>{effectiveDOC ? R(effectiveDOC) : "—"}</td>
-      <td className="py-1 px-1"><button onClick={() => goBundle(b.j)} className="text-indigo-400 px-0.5 bg-indigo-400/10 rounded text-xs">V</button></td>
-    </tr>;
-  };
-
-  // === TABLE HEADER — FibD+FibI merged to FBA Pcs, +RS = bundle detail ===
-  const rsToggle = <button onClick={() => setShowRS(!showRS)} className={`text-xs px-1 py-0.5 rounded font-bold ${showRS ? "bg-purple-600 text-white" : "bg-gray-700 text-gray-400"}`} title="Toggle Bundle detail columns">{showRS ? "−" : "+"}RS</button>;
-  const costsToggle = <button onClick={() => setShowCosts(!showCosts)} className={`text-xs px-1 py-0.5 rounded font-bold ${showCosts ? "bg-teal-600 text-white" : "bg-gray-700 text-gray-400"}`}>{showCosts ? "−" : "+"}$</button>;
-
-  const VTH = ({ isCol }) => <tr className="text-gray-500 uppercase bg-gray-900 text-xs sticky top-0 z-20">
-    <th className="py-2 px-1 w-5 sticky left-0 bg-gray-900 z-30" />
-    <TH tip="Core or JLS #" className="py-2 px-1 text-left sticky left-5 bg-gray-900 z-30">ID</TH>
-    <th className="py-2 px-1 text-left sticky left-24 bg-gray-900 z-30">Title</th>
-    <TH tip="Composite Daily Sales Rate" className="py-2 px-1 text-right">DSR</TH>
-    <TH tip="7-Day DSR" className="py-2 px-1 text-right">7D</TH>
-    <TH tip="Trend" className="py-2 px-1 text-center">T</TH>
-    <TH tip="Days of Coverage" className="py-2 px-1 text-right">DOC</TH>
-    <TH tip="All-In Owned Pieces" className="py-2 px-1 text-right">All-In</TH>
-    <TH tip="MOQ Pieces" className="py-2 px-1 text-right">MOQ</TH>
-    <TH tip="Vendor Case Pack" className="py-2 px-1 text-right">VCas</TH>
-    <TH tip="Seasonal Peak" className="py-2 px-1 text-center">S</TH>
-    {!isCol && <>
-      <TH tip="Raw / Potential Units" className="py-2 px-1 text-right">Raw</TH>
-      <TH tip="PPRC Available" className="py-2 px-1 text-right">PPRC</TH>
-      <TH tip="Inbound Pieces" className="py-2 px-1 text-right">Inb</TH>
-      <TH tip="Total FBA & Inbound Pieces" className="py-2 px-1 text-right">FBA Pcs</TH>
-    </>}
-    {showRS && <>
-      <th className="py-2 border-l-2 border-cyan-800 px-0.5" />
-      <TH tip="Bundle FIB DOC" className="py-2 px-1 text-right text-cyan-400">FibDoc</TH>
-      <TH tip="Margin % (GP/AICOGS)" className="py-2 px-1 text-right text-cyan-400">Mrgn</TH>
-      <TH tip="Raw Units (Replen Rec)" className="py-2 px-1 text-right text-cyan-400">Raw</TH>
-      <TH tip="Batched (Replen Rec)" className="py-2 px-1 text-right text-cyan-400">Batch</TH>
-      <TH tip="FIB Inventory" className="py-2 px-1 text-right text-cyan-400">FIB</TH>
-      <TH tip="PPRC Available Units" className="py-2 px-1 text-right text-cyan-400">PPRC</TH>
-      <TH tip="7f Missing Pieces" className="py-2 px-1 text-right text-red-400">7f Miss</TH>
-    </>}
-    <th className="py-2 border-l-2 border-gray-600 px-1" />
-    <TH tip="Pieces to Order" className="py-2 px-1 text-center sticky right-36 bg-gray-900 z-30">Pcs</TH>
-    <TH tip="Cases to Order" className="py-2 px-1 text-center sticky right-24 bg-gray-900 z-30">Cas</TH>
-    {showCosts && <>
-      <TH tip="Inbound Shipping Cost" className="py-2 px-1 text-center">InbS</TH>
-      <TH tip="Cost per Piece" className="py-2 px-1 text-center">CogP</TH>
-      <TH tip="Cost per Case" className="py-2 px-1 text-center">CogC</TH>
-    </>}
-    <th className="py-2 px-1 text-right sticky right-12 bg-gray-900 z-30">Cost</th>
-    <TH tip="DOC After Order" className="py-2 px-1 text-right sticky right-0 bg-gray-900 z-30">After</TH>
-    <th className="py-2 px-1 w-16">{rsToggle} {costsToggle}</th>
-  </tr>;
-
-  return <div className="p-4">{toast && <Toast msg={toast} onClose={() => setToast(null)} />}
-    <div className="flex flex-wrap gap-2 items-center mb-4">
-      <div className="flex bg-gray-800 rounded-lg p-0.5">{["core", "vendor"].map(m => <button key={m} onClick={() => setVm(m)} className={`px-3 py-1.5 rounded-md text-sm font-medium ${vm === m ? "bg-blue-600 text-white" : "text-gray-400"}`}>{m === "core" ? "By Core" : "By Vendor"}</button>)}</div>
-      <SS value={vf} onChange={setVf} options={vNames} />
-      <select value={sf} onChange={e => setSf(e.target.value)} className="bg-gray-800 border border-gray-700 text-gray-300 text-sm rounded-lg px-2 py-1.5"><option value="">All Status</option><option value="critical">Critical</option><option value="warning">Warning</option><option value="healthy">Healthy</option></select>
-      <select value={locF} onChange={e => setLocF(e.target.value)} className="bg-gray-800 border border-gray-700 text-gray-300 text-sm rounded-lg px-2 py-1.5"><option value="all">All</option><option value="us">US Only</option><option value="intl">International</option></select>
-      <select value={nf} onChange={e => setNf(e.target.value)} className="bg-gray-800 border border-gray-700 text-gray-300 text-sm rounded-lg px-2 py-1.5"><option value="all">All</option><option value="need">Needs Buy</option><option value="ok">No Need</option></select>
-      {vm === "core" && <><select value={sort} onChange={e => setSort(e.target.value)} className="bg-gray-800 border border-gray-700 text-gray-300 text-sm rounded-lg px-2 py-1.5"><option value="status">Priority</option><option value="doc">DOC</option><option value="dsr">DSR</option><option value="need$">$</option></select><span className="text-gray-500 text-xs">Min:</span><input type="number" value={minD} onChange={e => setMinD(+e.target.value)} className="bg-gray-800 border border-gray-700 text-white text-sm rounded px-2 py-1 w-14" /></>}
-      {vm === "vendor" && <div className="flex bg-gray-800 rounded-lg p-0.5">{[["cores", "Cores"], ["bundles", "Bundles"], ["mix", "Mix"]].map(([k, l]) => <button key={k} onClick={() => setVendorSub(k)} className={`px-2.5 py-1 rounded-md text-xs font-medium ${vendorSub === k ? "bg-indigo-600 text-white" : "text-gray-400"}`}>{l}</button>)}</div>}
-      <div className="flex gap-2 ml-auto text-xs"><span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-500" />{sc.critical}</span><span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-500" />{sc.warning}</span><span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500" />{sc.healthy}</span><span className="text-gray-500">|</span><span className="text-gray-300 font-semibold">{enr.length}</span>
-      {vm === "vendor" && <button onClick={() => setShowIgnored(!showIgnored)} className={`ml-2 px-2 py-0.5 rounded text-xs ${showIgnored ? "bg-red-500/20 text-red-400" : "bg-gray-700 text-gray-500"}`}>{showIgnored ? "Hide" : "Show"} Ignored</button>}
+// === Settings Modal ===
+export function Stg({ s, setS, onClose }) {
+  const [l, setL] = useState({ ...s });
+  return (
+    <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center" onClick={onClose}>
+      <div className="bg-gray-900 border border-gray-700 rounded-xl p-6 w-full max-w-md" onClick={e => e.stopPropagation()}>
+        <h2 className="text-lg font-semibold text-white mb-4">Settings</h2>
+        <div className="space-y-4">
+          <div><label className="text-sm text-gray-400 block mb-1">Buyer Initials</label><input type="text" value={l.buyer || ''} onChange={e => setL({ ...l, buyer: e.target.value })} placeholder="e.g. FS" className="bg-gray-800 border border-gray-600 text-white rounded px-3 py-2 w-full" /></div>
+          <div className="grid grid-cols-2 gap-3">
+            <div><label className="text-sm text-gray-400 block mb-1">Domestic DOC</label><input type="number" value={l.domesticDoc} onChange={e => setL({ ...l, domesticDoc: +e.target.value })} className="bg-gray-800 border border-gray-600 text-white rounded px-3 py-2 w-full" /></div>
+            <div><label className="text-sm text-gray-400 block mb-1">Intl DOC</label><input type="number" value={l.intlDoc} onChange={e => setL({ ...l, intlDoc: +e.target.value })} className="bg-gray-800 border border-gray-600 text-white rounded px-3 py-2 w-full" /></div>
+          </div>
+          <div className="border-t border-gray-700 pt-4"><h3 className="text-sm font-semibold text-blue-400 mb-3">Core Filters</h3><div className="space-y-3">
+            {[["Active", "fA"], ["Visible", "fV"]].map(([lb, k]) => <div key={k} className="flex items-center justify-between"><span className="text-sm text-gray-300">{lb}</span><select value={l[k]} onChange={e => setL({ ...l, [k]: e.target.value })} className="bg-gray-800 border border-gray-600 text-white rounded px-2 py-1 text-sm w-28"><option value="yes">Yes</option><option value="no">No</option><option value="all">All</option></select></div>)}
+            <div className="flex items-center justify-between"><span className="text-sm text-gray-300">Ignored</span><select value={l.fI} onChange={e => setL({ ...l, fI: e.target.value })} className="bg-gray-800 border border-gray-600 text-white rounded px-2 py-1 text-sm w-28"><option value="blank">Blank</option><option value="set">Set</option><option value="all">All</option></select></div>
+          </div></div>
+          <div className="border-t border-gray-700 pt-4"><h3 className="text-sm font-semibold text-indigo-400 mb-3">Bundle Filters</h3><div className="space-y-3">
+            <div className="flex items-center justify-between"><span className="text-sm text-gray-300">Active</span><select value={l.bA || 'yes'} onChange={e => setL({ ...l, bA: e.target.value })} className="bg-gray-800 border border-gray-600 text-white rounded px-2 py-1 text-sm w-28"><option value="yes">Yes</option><option value="no">No</option><option value="all">All</option></select></div>
+            <div className="flex items-center justify-between"><span className="text-sm text-gray-300">Ignored</span><select value={l.bI || 'blank'} onChange={e => setL({ ...l, bI: e.target.value })} className="bg-gray-800 border border-gray-600 text-white rounded px-2 py-1 text-sm w-28"><option value="blank">Blank</option><option value="set">Set</option><option value="all">All</option></select></div>
+          </div></div>
+        </div>
+        <div className="flex gap-3 mt-6">
+          <button onClick={() => { setS(l); onClose() }} className="flex-1 bg-blue-600 text-white rounded-lg py-2 font-medium">Save</button>
+          <button onClick={onClose} className="flex-1 bg-gray-700 text-white rounded-lg py-2 font-medium">Cancel</button>
+        </div>
       </div>
     </div>
-    {vm === "vendor" && <div className="flex flex-wrap gap-3 mb-4 items-center text-sm"><span className="text-gray-500 text-xs">PO#:</span><input type="text" value={poN} onChange={e => setPoN(e.target.value)} placeholder="Auto" className="bg-gray-800 border border-gray-700 text-white rounded px-2 py-1 w-28 text-sm" /><span className="text-gray-500 text-xs">Date:</span><input type="date" value={poD} onChange={e => setPoD(e.target.value)} className="bg-gray-800 border border-gray-700 text-white rounded px-2 py-1 text-sm" lang="en-US" /><span className="text-gray-500 text-xs">Buyer:</span><span className="text-white font-semibold">{stg.buyer || <span className="text-red-400">Set in ⚙️</span>}</span></div>}
+  );
+}
 
-    {vm === "core" && <div className="overflow-x-auto rounded-xl border border-gray-800"><table className="w-full"><thead><tr className="bg-gray-900/80 text-xs text-gray-400 uppercase sticky top-0 z-20"><th className="py-3 px-2 w-8" /><th className="py-3 px-2 text-left">Core</th><th className="py-3 px-2 text-left">Vendor</th><th className="py-3 px-2 text-left">Title</th><TH tip="Composite DSR" className="py-3 px-2 text-right">DSR</TH><TH tip="7-Day DSR" className="py-3 px-2 text-right">7D</TH><th className="py-3 px-2 text-center">T</th><TH tip="Days of Coverage" className="py-3 px-2 text-right">DOC</TH><TH tip="All-In Owned Pieces" className="py-3 px-2 text-right">All-In</TH><th className="py-3 px-2 text-right">MOQ</th><th className="py-3 px-2 text-center">S</th><th className="py-3 px-1 border-l-2 border-gray-600" /><th className="py-3 px-2 text-right">Need</th><th className="py-3 px-2 text-right">Order</th><th className="py-3 px-2 text-right">Cost</th><TH tip="DOC After Order" className="py-3 px-2 text-right">After</TH><th className="py-3 px-2 w-10" /></tr></thead>
-        <tbody>{enr.map(c => <tr key={c.id} className="border-b border-gray-800/50 hover:bg-gray-800/30 text-sm"><td className="py-2 px-2"><Dot status={c.status} /></td><td className="py-2 px-2"><button onClick={() => goCore(c.id)} className="text-blue-400 font-mono text-xs hover:underline">{c.id}</button></td><td className="py-2 px-2 text-blue-300 text-xs truncate max-w-[100px] cursor-pointer hover:underline" onClick={() => goVendor(c.ven)}>{c.ven}</td><td className="py-2 px-2 text-gray-200 truncate max-w-[180px]">{c.ti}</td><td className="py-2 px-2 text-right">{D1(c.dsr)}</td><td className="py-2 px-2 text-right">{D1(c.d7)}</td><td className="py-2 px-2 text-center">{c.d7 > c.dsr ? <span className="text-emerald-400">▲</span> : c.d7 < c.dsr ? <span className="text-red-400">▼</span> : "—"}</td><td className={`py-2 px-2 text-right font-semibold ${dc(c.doc, c.critDays, c.warnDays)}`}>{R(c.doc)}</td><td className="py-2 px-2 text-right">{R(c.allIn)}</td><td className="py-2 px-2 text-right text-gray-400 text-xs">{c.moq > 0 ? R(c.moq) : "—"}</td><td className="py-2 px-2 text-center">{c.seas && <span className="text-purple-400 text-xs font-bold">{c.seas.peak}</span>}</td><td className="py-2 px-1 border-l-2 border-gray-600" /><td className="py-2 px-2 text-right text-gray-300">{c.needQty > 0 ? R(c.needQty) : "—"}</td><td className="py-2 px-2 text-right text-white font-semibold">{c.orderQty > 0 ? R(c.orderQty) : "—"}</td><td className="py-2 px-2 text-right text-amber-300">{c.needDollar > 0 ? $(c.needDollar) : "—"}</td><td className={`py-2 px-2 text-right ${c.orderQty > 0 ? dc(c.docAfter, c.critDays, c.warnDays) : "text-gray-500"}`}>{c.orderQty > 0 ? R(c.docAfter) : "—"}</td><td className="py-2 px-2"><button onClick={() => goCore(c.id)} className="text-blue-400 text-xs px-1.5 py-0.5 bg-blue-400/10 rounded">V</button></td></tr>)}</tbody>
-        <tfoot><tr className="bg-gray-900 border-t-2 border-gray-700 text-sm font-semibold"><td colSpan={4} className="py-3 px-2 text-gray-300">{enr.length}</td><td className="py-3 px-2 text-right text-white">{D1(tot.d)}</td><td colSpan={3} /><td className="py-3 px-2 text-right text-white">{R(tot.a)}</td><td colSpan={2} /><td className="border-l-2 border-gray-600" /><td className="py-3 px-2 text-right">{R(tot.n)}</td><td className="py-3 px-2 text-right text-white">{R(tot.o)}</td><td className="py-3 px-2 text-right text-amber-300">{$(tot.co)}</td><td colSpan={2} /></tr></tfoot>
-      </table></div>}
+// === Badge helpers ===
+export function AbcBadge({ grade }) {
+  if (!grade) return null;
+  const cls = grade === "A" ? "bg-emerald-500/20 text-emerald-400" : grade === "B" ? "bg-blue-500/20 text-blue-400" : "bg-gray-500/20 text-gray-400";
+  return <span className={`text-xs px-1.5 py-0.5 rounded font-bold ${cls}`}>{grade}</span>;
+}
 
-    {vm === "vendor" && vG.map(grp => {
-      const v = grp.v; const tg = gTD(v, stg);
-      const poI = getPOI(grp.cores, vendorSub !== "cores" ? grp.bundles : []);
-      const poT = poI.reduce((s, i) => s + i.qty * i.cost, 0);
-      const poC = poI.reduce((s, i) => s + (v.vou === 'Cases' && i.isCoreItem ? Math.ceil(i.qty / (i.cp || 1)) : 0), 0);
-      const meets = poT >= (v.moqDollar || 0);
-      const anyCol = Object.values(collapsed).some(Boolean);
-      const vendorPO = autoPO(v.code);
+export function HealthBadge({ health, ltsf }) {
+  if (!health) return null;
+  const cls = health === "Healthy" ? "text-emerald-400" : health === "At Risk" ? "text-amber-400" : "text-red-400";
+  return <span className="flex items-center gap-1"><span className={`text-xs font-semibold ${cls}`}>{health}</span>{ltsf > 0 && <span className="text-xs text-red-300">${ltsf.toFixed(2)}</span>}</span>;
+}
 
-      return <div key={v.name} className="mb-5 border border-gray-800 rounded-xl overflow-hidden">
-        <div className="bg-gray-900 px-4 py-3">
-          <div className="flex flex-wrap items-center gap-3 mb-2">
-            <span className="text-white font-semibold cursor-pointer hover:text-blue-400 hover:underline" onClick={() => window.open(window.location.pathname + '?vendor=' + encodeURIComponent(v.name), '_blank')}>{v.name}</span>
-            <div className="relative"><WorkflowChip id={v.name} type="vendor" workflow={data.workflow} onSave={saveWorkflow} onDelete={deleteWorkflow} buyer={stg.buyer} /></div>
-            <div className="relative"><VendorNotes vendor={v.name} comments={data.vendorComments} onSave={saveVendorComment} buyer={stg.buyer} /></div>
-            {v.country && <span className="text-xs text-gray-500">{v.country}</span>}
-            <span className="text-xs text-gray-400">LT:{v.lt}d</span>
-            <span className="text-xs text-gray-400">Buf:{grp.cores[0]?.buf || 14}d</span>
-            <span className="text-xs text-gray-400">MOQ:{$(v.moqDollar)}</span>
-            <span className="text-xs text-gray-400">Tgt:{tg}d</span>
-            <span className="text-xs text-gray-400">{v.payment}</span>
-            {(vendorSub === "bundles" || vendorSub === "mix") && <span className="flex items-center gap-1 text-xs text-gray-400">B.MOQ:<NumInput value={gBMoq('_bmoq_' + v.name)} onChange={val => setF('_bmoq_' + v.name, 'bMoq', val)} placeholder="0" className="bg-gray-800 border border-gray-600 text-white rounded px-1 py-0.5 w-14 text-center text-xs" /></span>}
-            {poI.length === 0 ? <span className="ml-auto text-xs text-gray-400 bg-gray-700 px-2 py-0.5 rounded">—</span> : <span className={`ml-auto text-xs font-semibold px-2 py-0.5 rounded ${meets ? "text-emerald-400 bg-emerald-400/10" : "text-red-400 bg-red-400/10"}`}>{meets ? "✓" : "!"} {$(poT)}{poC > 0 ? " / " + poC + "cs" : ""}</span>}
+export function KillBadge({ eval: ev }) {
+  if (!ev) return null;
+  const isKill = ev.toLowerCase().includes('kill');
+  const isSell = ev.toLowerCase().includes('sell');
+  if (!isKill && !isSell) return null;
+  return <span className={`text-xs px-1.5 py-0.5 rounded font-bold ${isKill ? "bg-red-500/20 text-red-400" : "bg-amber-500/20 text-amber-400"}`}>{isKill ? "KILL" : "SELLTHROUGH"}</span>;
+}
+
+// === Slide-over panel ===
+export function SlidePanel({ open, onClose, children }) {
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex">
+      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
+      <div className="relative ml-auto w-full max-w-4xl bg-gray-950 border-l border-gray-800 overflow-y-auto shadow-2xl">
+        <button onClick={onClose} className="sticky top-4 right-4 float-right z-10 text-gray-400 hover:text-white text-xl bg-gray-800 rounded-full w-8 h-8 flex items-center justify-center mr-4 mt-4">✕</button>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+// === Workflow Note Chip ===
+const WF_STATUSES = ["Buy", "Reviewing", "Ignore", "Done", ""];
+const WF_COLORS = { Buy: "bg-emerald-500/20 text-emerald-400", Reviewing: "bg-amber-500/20 text-amber-400", Ignore: "bg-red-500/20 text-red-400", Done: "bg-blue-500/20 text-blue-400" };
+
+export function WorkflowChip({ id, type, workflow, onSave, onDelete, buyer }) {
+  const [open, setOpen] = useState(false);
+  const existing = (workflow || []).find(w => w.id === id);
+  const [status, setStatus] = useState(existing?.status || "");
+  const [note, setNote] = useState(existing?.note || "");
+  const [ignoreUntil, setIgnoreUntil] = useState(existing?.ignoreUntil || "");
+  useEffect(() => { const ex = (workflow || []).find(w => w.id === id); if (ex) { setStatus(ex.status || ""); setNote(ex.note || ""); setIgnoreUntil(ex.ignoreUntil || "") } }, [workflow, id]);
+  const save = () => { onSave({ id, type, status, note, ignoreUntil, updatedBy: buyer || "" }); setOpen(false) };
+  const del = () => { onDelete({ id }); setOpen(false); setStatus(""); setNote(""); setIgnoreUntil("") };
+
+  if (!open) return <button onClick={() => setOpen(true)} className={`text-xs px-1.5 py-0.5 rounded ${existing?.status ? WF_COLORS[existing.status] || "bg-gray-700 text-gray-300" : "bg-gray-800 text-gray-500 hover:text-gray-300"}`}>{existing?.status ? <>{existing.status}{existing.note ? " · " + existing.note.substring(0, 15) + (existing.note.length > 15 ? "…" : "") : ""}</> : "📝"}</button>;
+
+  return (
+    <div className="absolute z-50 mt-1 bg-gray-900 border border-gray-700 rounded-lg shadow-xl p-3 w-64" onClick={e => e.stopPropagation()}>
+      <div className="space-y-2">
+        <div><label className="text-xs text-gray-500 block mb-1">Status</label><div className="flex gap-1 flex-wrap">{WF_STATUSES.filter(Boolean).map(s => <button key={s} onClick={() => setStatus(s)} className={`text-xs px-2 py-1 rounded ${status === s ? WF_COLORS[s] : "bg-gray-800 text-gray-400"}`}>{s}</button>)}</div></div>
+        <div><label className="text-xs text-gray-500 block mb-1">Note</label><input type="text" value={note} onChange={e => setNote(e.target.value)} placeholder="e.g. Negotiating price..." className="bg-gray-800 border border-gray-600 text-white rounded px-2 py-1 w-full text-xs" /></div>
+        <div><label className="text-xs text-gray-500 block mb-1">Ignore Until</label><input type="date" value={ignoreUntil} onChange={e => setIgnoreUntil(e.target.value)} className="bg-gray-800 border border-gray-600 text-white rounded px-2 py-1 w-full text-xs" /></div>
+        <div className="flex gap-2 pt-1"><button onClick={save} className="flex-1 bg-blue-600 text-white text-xs rounded py-1">Save</button>{existing && <button onClick={del} className="bg-red-600/20 text-red-400 text-xs rounded py-1 px-2">Delete</button>}<button onClick={() => setOpen(false)} className="bg-gray-700 text-gray-300 text-xs rounded py-1 px-2">Cancel</button></div>
+      </div>
+    </div>
+  );
+}
+
+// === Vendor Comments Panel ===
+const VC_CATS = ["Communication", "Lead Time", "Pricing", "Discount", "Quality", "Other"];
+const VC_COLORS = { Communication: "text-blue-400", "Lead Time": "text-amber-400", Pricing: "text-emerald-400", Discount: "text-purple-400", Quality: "text-red-400", Other: "text-gray-400" };
+
+export function VendorNotes({ vendor, comments, onSave, buyer }) {
+  const [open, setOpen] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const [cat, setCat] = useState("Other");
+  const [text, setText] = useState("");
+  const notes = (comments || []).filter(c => c.vendor === vendor).sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+  const count = notes.length;
+  const save = () => { if (!text.trim()) return; onSave({ vendor, author: buyer || "", category: cat, comment: text.trim() }); setText(""); setAdding(false) };
+
+  if (!open) return <button onClick={() => setOpen(true)} className={`text-xs px-1.5 py-0.5 rounded ${count > 0 ? "bg-blue-500/20 text-blue-400" : "bg-gray-800 text-gray-500 hover:text-gray-300"}`}>💬{count > 0 ? " " + count : ""}</button>;
+
+  return (
+    <div className="absolute z-50 mt-1 right-0 bg-gray-900 border border-gray-700 rounded-lg shadow-xl w-80 max-h-96 overflow-hidden" onClick={e => e.stopPropagation()}>
+      <div className="flex items-center justify-between px-3 py-2 border-b border-gray-700"><span className="text-white text-sm font-semibold">Notes — {vendor}</span><div className="flex gap-2"><button onClick={() => setAdding(!adding)} className="text-xs bg-blue-600 text-white px-2 py-0.5 rounded">+ Add</button><button onClick={() => setOpen(false)} className="text-gray-400 hover:text-white text-xs">✕</button></div></div>
+      {adding && <div className="px-3 py-2 border-b border-gray-700 space-y-2"><div className="flex gap-1 flex-wrap">{VC_CATS.map(c => <button key={c} onClick={() => setCat(c)} className={`text-[10px] px-1.5 py-0.5 rounded ${cat === c ? "bg-blue-600 text-white" : "bg-gray-800 text-gray-400"}`}>{c}</button>)}</div><textarea value={text} onChange={e => setText(e.target.value)} placeholder="Add a note..." rows={2} className="w-full bg-gray-800 border border-gray-600 text-white rounded px-2 py-1 text-xs resize-none" /><div className="flex gap-2"><button onClick={save} className="text-xs bg-emerald-600 text-white px-3 py-1 rounded">Save</button><button onClick={() => { setAdding(false); setText("") }} className="text-xs bg-gray-700 text-gray-300 px-2 py-1 rounded">Cancel</button></div></div>}
+      <div className="overflow-y-auto max-h-60">{notes.length > 0 ? notes.map((n, i) => <div key={i} className={`px-3 py-2 ${i > 0 ? "border-t border-gray-800/50" : ""}`}><div className="flex items-center gap-2 mb-0.5"><span className={`text-[10px] font-semibold ${VC_COLORS[n.category] || "text-gray-400"}`}>{n.category}</span><span className="text-gray-500 text-[10px]">{n.date}</span>{n.author && <span className="text-gray-600 text-[10px]">— {n.author}</span>}</div><p className="text-gray-300 text-xs">{n.comment}</p></div>) : <p className="text-gray-500 text-xs text-center py-4">No notes yet</p>}</div>
+    </div>
+  );
+}
+
+// === Calc Breakdown Modal ===
+export function CalcBreakdown({ data, onClose }) {
+  if (!data) return null;
+  const idxColor = v => v > 1.3 ? "bg-emerald-500/20 text-emerald-400" : v > 1.1 ? "bg-blue-500/20 text-blue-300" : v < 0.7 ? "bg-red-500/20 text-red-400" : v < 0.9 ? "bg-amber-500/20 text-amber-400" : "bg-gray-700 text-gray-400";
+
+  return (
+    <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center overflow-auto p-4" onClick={onClose}>
+      <div className="bg-gray-900 border border-gray-700 rounded-xl p-5 w-full max-w-3xl max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+        {/* Header */}
+        <div className="flex justify-between items-start mb-3">
+          <div>
+            <h2 className="text-lg font-bold text-white">{data.coreId} — Seasonal Forecast Breakdown</h2>
+            <p className="text-gray-400 text-sm">{data.title} · {data.vendor}</p>
           </div>
-          <div className="flex flex-wrap gap-2 items-center">
-            <button onClick={() => fillR(grp.cores, grp.bundles, vendorSub, v.name)} className="text-xs bg-blue-600/80 text-white px-2.5 py-1 rounded">Fill Rec</button>
-            <button onClick={() => clrV(grp.cores, grp.bundles)} className="text-xs bg-gray-700 text-gray-300 px-2.5 py-1 rounded">Clear</button>
-            <button onClick={() => setDismissed({})} className="text-xs bg-gray-700 text-gray-300 px-2 py-1 rounded">Show All</button>
-            <div className="ml-auto flex gap-2">
-              <button disabled={!poI.length} onClick={() => { genRFQ(v, poI, stg.buyer, poD, vendorPO); setToast("RFQ " + vendorPO) }} className={`text-xs px-3 py-1.5 rounded font-medium ${poI.length ? "bg-orange-600 text-white" : "bg-gray-700 text-gray-500 cursor-not-allowed"}`}>RFQ</button>
-              <button disabled={!poI.length} onClick={() => { genPO(v, poI, vendorPO, stg.buyer, poD); setToast("PO " + vendorPO) }} className={`text-xs px-3 py-1.5 rounded font-medium ${poI.length ? "bg-emerald-600 text-white" : "bg-gray-700 text-gray-500 cursor-not-allowed"}`}>PO</button>
-              <button disabled={!poI.length} onClick={() => { cp7f(v, poI, vendorPO, stg.buyer, poD); setToast("7f copied!") }} className={`text-xs px-3 py-1.5 rounded font-medium ${poI.length ? "bg-teal-600 text-white" : "bg-gray-700 text-gray-500 cursor-not-allowed"}`}>7f</button>
-              <button disabled={!poI.length} onClick={() => { cp7g(v, poI, vendorPO, stg.buyer); setToast("7g copied!") }} className={`text-xs px-3 py-1.5 rounded font-medium ${poI.length ? "bg-purple-600 text-white" : "bg-gray-700 text-gray-500 cursor-not-allowed"}`}>7g</button>
-              {v.contactEmail && <button onClick={() => {
-                const subj = encodeURIComponent('PO ' + vendorPO + ' — JLS Trading Co.');
-                const body = encodeURIComponent('Hi ' + (v.contactName || '') + ',\n\nPlease find attached PO ' + vendorPO + '.\n\nItems: ' + poI.length + '\nTotal: $' + poT.toFixed(2) + '\n\nThank you,\n' + (stg.buyer || ''));
-                window.open('mailto:' + v.contactEmail + '?subject=' + subj + '&body=' + body);
-              }} className="text-xs px-3 py-1.5 rounded font-medium bg-blue-600 text-white">📧</button>}
-            </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-white text-xl">✕</button>
+        </div>
+
+        {/* Plain English Summary */}
+        <div className="bg-gray-800/60 rounded-lg p-3 mb-4 text-sm text-gray-300 leading-relaxed">{data.summaryText}</div>
+
+        {/* Current State KPIs */}
+        <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 mb-4">
+          {[{ l: "DSR", v: data.currentDSR.toFixed(1) }, { l: "7D", v: data.d7.toFixed(1) }, { l: "DOC", v: Math.round(data.currentDOC) }, { l: "Inventory", v: data.inventory.toLocaleString() }, { l: "Lead Time", v: data.leadTime + "d" }, { l: "Target DOC", v: data.targetDOC + "d" }].map(k =>
+            <div key={k.l} className="bg-gray-800 rounded-lg p-2 text-center"><div className="text-gray-500 text-[10px] uppercase">{k.l}</div><div className="text-white font-bold text-sm">{k.v}</div></div>
+          )}
+        </div>
+
+        {/* Seasonal Analysis */}
+        <div className="bg-gray-800/50 rounded-lg p-4 mb-4">
+          <h3 className="text-sm font-semibold text-white mb-3">Step 1: Seasonal Profile</h3>
+          {!data.hasHistory && <p className="text-amber-400 text-xs mb-2">⚠ Not enough history ({'<'}6 months). Using flat indices (1.0 for all months).</p>}
+          <div className="grid grid-cols-3 gap-4 mb-3 text-sm">
+            <div><div className="text-gray-500 text-xs">CV (variability)</div><div className="text-white font-semibold">{data.cv} — <span className={data.cv > 0.35 ? "text-purple-400" : data.cv > 0.15 ? "text-amber-400" : "text-gray-400"}>{data.cvLabel}</span></div></div>
+            <div><div className="text-gray-500 text-xs">Momentum (recent vs last year)</div><div className={`font-semibold ${data.momentum > 1.05 ? "text-emerald-400" : data.momentum < 0.95 ? "text-red-400" : "text-gray-300"}`}>{data.momentum}x — {data.momentumLabel}</div></div>
+            <div><div className="text-gray-500 text-xs">Weight Blend</div><div className="text-gray-300">{Math.round(data.momentumWeight * 100)}% momentum / {Math.round(data.seasonalWeight * 100)}% seasonal</div></div>
+          </div>
+          <div className="text-xs text-gray-500 mb-2">Monthly Seasonal Indices (weighted avg of historical DSR / global avg):</div>
+          <div className="grid grid-cols-12 gap-1 text-center text-[10px]">
+            {data.seasonalIndices.map((s, i) => <div key={i} className={`rounded py-1.5 ${idxColor(s.index)}`}><div className="font-semibold">{s.month.substring(0, 3)}</div><div className="font-bold text-sm">{s.index}</div><div className="text-[8px] opacity-70">{s.interpretation}</div></div>)}
+          </div>
+          {Object.keys(data.yearlyTotals).length > 0 && <div className="mt-2 text-xs text-gray-500">Yearly DSR totals: {Object.entries(data.yearlyTotals).map(([y, t]) => `${y}: ${t.toLocaleString()}`).join(' · ')}</div>}
+        </div>
+
+        {/* Coverage Window Projection */}
+        <div className="bg-gray-800/50 rounded-lg p-4 mb-4">
+          <h3 className="text-sm font-semibold text-white mb-2">Step 2: Coverage Window Projection</h3>
+          <p className="text-gray-400 text-xs mb-1">Window: <span className="text-white">{data.windowStart}</span> → <span className="text-white">{data.windowEnd}</span></p>
+          <p className="text-gray-500 text-xs mb-3">= today + {data.leadTime}d lead time → + {data.targetDOC}d target DOC</p>
+          <table className="w-full text-xs"><thead><tr className="text-gray-500 uppercase border-b border-gray-700"><th className="py-1.5 text-left">Month</th><th className="py-1.5 text-right">Days</th><th className="py-1.5 text-right">Seas.Idx</th><th className="py-1.5 text-right">Blended Factor</th><th className="py-1.5 text-right">Proj DSR</th><th className="py-1.5 text-right">Units Needed</th></tr></thead>
+            <tbody>{data.projectedMonths.map((m, i) => <tr key={i} className={`${i % 2 === 0 ? "bg-gray-800/30" : ""} border-t border-gray-800/30`}>
+              <td className="py-1.5 text-gray-300">{m.label}</td>
+              <td className="py-1.5 text-right text-gray-400">{m.days}d</td>
+              <td className={`py-1.5 text-right ${m.seasonalIdx > 1.3 ? "text-emerald-400" : m.seasonalIdx < 0.7 ? "text-red-400" : "text-gray-300"}`}>{m.seasonalIdx}</td>
+              <td className="py-1.5 text-right text-blue-400">{m.blendedFactor}x</td>
+              <td className="py-1.5 text-right text-white font-semibold">{m.projDsr}</td>
+              <td className="py-1.5 text-right text-white">{m.units.toLocaleString()}</td>
+            </tr>)}</tbody>
+            <tfoot><tr className="border-t-2 border-gray-600 font-semibold"><td className="py-2 text-gray-300">Total</td><td className="py-2 text-right">{data.projectedMonths.reduce((s, m) => s + m.days, 0)}d</td><td colSpan={3} /><td className="py-2 text-right text-white text-sm">{data.totalProjected.toLocaleString()}</td></tr></tfoot>
+          </table>
+        </div>
+
+        {/* Final Result */}
+        <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-4">
+          <h3 className="text-sm font-semibold text-white mb-3">Step 3: Final Need</h3>
+          <div className="grid grid-cols-3 gap-4 text-center mb-3">
+            <div><div className="text-gray-400 text-xs">Projected Demand</div><div className="text-white font-bold text-xl">{data.totalProjected.toLocaleString()}</div></div>
+            <div><div className="text-gray-400 text-xs">Current Inventory</div><div className="text-white font-bold text-xl">− {data.inventory.toLocaleString()}</div></div>
+            <div><div className="text-gray-400 text-xs">Need (Seasonal)</div><div className="text-emerald-400 font-bold text-xl">= {data.need.toLocaleString()}</div></div>
+          </div>
+          <div className="pt-3 border-t border-gray-700 flex flex-wrap gap-4 text-xs justify-center">
+            <span className="text-gray-500">Old flat formula: <span className="text-gray-300 font-semibold">{data.targetDOC}d × {data.currentDSR.toFixed(1)} DSR − {data.inventory.toLocaleString()} inv = {data.flatNeed.toLocaleString()}</span></span>
+            <span className={`font-semibold ${data.difference > 0 ? "text-amber-400" : data.difference < 0 ? "text-emerald-400" : "text-gray-400"}`}>{data.differenceLabel}</span>
           </div>
         </div>
-        <div className="overflow-auto max-h-[70vh]"><table className="w-full text-xs"><thead><VTH isCol={anyCol} /></thead><tbody>
-          {vendorSub === "bundles" ? <>{grp.bundles.map(b => <BundleRow key={b.j} b={b} />)}{grp.bundles.length === 0 && <tr><td colSpan={40} className="py-4 text-center text-gray-500">No bundles</td></tr>}</>
-            : vendorSub === "mix" ? <>{grp.cores.map(c => {
-              const cBs = (data.bundles || []).filter(b => {
-                if (b.core1 !== c.id) return false;
-                if (bA === "yes" && b.active !== "Yes") return false;
-                if (bA === "no" && b.active === "Yes") return false;
-                if (bI === "blank" && !!b.ignoreUntil) return false;
-                if (bI === "set" && !b.ignoreUntil) return false;
-                return true;
-              }).map(b => ({ ...b, fee: feMap[b.j] }));
-              const bAdj = cBs.reduce((s, b) => s + bundleEffQ(b), 0);
-              return <Fragment key={c.id}><CoreRow c={c} mixAdj={bAdj} />{!dismissed[c.id] && cBs.map(b => <BundleRow key={b.j} b={b} indent />)}</Fragment>;
-            })}</>
-              : <>{grp.cores.map(c => <CoreRow key={c.id} c={c} />)}</>}
-        </tbody></table></div>
-      </div>;
-    })}
-
-    {vm === "vendor" && vG.length === 0 && <div className="text-center text-gray-500 py-12">No vendors match current filters.</div>}
-  </div>;
+      </div>
+    </div>
+  );
 }
