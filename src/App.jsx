@@ -35,7 +35,6 @@ function VendorsTab({ data, stg, goVendor, workflow, saveWorkflow, deleteWorkflo
     });
     return Object.values(g);
   }, [data.cores, vMap, stg]);
-
   const vSF = useMemo(() => {
     let arr = vSearch ? vS.filter(v => v.name.toLowerCase().includes(vSearch.toLowerCase())) : [...vS];
     if (filterNeed) arr = arr.filter(v => v.needBuy > 0);
@@ -44,52 +43,22 @@ function VendorsTab({ data, stg, goVendor, workflow, saveWorkflow, deleteWorkflo
     else if (sortBy === "cores") arr.sort((a, b) => b.cores - a.cores || a.name.localeCompare(b.name));
     return arr;
   }, [vS, vSearch, sortBy, filterNeed]);
-
   return <div className="p-4 max-w-4xl mx-auto">
     <h2 className="text-xl font-bold text-white mb-4">Vendor Overview ({vSF.length})</h2>
     <div className="flex flex-wrap gap-2 mb-4 items-center">
-      <input type="text" placeholder="Search vendor..." value={vSearch} onChange={e => setVSearch(e.target.value)}
-        className="bg-gray-800 border border-gray-700 text-white rounded-lg px-4 py-2 w-full max-w-xs text-sm" />
-      <select value={sortBy} onChange={e => setSortBy(e.target.value)}
-        className="bg-gray-800 border border-gray-700 text-gray-300 text-sm rounded-lg px-2 py-2">
-        <option value="alpha">A → Z</option>
-        <option value="critical">Critical ↓</option>
-        <option value="cores">Cores ↓</option>
-      </select>
-      <button onClick={() => setFilterNeed(!filterNeed)}
-        className={`text-xs px-3 py-2 rounded-lg font-medium ${filterNeed ? "bg-amber-600 text-white" : "bg-gray-800 border border-gray-700 text-gray-400"}`}>
-        {filterNeed ? "Needs Buy ✓" : "Needs Buy"}
-      </button>
+      <input type="text" placeholder="Search vendor..." value={vSearch} onChange={e => setVSearch(e.target.value)} className="bg-gray-800 border border-gray-700 text-white rounded-lg px-4 py-2 w-full max-w-xs text-sm" />
+      <select value={sortBy} onChange={e => setSortBy(e.target.value)} className="bg-gray-800 border border-gray-700 text-gray-300 text-sm rounded-lg px-2 py-2"><option value="alpha">A → Z</option><option value="critical">Critical ↓</option><option value="cores">Cores ↓</option></select>
+      <button onClick={() => setFilterNeed(!filterNeed)} className={`text-xs px-3 py-2 rounded-lg font-medium ${filterNeed ? "bg-amber-600 text-white" : "bg-gray-800 border border-gray-700 text-gray-400"}`}>{filterNeed ? "Needs Buy ✓" : "Needs Buy"}</button>
     </div>
-    {vSF.length > 0 ? (
-      <div className="space-y-1">
-        {vSF.map(v => (
-          <div key={v.name} className="flex items-center gap-2 px-4 py-3 rounded-lg bg-gray-900/50 hover:bg-gray-800">
-            <button onClick={() => goVendor(v.name)} className="flex items-center gap-4 flex-1 text-left">
-              <div className="flex gap-1 min-w-[80px]">
-                {v.cr > 0 && <span className="text-xs bg-red-500/20 text-red-400 px-1.5 py-0.5 rounded font-semibold">{v.cr}</span>}
-                {v.wa > 0 && <span className="text-xs bg-amber-500/20 text-amber-400 px-1.5 py-0.5 rounded font-semibold">{v.wa}</span>}
-                <span className="text-xs bg-emerald-500/20 text-emerald-400 px-1.5 py-0.5 rounded">{v.he}</span>
-              </div>
-              <span className="text-white font-medium flex-1">{v.name}</span>
-              <div className="flex gap-3 text-xs text-gray-500">
-                <span>{v.cores} cores</span>
-                <span>DSR:{D1(v.dsr)}</span>
-                {v.needBuy > 0 && <span className="text-amber-400">{v.needBuy} need</span>}
-              </div>
-            </button>
-            <div className="relative">
-              <WorkflowChip id={v.name} type="vendor" workflow={workflow} onSave={saveWorkflow} onDelete={deleteWorkflow} buyer="" />
-            </div>
-            <div className="relative">
-              <VendorNotes vendor={v.name} comments={vendorComments} onSave={saveVendorComment} buyer="" />
-            </div>
-          </div>
-        ))}
-      </div>
-    ) : (
-      <p className="text-gray-500 text-sm py-8 text-center">No vendors match filters</p>
-    )}
+    {vSF.length > 0 ? <div className="space-y-1">{vSF.map(v => <div key={v.name} className="flex items-center gap-2 px-4 py-3 rounded-lg bg-gray-900/50 hover:bg-gray-800">
+      <button onClick={() => goVendor(v.name)} className="flex items-center gap-4 flex-1 text-left">
+        <div className="flex gap-1 min-w-[80px]">{v.cr > 0 && <span className="text-xs bg-red-500/20 text-red-400 px-1.5 py-0.5 rounded font-semibold">{v.cr}</span>}{v.wa > 0 && <span className="text-xs bg-amber-500/20 text-amber-400 px-1.5 py-0.5 rounded font-semibold">{v.wa}</span>}<span className="text-xs bg-emerald-500/20 text-emerald-400 px-1.5 py-0.5 rounded">{v.he}</span></div>
+        <span className="text-white font-medium flex-1">{v.name}</span>
+        <div className="flex gap-3 text-xs text-gray-500"><span>{v.cores} cores</span><span>DSR:{D1(v.dsr)}</span>{v.needBuy > 0 && <span className="text-amber-400">{v.needBuy} need</span>}</div>
+      </button>
+      <div className="relative"><WorkflowChip id={v.name} type="vendor" workflow={workflow} onSave={saveWorkflow} onDelete={deleteWorkflow} buyer="" /></div>
+      <div className="relative"><VendorNotes vendor={v.name} comments={vendorComments} onSave={saveVendorComment} buyer="" /></div>
+    </div>)}</div> : <p className="text-gray-500 text-sm py-8 text-center">No vendors match filters</p>}
   </div>;
 }
 
@@ -102,7 +71,18 @@ const DEFAULT_GL = [
   { term: "Healthy", desc: "DOC > Lead Time + Buffer. Sufficient inventory." },
   { term: "Buffer Days", desc: "Extra safety margin days per core (set in source sheet). Default ~14 days." },
   { term: "⚡ Spike", desc: "7D DSR is 25%+ above composite DSR. Need calculation uses 7D DSR instead to cover the demand spike." },
-  { term: "Fill Rec: Cores", desc: "Need = (Target DOC × effective DSR) − All-In Inventory. Order = max(Need, MOQ), rounded up to vendor case pack." },
+  // === SEASONAL FORECASTING ===
+  { term: "📊 Seasonal Breakdown", desc: "Click the 📊 button on any core row to see the full seasonal forecast calculation: seasonal indices, momentum, coverage window, and projected vs flat comparison." },
+  { term: "Coverage Window", desc: "The future time range your order must cover: from (today + lead time) to (today + lead time + target DOC). A US vendor with LT 14d + target 90d covers day 14→104. China with LT 100d + target 180d covers day 100→280. The seasonal formula projects demand for EACH month in this window instead of using a flat DSR." },
+  { term: "Seasonal Index", desc: "Per-month multiplier calculated from historical DSR. If a core's January DSR historically averages 150/day and the global average is 100/day, the January index = 1.50. Index > 1.0 = above average month, < 1.0 = below average. Weighted 75% to the most recent year, 25% to older years. Months with >50% OOS days are excluded." },
+  { term: "CV (Coefficient of Variation)", desc: "Measures how seasonal a product is. CV < 0.15 = flat (no seasonality). CV 0.15–0.35 = mild seasonality. CV > 0.35 = strong seasonality (e.g. Q4 products). CV determines how much weight goes to momentum vs seasonal indices." },
+  { term: "Momentum", desc: "Recent performance vs same period last year. Momentum = avg DSR last 14 days ÷ avg DSR same months last year. Momentum 1.52 = selling 52% more than last year. Momentum 0.80 = selling 20% less. Capped at 0.3–3.0x range." },
+  { term: "Momentum Weight", desc: "How much the formula trusts current momentum vs historical seasonal pattern. Flat products (CV < 0.15): 80% momentum / 20% seasonal — trusts what's selling NOW. Mild seasonal (CV 0.15–0.35): 50/50 blend. Strongly seasonal (CV > 0.35): 20% momentum / 80% seasonal — trusts the historical curve (e.g. Q4 always spikes)." },
+  { term: "Projected DSR", desc: "For each month in the coverage window: Projected DSR = currentDSR × blendedFactor. blendedFactor = (momentumWeight × momentum) + (seasonalWeight × seasonalIndex). For months 4-6 out, momentum decays to 70%. For months 7+, momentum decays to 40% (further out = less confident about current trend continuing)." },
+  { term: "Trend Decay", desc: "The further into the future, the less we trust current momentum. Months 1-3: 100% of momentum applied. Months 4-6: 70%. Months 7+: 40%. This prevents over-ordering if a current growth spike is temporary." },
+  { term: "Fill Rec (Seasonal)", desc: "Cores: Need = Σ(projected DSR × days) across coverage window − current inventory. Order = max(Need, MOQ), rounded up to case pack. Bundles (in Mix/Bundle mode): unchanged — uses FIB DOC calculation. The 📊 button shows the full calculation breakdown for each core." },
+  { term: "Fill to MOQ", desc: "When Fill Rec total < vendor MOQ$, this button distributes the extra $ intelligently. Priority: 1) cores with seasonal peak inside the coverage window (most value in buying now), 2) cores with growing momentum (>1.0x), 3) cores with lowest DOC ratio. Adds one case pack at a time to highest-scored core until MOQ is reached." },
+  // === EXISTING TERMS ===
   { term: "Fill Rec: Bundles", desc: "Need = (Target DOC × bundle DSR) − FIB Inventory. Order = Need (no MOQ on bundles)." },
   { term: "Fill Rec: Mix", desc: "1) For each bundle: Effective DOC = current DOC + (core inbound ÷ qty_per_bundle ÷ bundle DSR). 2) Need = (Target DOC − Effective DOC) × bundle DSR. 3) If need < vendor MOQ → don't order bundle, convert to core pieces instead. 4) Core order = own need + converted bundle pieces, rounded to case pack." },
   { term: "FIBDOC", desc: "FBA Inbound Days of Coverage." },
@@ -144,10 +124,7 @@ const DEFAULT_GL = [
 ];
 
 function GlossTab() {
-  const [gl, setGl] = useState(() => {
-    try { const s = localStorage.getItem('fba_glossary'); if (s) return JSON.parse(s) } catch { }
-    return DEFAULT_GL;
-  });
+  const [gl, setGl] = useState(() => { try { const s = localStorage.getItem('fba_glossary'); if (s) return JSON.parse(s) } catch { } return DEFAULT_GL });
   const [editing, setEditing] = useState(null);
   const [nT, setNT] = useState(""); const [nD, setND] = useState("");
   const save = (arr) => { setGl(arr); try { localStorage.setItem('fba_glossary', JSON.stringify(arr)) } catch { } };
@@ -155,29 +132,12 @@ function GlossTab() {
   const del = i => save(gl.filter((_, j) => j !== i));
   const upd = (i, field, val) => { const n = [...gl]; n[i] = { ...n[i], [field]: val }; save(n) };
   const reset = () => save(DEFAULT_GL);
-
   return <div className="p-4 max-w-4xl mx-auto">
-    <div className="flex items-center justify-between mb-4">
-      <h2 className="text-xl font-bold text-white">Glossary</h2>
-      <button onClick={reset} className="text-xs text-gray-500 hover:text-white">Reset to defaults</button>
-    </div>
+    <div className="flex items-center justify-between mb-4"><h2 className="text-xl font-bold text-white">Glossary</h2><button onClick={reset} className="text-xs text-gray-500 hover:text-white">Reset to defaults</button></div>
     {gl.map((g, i) => <div key={i} className={`flex gap-4 py-3 px-4 rounded-lg ${i % 2 === 0 ? "bg-gray-900/50" : ""}`}>
-      {editing === i ? <>
-        <input value={g.term} onChange={e => upd(i, 'term', e.target.value)} className="bg-gray-800 text-blue-400 font-mono text-sm rounded px-2 py-1 w-28" />
-        <input value={g.desc} onChange={e => upd(i, 'desc', e.target.value)} className="bg-gray-800 text-gray-300 text-sm rounded px-2 py-1 flex-1" />
-        <button onClick={() => setEditing(null)} className="text-emerald-400 text-xs">✓</button>
-      </> : <>
-        <span className="text-blue-400 font-mono font-semibold text-sm min-w-[100px]">{g.term}</span>
-        <span className="text-gray-300 text-sm flex-1">{g.desc}</span>
-        <button onClick={() => setEditing(i)} className="text-gray-500 hover:text-white text-xs">✎</button>
-        <button onClick={() => del(i)} className="text-gray-500 hover:text-red-400 text-xs">✕</button>
-      </>}
+      {editing === i ? <><input value={g.term} onChange={e => upd(i, 'term', e.target.value)} className="bg-gray-800 text-blue-400 font-mono text-sm rounded px-2 py-1 w-28" /><input value={g.desc} onChange={e => upd(i, 'desc', e.target.value)} className="bg-gray-800 text-gray-300 text-sm rounded px-2 py-1 flex-1" /><button onClick={() => setEditing(null)} className="text-emerald-400 text-xs">✓</button></> : <><span className="text-blue-400 font-mono font-semibold text-sm min-w-[140px]">{g.term}</span><span className="text-gray-300 text-sm flex-1">{g.desc}</span><button onClick={() => setEditing(i)} className="text-gray-500 hover:text-white text-xs">✎</button><button onClick={() => del(i)} className="text-gray-500 hover:text-red-400 text-xs">✕</button></>}
     </div>)}
-    <div className="flex gap-2 mt-4">
-      <input value={nT} onChange={e => setNT(e.target.value)} placeholder="Term" className="bg-gray-800 border border-gray-700 text-white text-sm rounded px-2 py-1.5 w-28" />
-      <input value={nD} onChange={e => setND(e.target.value)} placeholder="Description" className="bg-gray-800 border border-gray-700 text-white text-sm rounded px-2 py-1.5 flex-1" />
-      <button onClick={add} className="bg-blue-600 text-white text-sm px-3 py-1.5 rounded">Add</button>
-    </div>
+    <div className="flex gap-2 mt-4"><input value={nT} onChange={e => setNT(e.target.value)} placeholder="Term" className="bg-gray-800 border border-gray-700 text-white text-sm rounded px-2 py-1.5 w-28" /><input value={nD} onChange={e => setND(e.target.value)} placeholder="Description" className="bg-gray-800 border border-gray-700 text-white text-sm rounded px-2 py-1.5 flex-1" /><button onClick={add} className="bg-blue-600 text-white text-sm px-3 py-1.5 rounded">Add</button></div>
   </div>;
 }
 
@@ -221,7 +181,9 @@ export default function App() {
   }, []);
   useEffect(() => { load() }, [load]);
 
-  const dataH = useMemo(() => ({ ...data, _coreInv: hist.coreInv }), [data, hist]);
+  // UPDATED: pass _coreInv AND _coreDays for seasonal forecasting
+  const dataH = useMemo(() => ({ ...data, _coreInv: hist.coreInv, _coreDays: daily.coreDays }), [data, hist, daily]);
+
   const sc = useMemo(() => {
     const c = { critical: 0, warning: 0, healthy: 0 };
     (data.cores || []).forEach(x => {
@@ -236,17 +198,9 @@ export default function App() {
     return c;
   }, [data, stg]);
 
-  const goCore = useCallback(id => {
-    if (tab === "purchasing") { setPanelCoreId(id); setPanelBundleId(null) }
-    else { setPrevTab(tab); setCoreId(id); setTab("core") }
-  }, [tab]);
-  const goBundle = useCallback(id => {
-    if (tab === "purchasing" || panelCoreId) { setPanelBundleId(id) }
-    else { setPrevTab(tab); setBundleId(id); setTab("bundle") }
-  }, [tab, panelCoreId]);
-  const goVendor = useCallback(n => {
-    window.open(window.location.pathname + '?vendor=' + encodeURIComponent(n), '_blank');
-  }, []);
+  const goCore = useCallback(id => { if (tab === "purchasing") { setPanelCoreId(id); setPanelBundleId(null) } else { setPrevTab(tab); setCoreId(id); setTab("core") } }, [tab]);
+  const goBundle = useCallback(id => { if (tab === "purchasing" || panelCoreId) { setPanelBundleId(id) } else { setPrevTab(tab); setBundleId(id); setTab("bundle") } }, [tab, panelCoreId]);
+  const goVendor = useCallback(n => { window.open(window.location.pathname + '?vendor=' + encodeURIComponent(n), '_blank') }, []);
   const clearIV = useCallback(() => setInitV(null), []);
   const handleBackFromCore = useCallback(() => setTab("purchasing"), []);
   const handleBackFromBundle = useCallback(() => { if (prevTab === "core" && coreId) setTab("core"); else setTab("purchasing") }, [prevTab, coreId]);
@@ -254,29 +208,16 @@ export default function App() {
   const saveWorkflow = useCallback(async (note) => {
     try {
       await apiPost({ action: 'saveNote', ...note });
-      setData(prev => {
-        const wf = [...(prev.workflow || [])];
-        const idx = wf.findIndex(w => w.id === note.id);
-        const entry = { id: note.id, type: note.type, status: note.status, note: note.note, ignoreUntil: note.ignoreUntil, lastOrder: note.lastOrder || '', updatedBy: note.updatedBy, updatedAt: new Date().toISOString() };
-        if (idx >= 0) wf[idx] = entry; else wf.push(entry);
-        return { ...prev, workflow: wf };
-      });
+      setData(prev => { const wf = [...(prev.workflow || [])]; const idx = wf.findIndex(w => w.id === note.id); const entry = { id: note.id, type: note.type, status: note.status, note: note.note, ignoreUntil: note.ignoreUntil, lastOrder: note.lastOrder || '', updatedBy: note.updatedBy, updatedAt: new Date().toISOString() }; if (idx >= 0) wf[idx] = entry; else wf.push(entry); return { ...prev, workflow: wf } });
     } catch (e) { console.error('Workflow save error:', e) }
   }, []);
   const deleteWorkflow = useCallback(async ({ id }) => {
-    try {
-      await apiPost({ action: 'deleteNote', id });
-      setData(prev => ({ ...prev, workflow: (prev.workflow || []).filter(w => w.id !== id) }));
-    } catch (e) { console.error('Workflow delete error:', e) }
+    try { await apiPost({ action: 'deleteNote', id }); setData(prev => ({ ...prev, workflow: (prev.workflow || []).filter(w => w.id !== id) })) } catch (e) { console.error('Workflow delete error:', e) }
   }, []);
-
   const saveVendorComment = useCallback(async (comment) => {
     try {
       await apiPost({ action: 'saveVendorComment', ...comment });
-      setData(prev => ({
-        ...prev,
-        vendorComments: [...(prev.vendorComments || []), { vendor: comment.vendor, date: new Date().toISOString().split('T')[0], author: comment.author, category: comment.category, comment: comment.comment }]
-      }));
+      setData(prev => ({ ...prev, vendorComments: [...(prev.vendorComments || []), { vendor: comment.vendor, date: new Date().toISOString().split('T')[0], author: comment.author, category: comment.category, comment: comment.comment }] }));
     } catch (e) { console.error('Vendor comment save error:', e) }
   }, []);
 
@@ -318,7 +259,7 @@ export default function App() {
       </main>
       {showS && <Stg s={stg} setS={setStg} onClose={() => setShowS(false)} />}
       <SlidePanel open={!!(panelCoreId || panelBundleId)} onClose={() => { setPanelCoreId(null); setPanelBundleId(null) }}>
-        {panelBundleId ? <BundleTab data={data} stg={stg} hist={hist} daily={daily} bundleId={panelBundleId} onBack={() => { setPanelBundleId(null); if (!panelCoreId) { setPanelCoreId(null) } }} goCore={id => { setPanelBundleId(null); setPanelCoreId(id) }} />
+        {panelBundleId ? <BundleTab data={data} stg={stg} hist={hist} daily={daily} bundleId={panelBundleId} onBack={() => { setPanelBundleId(null); if (!panelCoreId) setPanelCoreId(null) }} goCore={id => { setPanelBundleId(null); setPanelCoreId(id) }} />
         : panelCoreId ? <CoreTab data={data} stg={stg} hist={hist} daily={daily} coreId={panelCoreId} onBack={() => setPanelCoreId(null)} goBundle={id => setPanelBundleId(id)} />
         : null}
       </SlidePanel>
