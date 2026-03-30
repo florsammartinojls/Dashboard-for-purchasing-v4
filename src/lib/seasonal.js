@@ -30,9 +30,12 @@ export function calcSeasonalProfile(coreId, coreHistory, recentDays) {
     byYM[k] = { dsr, y: h.y, m: h.m, oos, dd };
   });
 
+  // ── Seasonal indices ──
+  const indices = monthlyAvg.map(v => v > 0 ? r2(v / globalAvg) : 1.0);
+
   // ── Shape for projection = weighted multi-year indices (not single year) ──
   // This avoids one anomalous year distorting the projection
-  const lastYearShape = indices; // indices already weighted 75% latest / 25% older + OOS excluded
+  const lastYearShape = indices;
 
   // ── Sustained growth factor (YTD this year / same period last year) ──
   const now = new Date();
