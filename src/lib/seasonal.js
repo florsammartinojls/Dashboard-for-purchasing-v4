@@ -189,14 +189,17 @@ export function calcPurchaseFrequency(vendorName, receivingFull) {
 }
 
 
-// ─── PROJECTED DSR (v3: normalize shape to current month) ────────
+// ─── PROJECTED DSR (v3: normalize + dampen 50%) ─────────────────
 // "If I sell X today in a month with shape S_now, what will I sell in month M with shape S_m?"
-// projectedDSR = currentDSR × (shape[M] / shape[currentMonth]) × safety
+// Dampened: only apply 50% of seasonal swing — the other 50% is already in currentDSR
+// projectedDSR = currentDSR × dampedNorm × safety
+const DAMP = 0.5; // 0 = flat (no seasonal), 1 = full seasonal, 0.5 = half adjustment
 export function projectedDSR(currentDSR, monthIndex, profile, currentMonthShape, safety) {
   const shape = profile.lastYearShape?.[monthIndex] ?? 1.0;
-  const normShape = currentMonthShape > 0 ? shape / currentMonthShape : shape;
+  const rawNorm = currentMonthShape > 0 ? shape / currentMonthShape : 1.0;
+  const dampedNorm = 1.0 + (rawNorm - 1.0) * DAMP;
   const sf = safety ?? 1.0;
-  return currentDSR * normShape * sf;
+  return currentDSR * dampedNorm * sf;
 }
 
 
@@ -214,6 +217,8 @@ function projectDemand(dsr, startDate, endDate, profile, safety) {
     const effStart = new Date(Math.max(cursor.getTime(), startDate.getTime()));
     const days = Math.max(1, Math.round((effEnd - effStart) / 86400000) + 1);
     const pDsr = projectedDSR(dsr, mi, profile, currentMonthShape, safety);
+    const rawNorm = currentMonthShape > 0 ? (profile.lastYearShape?.[mi] ?? 1.0) / currentMonthShape : 1.0;
+    const dampedNorm = 1.0 + (rawNorm - 1.0) * DAMP;
     const units = pDsr * days;
     total += units;
     months.push({
@@ -221,7 +226,8 @@ function projectDemand(dsr, startDate, endDate, profile, safety) {
       projDsr: r2(pDsr), units: r0(units),
       shapeFactor: r2(profile.lastYearShape?.[mi] ?? 1.0),
       currentMonthShape: r2(currentMonthShape),
-      normFactor: r2(currentMonthShape > 0 ? (profile.lastYearShape?.[mi] ?? 1.0) / currentMonthShape : 1.0),
+      normFactor: r2(rawNorm),
+      dampedNorm: r2(dampedNorm),
     });
     cursor = new Date(yr, mi + 1, 1);
   }
@@ -379,7 +385,7 @@ function buildSummaryV2(core, cv, gf, cov, flatNeed, pf) {
   const pfD = pf?.comment ? ` Purchase frequency: ${pf.label} (${pf.ordersPerYear} orders/yr, safety ×${pf.safetyMultiplier}).` : '';
   const urgD = cov.urgent ? ` ⚠ URGENT: DOC < Lead Time — may stockout before arrival!` : '';
   return `${core.id} is ${type} (CV=${cv}).${pfD}${urgD} ` +
-    `Formula: projectedDSR = currentDSR × shape[month] / shape[now] × safety. ` +
+    `Formula: projectedDSR = currentDSR × dampened(shape[month]/shape[now], 50%) × safety. ` +
     `Target: ${Math.round((new Date(cov.windowEnd) - new Date(cov.windowStart)) / 86400000)}d coverage (${cov.windowStart} → ${cov.windowEnd}). ` +
     `Projected demand: ${cov.coverageNeed.toLocaleString()} units. Current inventory: ${cov.inventory.toLocaleString()}. ` +
     `Need to order: ${cov.coverageNeed.toLocaleString()} − ${cov.inventory.toLocaleString()} = ${cov.need.toLocaleString()}. ` +
