@@ -204,10 +204,12 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
           return;
         }
 
-        // 1. Core need is the REFERENCE (seasonal projected)
-        const coreNeed = c.needQty || 0;
+        // 1. Core TOTAL projected demand is the reference (not need, which already subtracted inventory)
+        const coreTotalDemand = (c.sCoverage?.coverageNeed || 0);
+        const coreNeed = c.needQty || 0; // for overallocation check
 
         // 2. Calculate each bundle's %28d weight and gap IN BUNDLE UNITS
+        // Distribute TOTAL DEMAND, then subtract each bundle's own pipeline
         const totL28 = cBundles.reduce((s, b) => { const sa = saMap[b.j]; return s + (sa?.l28U || 0) }, 0);
         const bData = cBundles.map(b => {
           const sa = saMap[b.j];
@@ -215,9 +217,9 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
           const weight = totL28 > 0 ? l28 / totL28 : 1 / cBundles.length;
           const rp = replenMap[b.j];
           const qpb = b.qty1 || 1;
-          // Convert proportional demand to BUNDLE UNITS
-          const propDemandBundleUnits = Math.ceil((coreNeed * weight) / qpb);
-          // FIB, PPRC, batched are already in bundle units
+          // Proportional share of TOTAL demand in bundle units
+          const propDemandBundleUnits = Math.ceil((coreTotalDemand * weight) / qpb);
+          // FIB, PPRC, batched are already in bundle units — this is what's already in pipeline
           const covered = (b.fibInv || 0) + (rp?.pprcUnits || 0) + (rp?.batched || 0);
           const gap = Math.max(0, propDemandBundleUnits - covered);
           return { j: b.j, weight: r2w(weight), propDemand: propDemandBundleUnits, covered, gap, qpb, core1: b.core1 };
