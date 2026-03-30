@@ -207,22 +207,24 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
         // 1. Core need is the REFERENCE (seasonal projected)
         const coreNeed = c.needQty || 0;
 
-        // 2. Calculate each bundle's %28d weight
+        // 2. Calculate each bundle's %28d weight and gap IN BUNDLE UNITS
         const totL28 = cBundles.reduce((s, b) => { const sa = saMap[b.j]; return s + (sa?.l28U || 0) }, 0);
         const bData = cBundles.map(b => {
           const sa = saMap[b.j];
           const l28 = sa?.l28U || 0;
           const weight = totL28 > 0 ? l28 / totL28 : 1 / cBundles.length;
           const rp = replenMap[b.j];
-          const covered = (b.fibInv || 0) + (rp?.pprcUnits || 0) + (rp?.batched || 0);
-          const propDemand = Math.ceil(coreNeed * weight);
-          const gap = Math.max(0, propDemand - covered);
           const qpb = b.qty1 || 1;
-          return { j: b.j, weight: r2w(weight), propDemand, covered, gap, qpb, core1: b.core1 };
+          // Convert proportional demand to BUNDLE UNITS
+          const propDemandBundleUnits = Math.ceil((coreNeed * weight) / qpb);
+          // FIB, PPRC, batched are already in bundle units
+          const covered = (b.fibInv || 0) + (rp?.pprcUnits || 0) + (rp?.batched || 0);
+          const gap = Math.max(0, propDemandBundleUnits - covered);
+          return { j: b.j, weight: r2w(weight), propDemand: propDemandBundleUnits, covered, gap, qpb, core1: b.core1 };
         });
 
-        // 3. Calculate bundle orders from gaps
-        let totalBundleOrder = 0;
+        // 3. Calculate bundle orders from gaps (already in bundle units)
+        let totalBundleOrderCorePcs = 0;
         const coreExtrasFromBundles = { pieces: 0 };
 
         bData.forEach(bd => {
@@ -230,14 +232,14 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
           const effectiveMoq = bMoq > 0 ? bMoq : 0;
 
           if (mode === "mix" && effectiveMoq > 0 && bd.gap < effectiveMoq) {
-            // Below B.MOQ → convert to core pieces
+            // Below B.MOQ → convert back to core pieces
             coreExtrasFromBundles.pieces += bd.gap * bd.qpb;
           } else {
             let ord = effectiveMoq > 0 ? Math.max(bd.gap, effectiveMoq) : bd.gap;
             const bcp = casePackFromRec[bd.j] || 0;
             if (bcp > 0) ord = Math.ceil(ord / bcp) * bcp;
             u[bd.j] = { ...(u[bd.j] || {}), pcs: ord };
-            totalBundleOrder += ord;
+            totalBundleOrderCorePcs += ord * bd.qpb; // convert back to core pcs for overallocation check
           }
         });
 
@@ -249,8 +251,8 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
         }
 
         // 5. Check overallocation: if total orders > core need + 15 DOC → warn
-        const totalOrder = totalBundleOrder + (coreRawNeed > 0 ? cOQ(coreRawNeed, c.moq, c.casePack) : 0);
-        const overDOC = c.dsr > 0 ? Math.round((totalOrder - coreNeed) / c.dsr) : 0;
+        const totalOrderCorePcs = totalBundleOrderCorePcs + (coreRawNeed > 0 ? cOQ(coreRawNeed, c.moq, c.casePack) : 0);
+        const overDOC = c.dsr > 0 ? Math.round((totalOrderCorePcs - coreNeed) / c.dsr) : 0;
         if (overDOC > 15 && coreNeed > 0) {
           warnings.push(`${c.id}: +${overDOC} DOC over need (PPRC imbalance) — review unbundle`);
         }
