@@ -200,17 +200,20 @@ export function calcPurchaseFrequency(vendorName, receivingFull) {
 }
 
 
-// ─── PROJECTED DSR (v2: shape × growth × safety) ────────────────
-export function projectedDSR(currentDSR, monthIndex, profile, safety) {
+// ─── PROJECTED DSR (v3: normalize shape to current month) ────────
+// "If I sell X today in a month with shape S_now, what will I sell in month M with shape S_m?"
+// projectedDSR = currentDSR × (shape[M] / shape[currentMonth]) × safety
+export function projectedDSR(currentDSR, monthIndex, profile, currentMonthShape, safety) {
   const shape = profile.lastYearShape?.[monthIndex] ?? 1.0;
-  const gf = profile.growthFactor ?? 1.0;
+  const normShape = currentMonthShape > 0 ? shape / currentMonthShape : shape;
   const sf = safety ?? 1.0;
-  return currentDSR * shape * gf * sf;
+  return currentDSR * normShape * sf;
 }
 
 
 // ─── PROJECT DEMAND OVER DATE RANGE ──────────────────────────────
 function projectDemand(dsr, startDate, endDate, profile, safety) {
+  const currentMonthShape = profile.lastYearShape?.[new Date().getMonth()] ?? 1.0;
   let total = 0;
   const months = [];
   let cursor = new Date(startDate);
@@ -221,14 +224,15 @@ function projectDemand(dsr, startDate, endDate, profile, safety) {
     const effEnd = new Date(Math.min(mLast.getTime(), endDate.getTime()));
     const effStart = new Date(Math.max(cursor.getTime(), startDate.getTime()));
     const days = Math.max(1, Math.round((effEnd - effStart) / 86400000) + 1);
-    const pDsr = projectedDSR(dsr, mi, profile, safety);
+    const pDsr = projectedDSR(dsr, mi, profile, currentMonthShape, safety);
     const units = pDsr * days;
     total += units;
     months.push({
       month: mi + 1, year: yr, label: MO[mi] + ' ' + yr, days,
       projDsr: r2(pDsr), units: r0(units),
       shapeFactor: r2(profile.lastYearShape?.[mi] ?? 1.0),
-      growthFactor: r2(profile.growthFactor ?? 1.0),
+      currentMonthShape: r2(currentMonthShape),
+      normFactor: r2(currentMonthShape > 0 ? (profile.lastYearShape?.[mi] ?? 1.0) / currentMonthShape : 1.0),
     });
     cursor = new Date(yr, mi + 1, 1);
   }
@@ -381,16 +385,16 @@ export function getCalcBreakdown(core, vendor, stg, profile, leadTimeDays, targe
 
 function buildSummaryV2(core, cv, gf, cov, flatNeed, pf) {
   const type = cv < 0.15 ? 'flat (no seasonality)' : cv < 0.35 ? 'mildly seasonal' : 'strongly seasonal';
-  const gDesc = gf > 1.1 ? `growing ${Math.round((gf - 1) * 100)}% YTD` : gf < 0.9 ? `declining ${Math.round((1 - gf) * 100)}% YTD` : 'stable YTD';
   const diff = cov.need - flatNeed;
   const diffD = diff > 0 ? `${diff.toLocaleString()} more` : diff < 0 ? `${Math.abs(diff).toLocaleString()} less` : 'the same';
   const pfD = pf?.comment ? ` Purchase frequency: ${pf.label} (${pf.ordersPerYear} orders/yr, safety ×${pf.safetyMultiplier}).` : '';
-  const urgD = cov.urgent ? ` ⚠ URGENT: DOC (${Math.round(cov.inventory / (core.dsr || 1))}) < Lead Time (${Math.round((new Date(cov.arrivalDate) - new Date()) / 86400000)}d) — may stockout before arrival!` : '';
-  return `${core.id} is ${type} (CV=${cv}), ${gDesc}.${pfD}${urgD} ` +
-    `Target: ${Math.round((new Date(cov.windowEnd) - new Date(cov.windowStart)) / 86400000)}d coverage from today (${cov.windowStart} → ${cov.windowEnd}). ` +
+  const urgD = cov.urgent ? ` ⚠ URGENT: DOC < Lead Time — may stockout before arrival!` : '';
+  return `${core.id} is ${type} (CV=${cv}).${pfD}${urgD} ` +
+    `Formula: projectedDSR = currentDSR × shape[month] / shape[now] × safety. ` +
+    `Target: ${Math.round((new Date(cov.windowEnd) - new Date(cov.windowStart)) / 86400000)}d coverage (${cov.windowStart} → ${cov.windowEnd}). ` +
     `Projected demand: ${cov.coverageNeed.toLocaleString()} units. Current inventory: ${cov.inventory.toLocaleString()}. ` +
     `Need to order: ${cov.coverageNeed.toLocaleString()} − ${cov.inventory.toLocaleString()} = ${cov.need.toLocaleString()}. ` +
-    `Old flat formula: ${flatNeed.toLocaleString()}, so seasonal calc recommends ${diffD}.`;
+    `Old flat formula: ${flatNeed.toLocaleString()}, seasonal calc recommends ${diffD}.`;
 }
 
 
