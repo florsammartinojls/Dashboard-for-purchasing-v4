@@ -208,8 +208,6 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
         const coreNeed = c.needQty || 0;
 
         // 2. Split by %28d weight IN BUNDLE UNITS, then shift using PPRC
-        // PPRC is already in all-in, so we don't subtract it from need — 
-        // we just REDISTRIBUTE: bundles with PPRC need less ordering, freed-up goes to others/raw
         const totL28 = cBundles.reduce((s, b) => { const sa = saMap[b.j]; return s + (sa?.l28U || 0) }, 0);
         const bData = cBundles.map(b => {
           const sa = saMap[b.j];
@@ -217,15 +215,34 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
           const weight = totL28 > 0 ? l28 / totL28 : 1 / cBundles.length;
           const rp = replenMap[b.j];
           const qpb = b.qty1 || 1;
-          // Normal share of the NEED in bundle units
           const normalShareBU = Math.ceil((coreNeed * weight) / qpb);
-          // PPRC + batched committed to this bundle (already in all-in, won't need re-ordering)
           const pprcCommitted = (rp?.pprcUnits || 0) + (rp?.batched || 0);
-          // Reduce this bundle's order by PPRC (those pieces will become this bundle anyway)
           const pprcWillCover = Math.min(pprcCommitted, normalShareBU);
-          const gap = Math.max(0, normalShareBU - pprcWillCover);
-          return { j: b.j, weight: r2w(weight), propDemand: normalShareBU, covered: pprcWillCover, gap, qpb, core1: b.core1 };
+          let gap = Math.max(0, normalShareBU - pprcWillCover);
+          // CAP: don't let any bundle exceed targetDOC after order
+          const bundleDSR = b.cd || 0;
+          const bundleCurrentInv = (b.fibInv || 0) + (rp?.pprcUnits || 0) + (rp?.batched || 0);
+          const maxOrderBU = bundleDSR > 0 ? Math.max(0, Math.ceil(c.targetDoc * bundleDSR) - bundleCurrentInv) : 0;
+          const capped = gap > maxOrderBU && maxOrderBU >= 0;
+          const excess = capped ? (gap - maxOrderBU) * qpb : 0; // excess in core pcs
+          if (capped) gap = maxOrderBU;
+          return { j: b.j, weight: r2w(weight), propDemand: normalShareBU, covered: pprcWillCover, gap, qpb, core1: b.core1, excess, bundleDSR, capped };
         });
+
+        // Redistribute excess from capped bundles to uncapped ones (by weight)
+        const totalExcessCorePcs = bData.reduce((s, bd) => s + bd.excess, 0);
+        if (totalExcessCorePcs > 0) {
+          const uncapped = bData.filter(bd => !bd.capped && bd.bundleDSR > 0);
+          const uncappedWeight = uncapped.reduce((s, bd) => s + bd.weight, 0);
+          uncapped.forEach(bd => {
+            const extraBU = uncappedWeight > 0 ? Math.ceil((totalExcessCorePcs * (bd.weight / uncappedWeight)) / bd.qpb) : 0;
+            // Re-check cap after redistribution
+            const rp = replenMap[bd.j];
+            const bundleCurrentInv = ((data.bundles || []).find(b => b.j === bd.j)?.fibInv || 0) + (rp?.pprcUnits || 0) + (rp?.batched || 0);
+            const maxAfterRedist = bd.bundleDSR > 0 ? Math.max(0, Math.ceil(c.targetDoc * bd.bundleDSR) - bundleCurrentInv) : 0;
+            bd.gap = Math.min(bd.gap + extraBU, maxAfterRedist);
+          });
+        }
 
         // 3. Calculate bundle orders from gaps (already in bundle units)
         let totalBundleOrderCorePcs = 0;
@@ -247,21 +264,19 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
           }
         });
 
-        // 4. Core raw: only when there are converted B.MOQ extras or multiple bundles need it
-        const hasMultipleBundles = cBundles.length > 1;
-        const hasConvertedExtras = coreExtrasFromBundles.pieces > 0;
-        const raw20d = Math.ceil((c.dsr || 0) * 20);
-        
+        // 4. Core raw: ONLY when there are B.MOQ converted extras. 
+        // If bundles cover 100% of core sales → no core raw needed
+        const hasBundlesCoveringCore = cBundles.length > 0;
         let coreRawNeed = 0;
-        if (hasConvertedExtras) {
-          // Have converted B.MOQ extras → order at least those, and 20d min if multiple bundles
-          coreRawNeed = hasMultipleBundles ? Math.max(coreExtrasFromBundles.pieces, raw20d) : coreExtrasFromBundles.pieces;
-        } else if (hasMultipleBundles) {
-          // Multiple bundles, no extras → absorb gap between core need and bundle orders
-          const coreRawFromRedist = Math.max(0, coreNeed - totalBundleOrderCorePcs);
-          coreRawNeed = coreRawFromRedist > 0 ? Math.max(coreRawFromRedist, raw20d) : 0;
+        if (coreExtrasFromBundles.pieces > 0) {
+          // Have converted B.MOQ extras that couldn't go as bundles → order as core
+          coreRawNeed = coreExtrasFromBundles.pieces;
+        } else if (!hasBundlesCoveringCore && coreNeed > 0) {
+          // No bundles at all → order as core raw
+          coreRawNeed = coreNeed;
         }
-        // Single bundle at 100% → NO core raw, everything goes as bundle
+        // Note: if bundles exist but total bundle order < coreNeed, that's OK — 
+        // the cap means we don't need that much per bundle. Don't force core raw.
         
         if (coreRawNeed > 0) {
           u[c.id] = { ...(u[c.id] || {}), pcs: cOQ(coreRawNeed, c.moq, c.casePack) };
