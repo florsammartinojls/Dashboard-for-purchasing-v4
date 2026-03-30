@@ -128,9 +128,9 @@ export function VendorNotes({ vendor, comments, onSave, buyer }) {
 export function CalcBreakdown({ data: d, onClose }) {
   if (!d) return null;
   const shC = v => v > 1.3 ? "bg-emerald-500/20 text-emerald-400" : v > 1.1 ? "bg-blue-500/20 text-blue-300" : v < 0.7 ? "bg-red-500/20 text-red-400" : v < 0.9 ? "bg-amber-500/20 text-amber-400" : "bg-gray-700 text-gray-400";
-  const MTab = ({ rows, label }) => <table className="w-full text-xs"><thead><tr className="text-gray-500 uppercase border-b border-gray-700"><th className="py-1.5 text-left">Month</th><th className="py-1.5 text-right">Days</th><th className="py-1.5 text-right">Shape</th><th className="py-1.5 text-right">Growth</th><th className="py-1.5 text-right">Proj DSR</th><th className="py-1.5 text-right">Units</th></tr></thead>
-    <tbody>{rows.map((m, i) => <tr key={i} className={`${i % 2 === 0 ? "bg-gray-800/30" : ""} border-t border-gray-800/30`}><td className="py-1.5 text-gray-300">{m.label}</td><td className="py-1.5 text-right text-gray-400">{m.days}d</td><td className={`py-1.5 text-right ${m.shapeFactor > 1.2 ? "text-emerald-400" : m.shapeFactor < 0.8 ? "text-red-400" : "text-gray-300"}`}>{m.shapeFactor}x</td><td className="py-1.5 text-right text-blue-400">{m.growthFactor}x</td><td className="py-1.5 text-right text-white font-semibold">{m.projDsr}</td><td className="py-1.5 text-right text-white">{m.units.toLocaleString()}</td></tr>)}</tbody>
-    <tfoot><tr className="border-t-2 border-gray-600 font-semibold"><td className="py-2 text-gray-300">Total</td><td className="py-2 text-right">{rows.reduce((s, m) => s + m.days, 0)}d</td><td colSpan={3} /><td className="py-2 text-right text-white text-sm">{rows.reduce((s, m) => s + m.units, 0).toLocaleString()}</td></tr></tfoot>
+  const MTab = ({ rows }) => <table className="w-full text-xs"><thead><tr className="text-gray-500 uppercase border-b border-gray-700"><th className="py-1.5 text-left">Month</th><th className="py-1.5 text-right">Days</th><th className="py-1.5 text-right">Shape</th><th className="py-1.5 text-right">÷ Now</th><th className="py-1.5 text-right">= Norm</th><th className="py-1.5 text-right">Proj DSR</th><th className="py-1.5 text-right">Units</th></tr></thead>
+    <tbody>{rows.map((m, i) => <tr key={i} className={`${i % 2 === 0 ? "bg-gray-800/30" : ""} border-t border-gray-800/30`}><td className="py-1.5 text-gray-300">{m.label}</td><td className="py-1.5 text-right text-gray-400">{m.days}d</td><td className={`py-1.5 text-right ${m.shapeFactor > 1.2 ? "text-emerald-400" : m.shapeFactor < 0.8 ? "text-red-400" : "text-gray-300"}`}>{m.shapeFactor}x</td><td className="py-1.5 text-right text-gray-500">{m.currentMonthShape}x</td><td className={`py-1.5 text-right ${m.normFactor > 1.2 ? "text-emerald-400" : m.normFactor < 0.8 ? "text-red-400" : "text-blue-300"}`}>{m.normFactor}x</td><td className="py-1.5 text-right text-white font-semibold">{m.projDsr}</td><td className="py-1.5 text-right text-white">{m.units.toLocaleString()}</td></tr>)}</tbody>
+    <tfoot><tr className="border-t-2 border-gray-600 font-semibold"><td className="py-2 text-gray-300">Total</td><td className="py-2 text-right">{rows.reduce((s, m) => s + m.days, 0)}d</td><td colSpan={4} /><td className="py-2 text-right text-white text-sm">{rows.reduce((s, m) => s + m.units, 0).toLocaleString()}</td></tr></tfoot>
   </table>;
 
   return <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center overflow-auto p-4" onClick={onClose}>
@@ -145,7 +145,7 @@ export function CalcBreakdown({ data: d, onClose }) {
 
       {/* KPIs */}
       <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 mb-4">
-        {[{ l: "DSR", v: d.currentDSR.toFixed(1) }, { l: "DOC", v: Math.round(d.currentDOC) }, { l: "Inventory", v: d.inventory.toLocaleString() }, { l: "Lead Time", v: d.leadTime + "d" }, { l: "Target DOC", v: d.targetDOC + "d" }, { l: "Growth", v: d.growthFactor + "x", c: d.growthFactor > 1.05 ? "text-emerald-400" : d.growthFactor < 0.95 ? "text-red-400" : "" }].map(k =>
+        {[{ l: "DSR", v: d.currentDSR.toFixed(1) }, { l: "DOC", v: Math.round(d.currentDOC) }, { l: "Inventory", v: d.inventory.toLocaleString() }, { l: "Lead Time", v: d.leadTime + "d" }, { l: "Target DOC", v: d.targetDOC + "d" }, { l: "Safety", v: "×" + d.safetyMultiplier }].map(k =>
           <div key={k.l} className="bg-gray-800 rounded-lg p-2 text-center"><div className="text-gray-500 text-[10px] uppercase">{k.l}</div><div className={`font-bold text-sm ${k.c || "text-white"}`}>{k.v}</div></div>
         )}
       </div>
@@ -154,9 +154,8 @@ export function CalcBreakdown({ data: d, onClose }) {
       <div className="bg-gray-800/50 rounded-lg p-4 mb-4">
         <h3 className="text-sm font-semibold text-white mb-2">Step 4: Last-Year Shape (from {d.shapeYear})</h3>
         {!d.hasHistory && <p className="text-amber-400 text-xs mb-2">⚠ Not enough history. Using flat shape (1.0).</p>}
-        <div className="grid grid-cols-3 gap-3 mb-3 text-sm">
+        <div className="grid grid-cols-2 gap-3 mb-3 text-sm">
           <div><div className="text-gray-500 text-xs">CV</div><div className="text-white">{d.cv} — <span className={d.cv > 0.35 ? "text-purple-400" : "text-gray-400"}>{d.cvLabel}</span></div></div>
-          <div><div className="text-gray-500 text-xs">Sustained Growth (YTD)</div><div className={`font-semibold ${d.growthFactor > 1.05 ? "text-emerald-400" : d.growthFactor < 0.95 ? "text-red-400" : "text-gray-300"}`}>{d.growthFactor}x — {d.growthLabel}</div></div>
           {d.purchFreq && <div><div className="text-gray-500 text-xs">Purchase Freq</div><div className="text-gray-300">{d.purchFreq.label} ({d.purchFreq.ordersPerYear}/yr){d.purchFreq.comment && <span className="text-amber-400 ml-1 text-xs">{d.purchFreq.comment}</span>}</div></div>}
         </div>
         <div className="text-xs text-gray-500 mb-2">Monthly shape factors (last year's curve normalized):</div>
@@ -164,7 +163,7 @@ export function CalcBreakdown({ data: d, onClose }) {
           {d.seasonalShape.map((s, i) => <div key={i} className={`rounded py-1.5 ${shC(s.shape)}`}><div className="font-semibold">{s.month.substring(0, 3)}</div><div className="font-bold text-sm">{s.shape}</div><div className="text-[8px] opacity-70">{s.interpretation}</div></div>)}
         </div>
         {Object.keys(d.yearlyTotals).length > 0 && <div className="mt-2 text-xs text-gray-500">Yearly DSR totals: {Object.entries(d.yearlyTotals).map(([y, t]) => `${y}: ${t.toLocaleString()}`).join(' · ')}</div>}
-        <div className="mt-1 text-xs text-gray-600">Formula: projectedDSR = currentDSR × shape[month] × growthFactor × safetyMultiplier({d.safetyMultiplier})</div>
+        <div className="mt-1 text-xs text-gray-600">Formula: projectedDSR = currentDSR × shape[month] ÷ shape[now] × safety({d.safetyMultiplier})</div>
       </div>
 
       {/* Step 1: Lead Time Urgency Check */}
