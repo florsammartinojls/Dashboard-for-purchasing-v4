@@ -204,12 +204,12 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
           return;
         }
 
-        // 1. Core TOTAL projected demand is the reference (not need, which already subtracted inventory)
-        const coreTotalDemand = (c.sCoverage?.coverageNeed || 0);
-        const coreNeed = c.needQty || 0; // for overallocation check
+        // 1. Core need = total NEW pieces to order (already net of all inventory)
+        const coreNeed = c.needQty || 0;
 
-        // 2. Calculate each bundle's %28d weight and gap IN BUNDLE UNITS
-        // Distribute TOTAL DEMAND, then subtract each bundle's own pipeline
+        // 2. Split by %28d weight IN BUNDLE UNITS, then shift using PPRC
+        // PPRC is already in all-in, so we don't subtract it from need — 
+        // we just REDISTRIBUTE: bundles with PPRC need less ordering, freed-up goes to others/raw
         const totL28 = cBundles.reduce((s, b) => { const sa = saMap[b.j]; return s + (sa?.l28U || 0) }, 0);
         const bData = cBundles.map(b => {
           const sa = saMap[b.j];
@@ -217,12 +217,14 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
           const weight = totL28 > 0 ? l28 / totL28 : 1 / cBundles.length;
           const rp = replenMap[b.j];
           const qpb = b.qty1 || 1;
-          // Proportional share of TOTAL demand in bundle units
-          const propDemandBundleUnits = Math.ceil((coreTotalDemand * weight) / qpb);
-          // FIB, PPRC, batched are already in bundle units — this is what's already in pipeline
-          const covered = (b.fibInv || 0) + (rp?.pprcUnits || 0) + (rp?.batched || 0);
-          const gap = Math.max(0, propDemandBundleUnits - covered);
-          return { j: b.j, weight: r2w(weight), propDemand: propDemandBundleUnits, covered, gap, qpb, core1: b.core1 };
+          // Normal share of the NEED in bundle units
+          const normalShareBU = Math.ceil((coreNeed * weight) / qpb);
+          // PPRC + batched committed to this bundle (already in all-in, won't need re-ordering)
+          const pprcCommitted = (rp?.pprcUnits || 0) + (rp?.batched || 0);
+          // Reduce this bundle's order by PPRC (those pieces will become this bundle anyway)
+          const pprcWillCover = Math.min(pprcCommitted, normalShareBU);
+          const gap = Math.max(0, normalShareBU - pprcWillCover);
+          return { j: b.j, weight: r2w(weight), propDemand: normalShareBU, covered: pprcWillCover, gap, qpb, core1: b.core1 };
         });
 
         // 3. Calculate bundle orders from gaps (already in bundle units)
@@ -245,9 +247,10 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
           }
         });
 
-        // 4. Core raw = converted bundle pieces + 20d raw minimum
+        // 4. Core raw absorbs: total need minus what bundles ordered + 20d minimum
         const raw20d = Math.ceil((c.dsr || 0) * 20);
-        const coreRawNeed = Math.max(coreExtrasFromBundles.pieces, raw20d);
+        const coreRawFromRedist = Math.max(0, coreNeed - totalBundleOrderCorePcs);
+        const coreRawNeed = Math.max(coreExtrasFromBundles.pieces, raw20d, coreRawFromRedist);
         if (coreRawNeed > 0) {
           u[c.id] = { ...(u[c.id] || {}), pcs: cOQ(coreRawNeed, c.moq, c.casePack) };
         }
