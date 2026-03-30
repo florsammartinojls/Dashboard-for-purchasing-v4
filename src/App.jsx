@@ -72,16 +72,16 @@ const DEFAULT_GL = [
   { term: "Buffer Days", desc: "Extra safety margin days per core (set in source sheet). Default ~14 days." },
   { term: "⚡ Spike", desc: "7D DSR is 25%+ above composite DSR. Need calculation uses 7D DSR instead to cover the demand spike." },
   // === SEASONAL FORECASTING ===
-  { term: "📊 Seasonal Breakdown", desc: "Click the 📊 button on any core row to see the full seasonal forecast calculation: seasonal indices, momentum, coverage window, and projected vs flat comparison." },
-  { term: "Coverage Window", desc: "The future time range your order must cover: from (today + lead time) to (today + lead time + target DOC). A US vendor with LT 14d + target 90d covers day 14→104. China with LT 100d + target 180d covers day 100→280. The seasonal formula projects demand for EACH month in this window instead of using a flat DSR." },
-  { term: "Seasonal Index", desc: "Per-month multiplier calculated from historical DSR. If a core's January DSR historically averages 150/day and the global average is 100/day, the January index = 1.50. Index > 1.0 = above average month, < 1.0 = below average. Weighted 75% to the most recent year, 25% to older years. Months with >50% OOS days are excluded." },
-  { term: "CV (Coefficient of Variation)", desc: "Measures how seasonal a product is. CV < 0.15 = flat (no seasonality). CV 0.15–0.35 = mild seasonality. CV > 0.35 = strong seasonality (e.g. Q4 products). CV determines how much weight goes to momentum vs seasonal indices." },
-  { term: "Momentum", desc: "Recent performance vs same period last year. Momentum = avg DSR last 14 days ÷ avg DSR same months last year. Momentum 1.52 = selling 52% more than last year. Momentum 0.80 = selling 20% less. Capped at 0.3–3.0x range." },
-  { term: "Momentum Weight", desc: "How much the formula trusts current momentum vs historical seasonal pattern. Flat products (CV < 0.15): 80% momentum / 20% seasonal — trusts what's selling NOW. Mild seasonal (CV 0.15–0.35): 50/50 blend. Strongly seasonal (CV > 0.35): 20% momentum / 80% seasonal — trusts the historical curve (e.g. Q4 always spikes)." },
-  { term: "Projected DSR", desc: "For each month in the coverage window: Projected DSR = currentDSR × blendedFactor. blendedFactor = (momentumWeight × momentum) + (seasonalWeight × seasonalIndex). For months 4-6 out, momentum decays to 70%. For months 7+, momentum decays to 40% (further out = less confident about current trend continuing)." },
-  { term: "Trend Decay", desc: "The further into the future, the less we trust current momentum. Months 1-3: 100% of momentum applied. Months 4-6: 70%. Months 7+: 40%. This prevents over-ordering if a current growth spike is temporary." },
-  { term: "Fill Rec (Seasonal)", desc: "Cores: Need = Σ(projected DSR × days) across coverage window − current inventory. Order = max(Need, MOQ), rounded up to case pack. Bundles (in Mix/Bundle mode): unchanged — uses FIB DOC calculation. The 📊 button shows the full calculation breakdown for each core." },
-  { term: "Fill to MOQ", desc: "When Fill Rec total < vendor MOQ$, this button distributes the extra $ intelligently. Priority: 1) cores with seasonal peak inside the coverage window (most value in buying now), 2) cores with growing momentum (>1.0x), 3) cores with lowest DOC ratio. Adds one case pack at a time to highest-scored core until MOQ is reached." },
+  { term: "📊 Seasonal Breakdown", desc: "Click the 📊 button on any core row to see the full 5-step seasonal forecast: 1) Consumption during lead time, 2) Inventory at arrival, 3) Coverage window need, 4) Last-year shape × sustained growth, 5) Purchase frequency safety. Shows plain English summary + month-by-month projection tables." },
+  { term: "Inv at Arrival (Step 1)", desc: "Projects how much inventory you'll have left when the order actually arrives. = Current inventory − Σ(projected consumption during lead time). If negative → ⚠ STOCKOUT before arrival. Example: 15,000 pcs today, DSR ~100/day, LT 120 days → consumed ~12,000-14,000 (seasonal) → arrival inventory ~1,000-3,000." },
+  { term: "Coverage Window (Step 2)", desc: "After arrival: how much demand must your order cover? Projected demand from arrival date → arrival + target DOC, month by month using seasonal shape. The need = coverage demand − remaining inventory at arrival." },
+  { term: "Last-Year Shape (Step 4)", desc: "The 'curve' of last year's sales, normalized. If June sold 2× the monthly average last year → shape factor = 2.0. Formula: projectedDSR(month) = currentDSR × shapeFactor × sustainedGrowthFactor × safetyMultiplier. This follows the pattern of last year but at today's sales level." },
+  { term: "Sustained Growth Factor", desc: "Compares YTD total sales this year vs same period last year. If this year you've sold 30% more through March → factor = 1.30. This validates whether spikes are sustained or just seasonal. If total annual sales are flat but Q4 spiked → factor ~1.0, Q4 spike is seasonal only." },
+  { term: "CV (Coefficient of Variation)", desc: "Measures how seasonal a product is. CV < 0.15 = flat. CV 0.15–0.35 = mild. CV > 0.35 = strong (e.g. Q4 products). Used to determine product type for shape weighting." },
+  { term: "Purchase Frequency (Step 5)", desc: "Inferred from PO history: how many times/year do you order from this vendor? ≤2 orders/yr → Low frequency → safety ×1.10 (buy extra). 3-6/yr → Normal → ×1.05. >6/yr → High → ×1.0. Shows ⚠ comment when low frequency detected. Never recommends less than lead time coverage." },
+  { term: "Fill Rec v2", desc: "Cores: Need = coverage window demand − inventory at arrival (5-step seasonal). Bundles (Mix/Bundle mode): ALSO uses seasonal projection from bundle sales history. AGL toggle changes bundle lead time to 80d. Order = max(Need, MOQ), rounded to case pack." },
+  { term: "Fill to MOQ", desc: "When Fill Rec total < vendor MOQ$, distributes extra intelligently. Priority: 1) cores with peak season in coverage window, 2) cores with high sustained growth factor, 3) cores with lowest DOC ratio. Adds one case pack at a time to highest-scored core." },
+  { term: "AGL Toggle", desc: "Per-vendor toggle in Bundles/Mix mode. When ON, bundles use 80-day lead time instead of the vendor's standard LT. Used when bundles ship direct via AGL (faster route)." },
   // === EXISTING TERMS ===
   { term: "Fill Rec: Bundles", desc: "Need = (Target DOC × bundle DSR) − FIB Inventory. Order = Need (no MOQ on bundles)." },
   { term: "Fill Rec: Mix", desc: "1) For each bundle: Effective DOC = current DOC + (core inbound ÷ qty_per_bundle ÷ bundle DSR). 2) Need = (Target DOC − Effective DOC) × bundle DSR. 3) If need < vendor MOQ → don't order bundle, convert to core pieces instead. 4) Core order = own need + converted bundle pieces, rounded to case pack." },
@@ -181,8 +181,8 @@ export default function App() {
   }, []);
   useEffect(() => { load() }, [load]);
 
-  // UPDATED: pass _coreInv AND _coreDays for seasonal forecasting
-  const dataH = useMemo(() => ({ ...data, _coreInv: hist.coreInv, _coreDays: daily.coreDays }), [data, hist, daily]);
+  // UPDATED: pass _coreInv, _coreDays, _bundleSales for seasonal forecasting v2
+  const dataH = useMemo(() => ({ ...data, _coreInv: hist.coreInv, _coreDays: daily.coreDays, _bundleSales: hist.bundleSales }), [data, hist, daily]);
 
   const sc = useMemo(() => {
     const c = { critical: 0, warning: 0, healthy: 0 };
