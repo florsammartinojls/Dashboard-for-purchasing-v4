@@ -1,148 +1,278 @@
-// === SEASONAL FORECASTING ENGINE v1 ===
-// Projected demand using: weighted seasonal indices, momentum, trend decay
-// Used by Fill Rec, Fill to MOQ, CalcBreakdown
+// === SEASONAL FORECASTING ENGINE v2 ===
+// 5-step demand projection: inventory at arrival, coverage need,
+// last-year shape × sustained growth, purchase frequency, bundle seasonal
 
 import { cAI } from "./utils";
 
-const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const MO = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 const r2 = n => Math.round(n * 100) / 100;
 const r0 = n => Math.round(n);
 const fmt = d => d.toISOString().split('T')[0];
-const DEFAULT_PROFILE = { indices: new Array(12).fill(1.0), cv: 0, momentum: 1.0, hasHistory: false, monthlyDetail: [], yearlyTotals: {} };
+const DEF = { indices: new Array(12).fill(1.0), cv: 0, momentum: 1.0, growthFactor: 1.0, hasHistory: false, monthlyDetail: [], yearlyTotals: {}, lastYearShape: new Array(12).fill(1.0) };
 
-// ─── SEASONAL PROFILE ────────────────────────────────────────────
-// coreHistory: pre-filtered for this core (from batchProfiles)
-// recentDays: pre-filtered daily data for this core
+// ─── STEP 4: SEASONAL PROFILE (last-year shape × sustained growth) ───
 export function calcSeasonalProfile(coreId, coreHistory, recentDays) {
   const ms = (coreHistory || []).filter(h => h.units > 0 || h.avgDsr > 0);
-  if (ms.length < 6) return { ...DEFAULT_PROFILE };
+  if (ms.length < 6) return { ...DEF };
 
   const years = [...new Set(ms.map(m => m.y))].sort();
   const latestYear = years[years.length - 1];
+  const prevYear = years.length > 1 ? years[years.length - 2] : null;
 
-  // ── Weighted avg per month (75% latest year, 25% older) ──
+  // ── Monthly DSR by year ──
+  const byYM = {};
+  ms.forEach(h => {
+    const dsr = h.avgDsr > 0 ? h.avgDsr : (h.units > 0 && h.dataDays > 0 ? h.units / h.dataDays : 0);
+    if (dsr <= 0) return;
+    const oos = h.oosDays || 0; const dd = h.dataDays || 30;
+    if (dd > 0 && oos / dd >= 0.5) return; // exclude >50% OOS months
+    const k = h.y + '-' + h.m;
+    byYM[k] = { dsr, y: h.y, m: h.m, oos, dd };
+  });
+
+  // ── Last year shape (normalized curve) ──
+  // Use most recent complete-ish year for shape
+  const shapeYear = prevYear && Object.keys(byYM).filter(k => k.startsWith(prevYear + '-')).length >= 6 ? prevYear : latestYear;
+  const shapeMonths = {};
+  for (let m = 1; m <= 12; m++) {
+    const k = shapeYear + '-' + m;
+    shapeMonths[m] = byYM[k]?.dsr || 0;
+  }
+  const shapeVals = Object.values(shapeMonths).filter(v => v > 0);
+  const shapeAvg = shapeVals.length > 0 ? shapeVals.reduce((a, b) => a + b, 0) / shapeVals.length : 1;
+  const lastYearShape = new Array(12).fill(1.0);
+  for (let m = 1; m <= 12; m++) {
+    lastYearShape[m - 1] = shapeMonths[m] > 0 ? r2(shapeMonths[m] / shapeAvg) : 1.0;
+  }
+
+  // ── Sustained growth factor (YTD this year / same period last year) ──
+  const now = new Date();
+  const curY = now.getFullYear();
+  const curM = now.getMonth() + 1;
+  let growthFactor = 1.0;
+  if (prevYear) {
+    let curYearTotal = 0, prevYearTotal = 0, monthsCompared = 0;
+    for (let m = 1; m <= curM; m++) {
+      const ck = curY + '-' + m;
+      const pk = prevYear + '-' + m;
+      if (byYM[ck] && byYM[pk]) {
+        curYearTotal += byYM[ck].dsr;
+        prevYearTotal += byYM[pk].dsr;
+        monthsCompared++;
+      }
+    }
+    if (prevYearTotal > 0 && monthsCompared >= 2) {
+      growthFactor = Math.max(0.3, Math.min(3.0, r2(curYearTotal / prevYearTotal)));
+    }
+  }
+
+  // ── Weighted indices (for backward compat / CV calc) ──
   const monthlyRaw = new Array(12).fill(null).map(() => []);
   const monthlyDetail = [];
-
   ms.forEach(h => {
     const dsr = h.avgDsr > 0 ? h.avgDsr : (h.units > 0 && h.dataDays > 0 ? h.units / h.dataDays : 0);
     if (dsr <= 0) return;
     const mi = h.m - 1;
-    const weight = h.y === latestYear ? 0.75 : (0.25 / Math.max(1, years.length - 1));
-    monthlyRaw[mi].push({ dsr, weight, year: h.y, oosDays: h.oosDays || 0, dataDays: h.dataDays || 0 });
+    const w = h.y === latestYear ? 0.75 : (0.25 / Math.max(1, years.length - 1));
+    monthlyRaw[mi].push({ dsr, weight: w, year: h.y, oosDays: h.oosDays || 0, dataDays: h.dataDays || 0 });
   });
-
   const monthlyAvg = monthlyRaw.map((entries, mi) => {
-    if (entries.length === 0) return 0;
     const valid = entries.filter(e => e.dataDays > 0 && (e.oosDays / e.dataDays) < 0.5);
     if (valid.length === 0) return 0;
-    let wSum = 0, wTot = 0;
-    valid.forEach(e => { wSum += e.dsr * e.weight; wTot += e.weight; });
-    const avg = wTot > 0 ? wSum / wTot : 0;
-    monthlyDetail.push({
-      month: mi + 1, monthName: MONTHS[mi], weightedAvg: r2(avg),
-      entries: valid.map(e => ({ year: e.year, dsr: r2(e.dsr) }))
-    });
+    let wS = 0, wT = 0;
+    valid.forEach(e => { wS += e.dsr * e.weight; wT += e.weight });
+    const avg = wT > 0 ? wS / wT : 0;
+    monthlyDetail.push({ month: mi + 1, monthName: MO[mi], weightedAvg: r2(avg), entries: valid.map(e => ({ year: e.year, dsr: r2(e.dsr) })) });
     return avg;
   });
-
-  // ── Global weighted average ──
   const validAvgs = monthlyAvg.filter(v => v > 0);
-  if (validAvgs.length === 0) return { ...DEFAULT_PROFILE };
-  const globalAvg = validAvgs.reduce((a, b) => a + b, 0) / validAvgs.length;
-
-  // ── Seasonal indices ──
+  const globalAvg = validAvgs.length > 0 ? validAvgs.reduce((a, b) => a + b, 0) / validAvgs.length : 1;
   const indices = monthlyAvg.map(v => v > 0 ? r2(v / globalAvg) : 1.0);
 
-  // ── CV (coefficient of variation) ──
-  const variance = validAvgs.reduce((a, v) => a + Math.pow(v - globalAvg, 2), 0) / validAvgs.length;
+  // ── CV ──
+  const variance = validAvgs.length > 0 ? validAvgs.reduce((a, v) => a + Math.pow(v - globalAvg, 2), 0) / validAvgs.length : 0;
   const cv = globalAvg > 0 ? r2(Math.sqrt(variance) / globalAvg) : 0;
 
   // ── Yearly totals ──
   const yearlyTotals = {};
   years.forEach(y => {
-    yearlyTotals[y] = r0(ms.filter(h => h.y === y).reduce((s, h) => {
-      return s + (h.avgDsr > 0 ? h.avgDsr : (h.units > 0 && h.dataDays > 0 ? h.units / h.dataDays : 0));
-    }, 0));
+    yearlyTotals[y] = r0(ms.filter(h => h.y === y).reduce((s, h) => s + (h.avgDsr > 0 ? h.avgDsr : (h.units > 0 && h.dataDays > 0 ? h.units / h.dataDays : 0)), 0));
   });
 
-  // ── Momentum: recent daily data vs same period last year ──
+  // ── Momentum (recent daily vs same period LY) ──
   let momentum = 1.0;
   const rd = recentDays || [];
   if (rd.length >= 5) {
     const recentAvg = rd.reduce((s, d) => s + (d.d1 || d.dsr || 0), 0) / rd.length;
-    const now = new Date();
-    const curMonth = now.getMonth();
-    const lyYear = latestYear === now.getFullYear() ? latestYear - 1 : latestYear;
-    const lyData = ms.filter(h => h.y === lyYear && Math.abs(h.m - 1 - curMonth) <= 1);
+    const lyY = latestYear === curY ? latestYear - 1 : latestYear;
+    const lyData = ms.filter(h => h.y === lyY && Math.abs(h.m - curM) <= 1);
     if (lyData.length > 0) {
-      const lyAvg = lyData.reduce((s, h) => {
-        return s + (h.avgDsr > 0 ? h.avgDsr : (h.units > 0 && h.dataDays > 0 ? h.units / h.dataDays : 0));
-      }, 0) / lyData.length;
+      const lyAvg = lyData.reduce((s, h) => s + (h.avgDsr > 0 ? h.avgDsr : (h.units > 0 && h.dataDays > 0 ? h.units / h.dataDays : 0)), 0) / lyData.length;
       if (lyAvg > 0) momentum = Math.max(0.3, Math.min(3.0, r2(recentAvg / lyAvg)));
     }
   }
 
-  return { indices, cv, momentum, hasHistory: true, monthlyDetail, yearlyTotals };
+  return { indices, lastYearShape, cv, momentum, growthFactor, hasHistory: true, monthlyDetail, yearlyTotals, shapeYear };
+}
+
+// ─── BUNDLE SEASONAL PROFILE (from bundle sales history) ───
+export function calcBundleSeasonalProfile(jls, bundleSales) {
+  const ms = (bundleSales || []).filter(h => h.j === jls && h.units > 0);
+  if (ms.length < 4) return { ...DEF };
+
+  const years = [...new Set(ms.map(m => m.y))].sort();
+  const latestYear = years[years.length - 1];
+  const prevYear = years.length > 1 ? years[years.length - 2] : null;
+
+  // Shape from previous year
+  const shapeYear = prevYear && ms.filter(h => h.y === prevYear).length >= 4 ? prevYear : latestYear;
+  const shapeMonths = {};
+  for (let m = 1; m <= 12; m++) {
+    const rec = ms.find(h => h.y === shapeYear && h.m === m);
+    shapeMonths[m] = rec ? rec.units : 0;
+  }
+  const sv = Object.values(shapeMonths).filter(v => v > 0);
+  const sa = sv.length > 0 ? sv.reduce((a, b) => a + b, 0) / sv.length : 1;
+  const shape = new Array(12).fill(1.0);
+  for (let m = 1; m <= 12; m++) shape[m - 1] = shapeMonths[m] > 0 ? r2(shapeMonths[m] / sa) : 1.0;
+
+  // Growth factor
+  const now = new Date(); const curY = now.getFullYear(); const curM = now.getMonth() + 1;
+  let gf = 1.0;
+  if (prevYear) {
+    let ct = 0, pt = 0, mc = 0;
+    for (let m = 1; m <= curM; m++) {
+      const cr = ms.find(h => h.y === curY && h.m === m);
+      const pr = ms.find(h => h.y === prevYear && h.m === m);
+      if (cr && pr) { ct += cr.units; pt += pr.units; mc++ }
+    }
+    if (pt > 0 && mc >= 2) gf = Math.max(0.3, Math.min(3.0, r2(ct / pt)));
+  }
+
+  // CV from shape
+  const cvVals = sv.length > 0 ? sv : [1];
+  const cvAvg = cvVals.reduce((a, b) => a + b, 0) / cvVals.length;
+  const cvVar = cvVals.reduce((a, v) => a + Math.pow(v - cvAvg, 2), 0) / cvVals.length;
+  const cv = cvAvg > 0 ? r2(Math.sqrt(cvVar) / cvAvg) : 0;
+
+  return { indices: shape, lastYearShape: shape, cv, momentum: 1.0, growthFactor: gf, hasHistory: true, monthlyDetail: [], yearlyTotals: {}, shapeYear };
 }
 
 
-// ─── MOMENTUM WEIGHT ─────────────────────────────────────────────
-function getMomentumWeight(cv) {
-  if (cv < 0.15) return 0.80;
-  if (cv < 0.35) return 0.50;
-  return 0.20;
+// ─── STEP 5: PURCHASE FREQUENCY ──────────────────────────────────
+export function calcPurchaseFrequency(vendorName, receivingFull) {
+  const cutoff = new Date(); cutoff.setFullYear(cutoff.getFullYear() - 1);
+  const vendorOrders = (receivingFull || []).filter(r => r.vendor === vendorName && r.date);
+  const poDates = new Set();
+  vendorOrders.forEach(r => {
+    const d = new Date(r.date);
+    if (!isNaN(d.getTime()) && d >= cutoff) poDates.add(r.date.substring(0, 7)); // unique months
+  });
+  const ordersPerYear = poDates.size;
+  const dates = [...poDates].sort();
+  let avgGapDays = 0;
+  if (dates.length >= 2) {
+    let totalGap = 0;
+    for (let i = 1; i < dates.length; i++) {
+      const a = new Date(dates[i - 1] + '-15');
+      const b = new Date(dates[i] + '-15');
+      totalGap += (b - a) / 86400000;
+    }
+    avgGapDays = Math.round(totalGap / (dates.length - 1));
+  }
+
+  let safetyMultiplier = 1.0;
+  let label = "Normal";
+  let comment = "";
+  if (ordersPerYear <= 2) {
+    safetyMultiplier = 1.10;
+    label = "Low frequency";
+    comment = "⚠ ~" + ordersPerYear + " orders/yr — consider extra cover";
+  } else if (ordersPerYear <= 6) {
+    safetyMultiplier = 1.05;
+    label = "Normal";
+  } else {
+    safetyMultiplier = 1.0;
+    label = "High frequency";
+  }
+
+  return { ordersPerYear, avgGapDays, safetyMultiplier, label, comment };
 }
 
 
-// ─── PROJECTED DSR FOR MONTH ─────────────────────────────────────
-export function projectedDSR(currentDSR, monthIndex, profile, monthsAhead) {
-  const mw = getMomentumWeight(profile.cv);
-  const seasonalFactor = profile.indices[monthIndex] || 1.0;
-  let effMom = profile.momentum;
-  if (monthsAhead > 6) effMom = 1 + (effMom - 1) * 0.4;
-  else if (monthsAhead > 3) effMom = 1 + (effMom - 1) * 0.7;
-  const blended = (mw * effMom) + ((1 - mw) * seasonalFactor);
-  return currentDSR * Math.max(0.1, blended);
+// ─── PROJECTED DSR (v2: shape × growth × safety) ────────────────
+export function projectedDSR(currentDSR, monthIndex, profile, safety) {
+  const shape = profile.lastYearShape?.[monthIndex] ?? 1.0;
+  const gf = profile.growthFactor ?? 1.0;
+  const sf = safety ?? 1.0;
+  return currentDSR * shape * gf * sf;
 }
 
 
-// ─── COVERAGE WINDOW NEED ────────────────────────────────────────
-export function calcCoverageNeed(core, leadTimeDays, targetDOC, profile) {
-  const dsr = core.dsr || 0;
-  if (dsr <= 0) return { need: 0, projectedMonths: [], totalProjected: 0, inventory: 0, windowStart: '', windowEnd: '' };
-
-  const today = new Date();
-  const wStart = new Date(today); wStart.setDate(wStart.getDate() + leadTimeDays);
-  const wEnd = new Date(wStart); wEnd.setDate(wEnd.getDate() + targetDOC);
-
-  let totalProjected = 0;
-  const projectedMonths = [];
-  let cursor = new Date(wStart);
-
-  while (cursor < wEnd) {
+// ─── PROJECT DEMAND OVER DATE RANGE ──────────────────────────────
+function projectDemand(dsr, startDate, endDate, profile, safety) {
+  let total = 0;
+  const months = [];
+  let cursor = new Date(startDate);
+  while (cursor < endDate) {
     const mi = cursor.getMonth();
     const yr = cursor.getFullYear();
-    const monthLast = new Date(yr, mi + 1, 0);
-    const effEnd = new Date(Math.min(monthLast.getTime(), wEnd.getTime()));
-    const effStart = new Date(Math.max(cursor.getTime(), wStart.getTime()));
+    const mLast = new Date(yr, mi + 1, 0);
+    const effEnd = new Date(Math.min(mLast.getTime(), endDate.getTime()));
+    const effStart = new Date(Math.max(cursor.getTime(), startDate.getTime()));
     const days = Math.max(1, Math.round((effEnd - effStart) / 86400000) + 1);
-    const monthsAhead = Math.max(0, Math.round((cursor - today) / (30 * 86400000)));
-    const pDsr = projectedDSR(dsr, mi, profile, monthsAhead);
+    const pDsr = projectedDSR(dsr, mi, profile, safety);
     const units = pDsr * days;
-    totalProjected += units;
-    projectedMonths.push({
-      month: mi + 1, year: yr, label: MONTHS[mi] + ' ' + yr,
-      days, projDsr: r2(pDsr), units: r0(units),
-      seasonalIdx: profile.indices[mi] || 1.0,
-      blendedFactor: r2(pDsr / dsr),
+    total += units;
+    months.push({
+      month: mi + 1, year: yr, label: MO[mi] + ' ' + yr, days,
+      projDsr: r2(pDsr), units: r0(units),
+      shapeFactor: r2(profile.lastYearShape?.[mi] ?? 1.0),
+      growthFactor: r2(profile.growthFactor ?? 1.0),
     });
     cursor = new Date(yr, mi + 1, 1);
   }
+  return { total: r0(total), months };
+}
 
+
+// ─── STEP 1+2+3: FULL COVERAGE CALCULATION ──────────────────────
+export function calcCoverageNeed(core, leadTimeDays, targetDOC, profile, purchFreq) {
+  const dsr = core.dsr || 0;
+  if (dsr <= 0) return { need: 0, ltConsumption: 0, inventoryAtArrival: 0, coverageNeed: 0, ltMonths: [], covMonths: [], inventory: 0, windowStart: '', windowEnd: '', arrivalDate: '' };
+
+  const safety = purchFreq?.safetyMultiplier ?? 1.0;
+  const today = new Date();
+  const arrival = new Date(today); arrival.setDate(arrival.getDate() + leadTimeDays);
+  const covEnd = new Date(arrival); covEnd.setDate(covEnd.getDate() + targetDOC);
   const inventory = cAI(core);
-  const need = Math.max(0, Math.ceil(totalProjected - inventory));
-  return { need, projectedMonths, totalProjected: r0(totalProjected), inventory, windowStart: fmt(wStart), windowEnd: fmt(wEnd) };
+
+  // Step 1: consumption during lead time
+  const ltProj = projectDemand(dsr, today, arrival, profile, 1.0); // no safety on LT consumption (conservative)
+  const inventoryAtArrival = inventory - ltProj.total;
+
+  // Step 2: coverage need after arrival
+  const covProj = projectDemand(dsr, arrival, covEnd, profile, safety);
+
+  // Step 3: final need
+  const effectiveInventory = Math.max(0, inventoryAtArrival);
+  const need = Math.max(0, Math.ceil(covProj.total - effectiveInventory));
+
+  return {
+    need,
+    inventory,
+    ltConsumption: ltProj.total,
+    inventoryAtArrival: r0(inventoryAtArrival),
+    coverageNeed: covProj.total,
+    ltMonths: ltProj.months,
+    covMonths: covProj.months,
+    arrivalDate: fmt(arrival),
+    windowStart: fmt(arrival),
+    windowEnd: fmt(covEnd),
+    safetyMultiplier: r2(safety),
+    urgent: inventoryAtArrival < 0,
+    shortfall: inventoryAtArrival < 0 ? Math.abs(r0(inventoryAtArrival)) : 0,
+  };
 }
 
 
@@ -152,31 +282,31 @@ export function fillToMOQ(cores, vendorMOQDollar, currentTotalDollar, profiles, 
   const gap = vendorMOQDollar - currentTotalDollar;
 
   const today = new Date();
-  const wStart = new Date(today); wStart.setDate(wStart.getDate() + leadTimeDays);
-  const wEnd = new Date(wStart); wEnd.setDate(wEnd.getDate() + targetDOC);
+  const arrival = new Date(today); arrival.setDate(arrival.getDate() + leadTimeDays);
+  const covEnd = new Date(arrival); covEnd.setDate(covEnd.getDate() + targetDOC);
   const windowMonths = new Set();
-  let cur = new Date(wStart);
-  while (cur < wEnd) { windowMonths.add(cur.getMonth()); cur.setMonth(cur.getMonth() + 1); }
+  let cur = new Date(arrival);
+  while (cur < covEnd) { windowMonths.add(cur.getMonth()); cur.setMonth(cur.getMonth() + 1) }
 
   const candidates = cores.filter(c => c.cost > 0 && c.dsr > 0).map(c => {
-    const p = profiles[c.id] || DEFAULT_PROFILE;
-    const peakMi = p.indices.indexOf(Math.max(...p.indices));
+    const p = profiles[c.id] || DEF;
+    const peakMi = (p.lastYearShape || p.indices).indexOf(Math.max(...(p.lastYearShape || p.indices)));
     const peakInWindow = windowMonths.has(peakMi) && p.cv > 0.15;
     let score = 0;
     if (peakInWindow && p.cv > 0.35) score += 40;
     else if (peakInWindow) score += 20;
-    score += Math.min(30, Math.max(0, (p.momentum - 1) * 60));
+    const gf = p.growthFactor || 1.0;
+    score += Math.min(30, Math.max(0, (gf - 1) * 60));
     const docRatio = Math.min(2, (c.doc || 0) / (targetDOC || 90));
     score += Math.max(0, (1 - docRatio) * 30);
     const cp = c.casePack || 1;
-    return { id: c.id, score, cost: c.cost, casePack: cp, costPerCase: c.cost * cp, peakInWindow, momentum: p.momentum, docRatio: r2(docRatio) };
+    return { id: c.id, score, cost: c.cost, casePack: cp, costPerCase: c.cost * cp, peakInWindow, growthFactor: gf };
   }).sort((a, b) => b.score - a.score);
 
   if (candidates.length === 0) return {};
   const extra = {};
   let remaining = gap;
   let safety = 0;
-
   while (remaining > 0 && safety < 500) {
     safety++;
     let added = false;
@@ -201,72 +331,83 @@ export function fillToMOQ(cores, vendorMOQDollar, currentTotalDollar, profiles, 
 }
 
 
-// ─── CALC BREAKDOWN (for modal display) ──────────────────────────
-export function getCalcBreakdown(core, vendor, stg, profile, leadTimeDays, targetDOC) {
+// ─── CALC BREAKDOWN (for modal) ──────────────────────────────────
+export function getCalcBreakdown(core, vendor, stg, profile, leadTimeDays, targetDOC, purchFreq) {
   const dsr = core.dsr || 0;
-  const { indices, cv, momentum, hasHistory, monthlyDetail, yearlyTotals } = profile;
-  const mw = getMomentumWeight(cv);
-  const coverage = calcCoverageNeed(core, leadTimeDays, targetDOC, profile);
-  const flatNeed = Math.max(0, Math.ceil(targetDOC * dsr - coverage.inventory));
+  const { indices, lastYearShape, cv, momentum, growthFactor, hasHistory, monthlyDetail, yearlyTotals, shapeYear } = profile;
+  const cov = calcCoverageNeed(core, leadTimeDays, targetDOC, profile, purchFreq);
+  const flatNeed = Math.max(0, Math.ceil(targetDOC * dsr - cov.inventory));
 
   return {
     coreId: core.id, title: core.ti, vendor: core.ven,
-    currentDSR: dsr, d7: core.d7 || 0, inventory: coverage.inventory,
+    currentDSR: dsr, d7: core.d7 || 0, inventory: cov.inventory,
     currentDOC: core.doc || 0, leadTime: leadTimeDays, targetDOC,
-    hasHistory, cv,
+    hasHistory, cv, shapeYear: shapeYear || '—',
     cvLabel: cv < 0.15 ? 'Flat (no seasonality)' : cv < 0.35 ? 'Mild seasonality' : 'Strong seasonality',
-    momentumWeight: r2(mw), seasonalWeight: r2(1 - mw),
-    momentum,
-    momentumLabel: momentum > 1.1 ? 'Growing vs last year ↑' : momentum < 0.9 ? 'Declining vs last year ↓' : 'Stable vs last year →',
-    yearlyTotals,
-    seasonalIndices: indices.map((v, i) => ({
-      month: MONTHS[i], index: v,
+    growthFactor: r2(growthFactor),
+    growthLabel: growthFactor > 1.1 ? 'Growing YTD ↑' : growthFactor < 0.9 ? 'Declining YTD ↓' : 'Stable YTD →',
+    momentum, yearlyTotals,
+    // Purchase frequency
+    purchFreq: purchFreq || { ordersPerYear: 0, label: '—', safetyMultiplier: 1.0, comment: '' },
+    // Shape indices
+    seasonalShape: (lastYearShape || indices).map((v, i) => ({
+      month: MO[i], shape: v,
       interpretation: v > 1.3 ? 'Peak' : v > 1.1 ? 'Above avg' : v < 0.7 ? 'Low' : v < 0.9 ? 'Below avg' : 'Normal'
     })),
-    windowStart: coverage.windowStart, windowEnd: coverage.windowEnd,
-    projectedMonths: coverage.projectedMonths,
-    totalProjected: coverage.totalProjected,
-    need: coverage.need, flatNeed,
-    difference: coverage.need - flatNeed,
-    differenceLabel: coverage.need > flatNeed
-      ? '+' + (coverage.need - flatNeed).toLocaleString() + ' more (seasonal/momentum adjustment)'
-      : coverage.need < flatNeed
-        ? (coverage.need - flatNeed).toLocaleString() + ' less (off-season/declining adjustment)'
+    // Step 1: LT consumption
+    ltConsumption: cov.ltConsumption,
+    inventoryAtArrival: cov.inventoryAtArrival,
+    arrivalDate: cov.arrivalDate,
+    ltMonths: cov.ltMonths,
+    urgent: cov.urgent,
+    shortfall: cov.shortfall,
+    // Step 2: Coverage
+    windowStart: cov.windowStart, windowEnd: cov.windowEnd,
+    covMonths: cov.covMonths,
+    coverageNeed: cov.coverageNeed,
+    safetyMultiplier: cov.safetyMultiplier,
+    // Step 3: Final
+    need: cov.need, flatNeed,
+    difference: cov.need - flatNeed,
+    differenceLabel: cov.need > flatNeed
+      ? '+' + (cov.need - flatNeed).toLocaleString() + ' more (seasonal/growth adjustment)'
+      : cov.need < flatNeed
+        ? (cov.need - flatNeed).toLocaleString() + ' less (off-season/declining adjustment)'
         : 'Same as flat calculation',
-    summaryText: buildSummary(core, cv, mw, momentum, coverage, flatNeed),
+    summaryText: buildSummaryV2(core, cv, growthFactor, cov, flatNeed, purchFreq),
   };
 }
 
-function buildSummary(core, cv, mw, momentum, coverage, flatNeed) {
+function buildSummaryV2(core, cv, gf, cov, flatNeed, pf) {
   const type = cv < 0.15 ? 'flat (no seasonality)' : cv < 0.35 ? 'mildly seasonal' : 'strongly seasonal';
-  const momDesc = momentum > 1.1 ? `currently growing (${momentum}x vs last year)` : momentum < 0.9 ? `currently declining (${momentum}x vs last year)` : `stable vs last year (${momentum}x)`;
-  const blend = `${Math.round(mw * 100)}% momentum / ${Math.round((1 - mw) * 100)}% seasonal`;
-  const diff = coverage.need - flatNeed;
-  const diffDesc = diff > 0 ? `${diff.toLocaleString()} more` : diff < 0 ? `${Math.abs(diff).toLocaleString()} less` : 'the same amount';
-  return `${core.id} is a ${type} product (CV=${cv}), ${momDesc}. The formula gives ${blend} weight. ` +
-    `Coverage window: ${coverage.windowStart} → ${coverage.windowEnd}. ` +
-    `Projected demand: ${coverage.totalProjected.toLocaleString()} units − ${coverage.inventory.toLocaleString()} inventory = ${coverage.need.toLocaleString()} need. ` +
-    `Old flat formula would give ${flatNeed.toLocaleString()}, so the seasonal calc recommends ${diffDesc}.`;
+  const gDesc = gf > 1.1 ? `growing ${Math.round((gf - 1) * 100)}% YTD` : gf < 0.9 ? `declining ${Math.round((1 - gf) * 100)}% YTD` : 'stable YTD';
+  const diff = cov.need - flatNeed;
+  const diffD = diff > 0 ? `${diff.toLocaleString()} more` : diff < 0 ? `${Math.abs(diff).toLocaleString()} less` : 'the same';
+  const pfD = pf?.comment ? ` Purchase frequency: ${pf.label} (${pf.ordersPerYear} orders/yr, safety ×${pf.safetyMultiplier}).` : '';
+  const urgD = cov.urgent ? ` ⚠ URGENT: inventory will run out ${cov.shortfall.toLocaleString()} units before arrival!` : '';
+  return `${core.id} is ${type} (CV=${cv}), ${gDesc}.${pfD}${urgD} ` +
+    `During lead time (${cov.ltMonths.length > 0 ? cov.ltMonths[0].label : '—'} → arrival ${cov.arrivalDate}), projected consumption: ${cov.ltConsumption.toLocaleString()} units. ` +
+    `Current inventory: ${cov.inventory.toLocaleString()} → inventory at arrival: ${cov.inventoryAtArrival.toLocaleString()}. ` +
+    `Coverage window (${cov.windowStart} → ${cov.windowEnd}): ${cov.coverageNeed.toLocaleString()} units needed. ` +
+    `Final: ${cov.coverageNeed.toLocaleString()} − ${Math.max(0, cov.inventoryAtArrival).toLocaleString()} = ${cov.need.toLocaleString()} to order. ` +
+    `Old flat formula: ${flatNeed.toLocaleString()}, so seasonal calc recommends ${diffD}.`;
 }
 
 
-// ─── BATCH: compute profiles for all cores (pre-indexed) ─────────
+// ─── BATCH PROFILES ──────────────────────────────────────────────
 export function batchProfiles(cores, coreInvHistory, coreDays) {
-  const histMap = {};
-  (coreInvHistory || []).forEach(h => {
-    if (!histMap[h.core]) histMap[h.core] = [];
-    histMap[h.core].push(h);
-  });
-  const dayMap = {};
-  (coreDays || []).forEach(d => {
-    if (!dayMap[d.core]) dayMap[d.core] = [];
-    dayMap[d.core].push(d);
-  });
+  const histMap = {}, dayMap = {};
+  (coreInvHistory || []).forEach(h => { if (!histMap[h.core]) histMap[h.core] = []; histMap[h.core].push(h) });
+  (coreDays || []).forEach(d => { if (!dayMap[d.core]) dayMap[d.core] = []; dayMap[d.core].push(d) });
   const map = {};
-  (cores || []).forEach(c => {
-    map[c.id] = calcSeasonalProfile(c.id, histMap[c.id] || [], dayMap[c.id] || []);
-  });
+  (cores || []).forEach(c => { map[c.id] = calcSeasonalProfile(c.id, histMap[c.id] || [], dayMap[c.id] || []) });
   return map;
 }
 
-export { DEFAULT_PROFILE };
+export function batchBundleProfiles(bundles, bundleSales) {
+  const map = {};
+  (bundles || []).forEach(b => { map[b.j] = calcBundleSeasonalProfile(b.j, bundleSales) });
+  return map;
+}
+
+export { DEF as DEFAULT_PROFILE };
