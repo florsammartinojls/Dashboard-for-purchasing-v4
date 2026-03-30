@@ -30,20 +30,9 @@ export function calcSeasonalProfile(coreId, coreHistory, recentDays) {
     byYM[k] = { dsr, y: h.y, m: h.m, oos, dd };
   });
 
-  // ── Last year shape (normalized curve) ──
-  // Use most recent complete-ish year for shape
-  const shapeYear = prevYear && Object.keys(byYM).filter(k => k.startsWith(prevYear + '-')).length >= 6 ? prevYear : latestYear;
-  const shapeMonths = {};
-  for (let m = 1; m <= 12; m++) {
-    const k = shapeYear + '-' + m;
-    shapeMonths[m] = byYM[k]?.dsr || 0;
-  }
-  const shapeVals = Object.values(shapeMonths).filter(v => v > 0);
-  const shapeAvg = shapeVals.length > 0 ? shapeVals.reduce((a, b) => a + b, 0) / shapeVals.length : 1;
-  const lastYearShape = new Array(12).fill(1.0);
-  for (let m = 1; m <= 12; m++) {
-    lastYearShape[m - 1] = shapeMonths[m] > 0 ? r2(shapeMonths[m] / shapeAvg) : 1.0;
-  }
+  // ── Shape for projection = weighted multi-year indices (not single year) ──
+  // This avoids one anomalous year distorting the projection
+  const lastYearShape = indices; // indices already weighted 75% latest / 25% older + OOS excluded
 
   // ── Sustained growth factor (YTD this year / same period last year) ──
   const now = new Date();
@@ -112,7 +101,7 @@ export function calcSeasonalProfile(coreId, coreHistory, recentDays) {
     }
   }
 
-  return { indices, lastYearShape, cv, momentum, growthFactor, hasHistory: true, monthlyDetail, yearlyTotals, shapeYear };
+  return { indices, lastYearShape, cv, momentum, growthFactor, hasHistory: true, monthlyDetail, yearlyTotals, shapeYear: years.join('+') };
 }
 
 // ─── BUNDLE SEASONAL PROFILE (from bundle sales history) ───
