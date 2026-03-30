@@ -167,23 +167,24 @@ export function CalcBreakdown({ data: d, onClose }) {
         <div className="mt-1 text-xs text-gray-600">Formula: projectedDSR = currentDSR × shape[month] × growthFactor × safetyMultiplier({d.safetyMultiplier})</div>
       </div>
 
-      {/* Step 1: Lead Time Consumption */}
+      {/* Step 1: Lead Time Urgency Check */}
       <div className={`rounded-lg p-4 mb-4 ${d.urgent ? "bg-red-500/10 border border-red-500/30" : "bg-gray-800/50"}`}>
-        <h3 className="text-sm font-semibold text-white mb-2">Step 1: Consumption During Lead Time ({d.leadTime}d)</h3>
-        <p className="text-gray-400 text-xs mb-2">Today → arrival {d.arrivalDate}. How much inventory will be consumed before the order arrives?</p>
+        <h3 className="text-sm font-semibold text-white mb-2">Step 1: Lead Time Urgency Check ({d.leadTime}d)</h3>
+        <p className="text-gray-400 text-xs mb-2">Will current inventory last until the order arrives ({d.arrivalDate})? This does NOT affect how much to order — only flags urgency.</p>
         {d.ltMonths.length > 0 && <MTab rows={d.ltMonths} />}
         <div className="mt-2 grid grid-cols-3 gap-3 text-center">
           <div><div className="text-gray-500 text-xs">Current Inventory</div><div className="text-white font-bold">{d.inventory.toLocaleString()}</div></div>
           <div><div className="text-gray-500 text-xs">LT Consumption</div><div className="text-red-400 font-bold">− {d.ltConsumption.toLocaleString()}</div></div>
-          <div><div className="text-gray-500 text-xs">Inventory at Arrival</div><div className={`font-bold ${d.inventoryAtArrival < 0 ? "text-red-400" : "text-emerald-400"}`}>{d.inventoryAtArrival.toLocaleString()}</div></div>
+          <div><div className="text-gray-500 text-xs">Inv at Arrival</div><div className={`font-bold ${d.inventoryAtArrival < 0 ? "text-red-400" : "text-emerald-400"}`}>{d.inventoryAtArrival.toLocaleString()}</div></div>
         </div>
-        {d.urgent && <p className="text-red-400 text-xs font-semibold mt-2">⚠ STOCKOUT: will run out {d.shortfall.toLocaleString()} units before arrival!</p>}
+        {d.urgent && <p className="text-red-400 text-xs font-semibold mt-2">⚠ STOCKOUT RISK: inventory may run out before order arrives!</p>}
+        {!d.urgent && <p className="text-emerald-400 text-xs mt-2">✓ Inventory covers lead time</p>}
       </div>
 
-      {/* Step 2: Coverage Need */}
+      {/* Step 2: Target Coverage (from today) */}
       <div className="bg-gray-800/50 rounded-lg p-4 mb-4">
-        <h3 className="text-sm font-semibold text-white mb-2">Step 2: Coverage After Arrival ({d.targetDOC}d)</h3>
-        <p className="text-gray-400 text-xs mb-2">{d.windowStart} → {d.windowEnd}. Projected demand with safety ×{d.safetyMultiplier}.</p>
+        <h3 className="text-sm font-semibold text-white mb-2">Step 2: Target Coverage ({d.targetDOC}d from today)</h3>
+        <p className="text-gray-400 text-xs mb-2">{d.windowStart} → {d.windowEnd}. How much total inventory do I need to cover {d.targetDOC} days? Safety ×{d.safetyMultiplier}.</p>
         {d.covMonths.length > 0 && <MTab rows={d.covMonths} />}
       </div>
 
@@ -191,8 +192,8 @@ export function CalcBreakdown({ data: d, onClose }) {
       <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-4">
         <h3 className="text-sm font-semibold text-white mb-3">Step 3: Final Need</h3>
         <div className="grid grid-cols-3 gap-4 text-center mb-3">
-          <div><div className="text-gray-400 text-xs">Coverage Need</div><div className="text-white font-bold text-xl">{d.coverageNeed.toLocaleString()}</div></div>
-          <div><div className="text-gray-400 text-xs">Inv at Arrival</div><div className="text-white font-bold text-xl">− {Math.max(0, d.inventoryAtArrival).toLocaleString()}</div></div>
+          <div><div className="text-gray-400 text-xs">Target Coverage ({d.targetDOC}d)</div><div className="text-white font-bold text-xl">{d.coverageNeed.toLocaleString()}</div></div>
+          <div><div className="text-gray-400 text-xs">Current Inventory</div><div className="text-white font-bold text-xl">− {d.inventory.toLocaleString()}</div></div>
           <div><div className="text-gray-400 text-xs">Need to Order</div><div className="text-emerald-400 font-bold text-xl">= {d.need.toLocaleString()}</div></div>
         </div>
         <div className="pt-3 border-t border-gray-700 flex flex-wrap gap-4 text-xs justify-center">
