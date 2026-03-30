@@ -247,10 +247,22 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
           }
         });
 
-        // 4. Core raw absorbs: total need minus what bundles ordered + 20d minimum
+        // 4. Core raw: only when there are converted B.MOQ extras or multiple bundles need it
+        const hasMultipleBundles = cBundles.length > 1;
+        const hasConvertedExtras = coreExtrasFromBundles.pieces > 0;
         const raw20d = Math.ceil((c.dsr || 0) * 20);
-        const coreRawFromRedist = Math.max(0, coreNeed - totalBundleOrderCorePcs);
-        const coreRawNeed = Math.max(coreExtrasFromBundles.pieces, raw20d, coreRawFromRedist);
+        
+        let coreRawNeed = 0;
+        if (hasConvertedExtras) {
+          // Have converted B.MOQ extras → order at least those, and 20d min if multiple bundles
+          coreRawNeed = hasMultipleBundles ? Math.max(coreExtrasFromBundles.pieces, raw20d) : coreExtrasFromBundles.pieces;
+        } else if (hasMultipleBundles) {
+          // Multiple bundles, no extras → absorb gap between core need and bundle orders
+          const coreRawFromRedist = Math.max(0, coreNeed - totalBundleOrderCorePcs);
+          coreRawNeed = coreRawFromRedist > 0 ? Math.max(coreRawFromRedist, raw20d) : 0;
+        }
+        // Single bundle at 100% → NO core raw, everything goes as bundle
+        
         if (coreRawNeed > 0) {
           u[c.id] = { ...(u[c.id] || {}), pcs: cOQ(coreRawNeed, c.moq, c.casePack) };
         }
