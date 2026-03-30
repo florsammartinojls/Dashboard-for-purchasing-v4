@@ -237,6 +237,9 @@ function projectDemand(dsr, startDate, endDate, profile, safety) {
 
 
 // ─── STEP 1+2+3: FULL COVERAGE CALCULATION ──────────────────────
+// targetDOC = total days of coverage I WANT from today (not extra after arrival)
+// leadTime = used for urgency flag only (DOC < LT → urgent)
+// need = projected demand over targetDOC days − current inventory
 export function calcCoverageNeed(core, leadTimeDays, targetDOC, profile, purchFreq) {
   const dsr = core.dsr || 0;
   if (dsr <= 0) return { need: 0, ltConsumption: 0, inventoryAtArrival: 0, coverageNeed: 0, ltMonths: [], covMonths: [], inventory: 0, windowStart: '', windowEnd: '', arrivalDate: '' };
@@ -244,19 +247,18 @@ export function calcCoverageNeed(core, leadTimeDays, targetDOC, profile, purchFr
   const safety = purchFreq?.safetyMultiplier ?? 1.0;
   const today = new Date();
   const arrival = new Date(today); arrival.setDate(arrival.getDate() + leadTimeDays);
-  const covEnd = new Date(arrival); covEnd.setDate(covEnd.getDate() + targetDOC);
+  const covEnd = new Date(today); covEnd.setDate(covEnd.getDate() + targetDOC);
   const inventory = cAI(core);
 
-  // Step 1: consumption during lead time
-  const ltProj = projectDemand(dsr, today, arrival, profile, 1.0); // no safety on LT consumption (conservative)
+  // Step 1: consumption during lead time (informational — shows urgency)
+  const ltProj = projectDemand(dsr, today, arrival, profile, 1.0);
   const inventoryAtArrival = inventory - ltProj.total;
 
-  // Step 2: coverage need after arrival
-  const covProj = projectDemand(dsr, arrival, covEnd, profile, safety);
+  // Step 2: total coverage need = projected demand over targetDOC from TODAY
+  const covProj = projectDemand(dsr, today, covEnd, profile, safety);
 
-  // Step 3: final need
-  const effectiveInventory = Math.max(0, inventoryAtArrival);
-  const need = Math.max(0, Math.ceil(covProj.total - effectiveInventory));
+  // Step 3: need = what I need to have for targetDOC − what I already have
+  const need = Math.max(0, Math.ceil(covProj.total - inventory));
 
   return {
     need,
@@ -267,7 +269,7 @@ export function calcCoverageNeed(core, leadTimeDays, targetDOC, profile, purchFr
     ltMonths: ltProj.months,
     covMonths: covProj.months,
     arrivalDate: fmt(arrival),
-    windowStart: fmt(arrival),
+    windowStart: fmt(today),
     windowEnd: fmt(covEnd),
     safetyMultiplier: r2(safety),
     urgent: inventoryAtArrival < 0,
@@ -282,10 +284,9 @@ export function fillToMOQ(cores, vendorMOQDollar, currentTotalDollar, profiles, 
   const gap = vendorMOQDollar - currentTotalDollar;
 
   const today = new Date();
-  const arrival = new Date(today); arrival.setDate(arrival.getDate() + leadTimeDays);
-  const covEnd = new Date(arrival); covEnd.setDate(covEnd.getDate() + targetDOC);
+  const covEnd = new Date(today); covEnd.setDate(covEnd.getDate() + targetDOC);
   const windowMonths = new Set();
-  let cur = new Date(arrival);
+  let cur = new Date(today);
   while (cur < covEnd) { windowMonths.add(cur.getMonth()); cur.setMonth(cur.getMonth() + 1) }
 
   const candidates = cores.filter(c => c.cost > 0 && c.dsr > 0).map(c => {
@@ -384,12 +385,11 @@ function buildSummaryV2(core, cv, gf, cov, flatNeed, pf) {
   const diff = cov.need - flatNeed;
   const diffD = diff > 0 ? `${diff.toLocaleString()} more` : diff < 0 ? `${Math.abs(diff).toLocaleString()} less` : 'the same';
   const pfD = pf?.comment ? ` Purchase frequency: ${pf.label} (${pf.ordersPerYear} orders/yr, safety ×${pf.safetyMultiplier}).` : '';
-  const urgD = cov.urgent ? ` ⚠ URGENT: inventory will run out ${cov.shortfall.toLocaleString()} units before arrival!` : '';
+  const urgD = cov.urgent ? ` ⚠ URGENT: DOC (${Math.round(cov.inventory / (core.dsr || 1))}) < Lead Time (${Math.round((new Date(cov.arrivalDate) - new Date()) / 86400000)}d) — may stockout before arrival!` : '';
   return `${core.id} is ${type} (CV=${cv}), ${gDesc}.${pfD}${urgD} ` +
-    `During lead time (${cov.ltMonths.length > 0 ? cov.ltMonths[0].label : '—'} → arrival ${cov.arrivalDate}), projected consumption: ${cov.ltConsumption.toLocaleString()} units. ` +
-    `Current inventory: ${cov.inventory.toLocaleString()} → inventory at arrival: ${cov.inventoryAtArrival.toLocaleString()}. ` +
-    `Coverage window (${cov.windowStart} → ${cov.windowEnd}): ${cov.coverageNeed.toLocaleString()} units needed. ` +
-    `Final: ${cov.coverageNeed.toLocaleString()} − ${Math.max(0, cov.inventoryAtArrival).toLocaleString()} = ${cov.need.toLocaleString()} to order. ` +
+    `Target: ${Math.round((new Date(cov.windowEnd) - new Date(cov.windowStart)) / 86400000)}d coverage from today (${cov.windowStart} → ${cov.windowEnd}). ` +
+    `Projected demand: ${cov.coverageNeed.toLocaleString()} units. Current inventory: ${cov.inventory.toLocaleString()}. ` +
+    `Need to order: ${cov.coverageNeed.toLocaleString()} − ${cov.inventory.toLocaleString()} = ${cov.need.toLocaleString()}. ` +
     `Old flat formula: ${flatNeed.toLocaleString()}, so seasonal calc recommends ${diffD}.`;
 }
 
