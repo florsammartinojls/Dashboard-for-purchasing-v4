@@ -272,10 +272,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
             totalBundleOrderCorePcs += ord * bd.qpb; // convert back to core pcs for overallocation check
           }
         });
-
-        // 4. Core raw: ONLY when there are B.MOQ converted extras. 
-        // If bundles cover 100% of core sales → no core raw needed
-       // 4. Core raw: order as core when bundles didn't cover the need
+    // 4. Core raw: smart check — do bundles actually cover the demand?
         let coreRawNeed = 0;
         if (coreExtrasFromBundles.pieces > 0) {
           // B.MOQ converted extras → order as core
@@ -283,17 +280,21 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
         } else if (cBundles.length === 0 && coreNeed > 0) {
           // No bundles at all → order as core
           coreRawNeed = coreNeed;
-        } else if (coreNeed > 0 && totalBundleOrderCorePcs === 0) {
-          // Bundles exist but none needed ordering (PPRC covers them)
-          // Still need to order core raw to cover the gap
-          coreRawNeed = coreNeed;
+        } else if (coreNeed > 0 && totalBundleOrderCorePcs === 0 && cBundles.length > 0) {
+          // Bundles exist but none needed ordering — check if they actually have inventory
+          const bundleTotalInv = cBundles.reduce((s, b) => {
+            const rp = replenMap[b.j];
+            return s + (b.fibInv || 0) + (rp?.pprcUnits || 0) + (rp?.batched || 0);
+          }, 0);
+          const bundleTotalDsr = cBundles.reduce((s, b) => s + (b.cd || 0), 0);
+          const bundleCoverDays = bundleTotalDsr > 0 ? bundleTotalInv / bundleTotalDsr : 9999;
+          // If bundles have less than half the target DOC → they're NOT covering demand → order core
+          if (bundleCoverDays < c.targetDoc * 0.5) {
+            coreRawNeed = coreNeed;
+          }
+          // Otherwise bundles are well stocked (high PPRC/FIB) → no core order needed
         }
-        // Note: if bundles exist but total bundle order < coreNeed, that's OK — 
-        // the cap means we don't need that much per bundle. Don't force core raw.
-        
-        if (coreRawNeed > 0) {
-          u[c.id] = { ...(u[c.id] || {}), pcs: cOQ(coreRawNeed, c.moq, c.casePack) };
-        }
+       
 
         // 5. Check overallocation: if total orders > core need + 15 DOC → warn
         const totalOrderCorePcs = totalBundleOrderCorePcs + (coreRawNeed > 0 ? cOQ(coreRawNeed, c.moq, c.casePack) : 0);
