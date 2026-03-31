@@ -166,7 +166,7 @@ export default function CoreTab({ data, stg, hist, daily, coreId, onBack, goBund
           { l: "7D", v: D1(core.d7) },
           { l: "DOC", v: R(core.doc), c: dc(core.doc, lt, lt + (core.buf || 14)) },
           { l: "All-In Own Pcs", v: R(ai) },
-          { l: "Inbound", v: R(core.inb), sub: etaT }
+          { l: "Inbound (sheet)", v: R(core.inb) }, { l: "Inbound 7f", v: R(inbS.reduce((s, i) => s + (i.pieces || 0), 0)), sub: etaT }
         ].map(k => (
           <div key={k.l} className="bg-gray-900 rounded-lg p-3 border border-gray-800">
             <div className="text-gray-500 text-xs mb-1">{k.l}</div>
