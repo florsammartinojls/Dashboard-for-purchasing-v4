@@ -230,8 +230,8 @@ export default function App() {
     return c;
   }, [data, stg]);
 
-  const goCore = useCallback(id => { if (tab === "purchasing") { setPanelCoreId(id); setPanelBundleId(null) } else { setPrevTab(tab); setCoreId(id); setTab("core") } }, [tab]);
-  const goBundle = useCallback(id => { if (tab === "purchasing" || panelCoreId) { setPanelBundleId(id) } else { setPrevTab(tab); setBundleId(id); setTab("bundle") } }, [tab, panelCoreId]);
+  const goCore = useCallback(id => { if (tab === "purchasing") { setPanelCoreId(id); setPanelBundleId(null); clearSum() } else { setPrevTab(tab); setCoreId(id); setTab("core") } }, [tab]);
+  const goBundle = useCallback(id => { if (tab === "purchasing" || panelCoreId) { setPanelBundleId(id); clearSum() } else { setPrevTab(tab); setBundleId(id); setTab("bundle") } }, [tab, panelCoreId]);
   const goVendor = useCallback(n => { window.open(window.location.pathname + '?vendor=' + encodeURIComponent(n), '_blank') }, []);
   const clearIV = useCallback(() => setInitV(null), []);
   const handleBackFromCore = useCallback(() => setTab("purchasing"), []);
@@ -291,7 +291,7 @@ export default function App() {
         {tab === "glossary" && <GlossTab />}
       </main>
       {showS && <Stg s={stg} setS={setStg} onClose={() => setShowS(false)} />}
-      <SlidePanel open={!!(panelCoreId || panelBundleId)} onClose={() => { setPanelCoreId(null); setPanelBundleId(null) }}>
+      <SlidePanel open={!!(panelCoreId || panelBundleId)} onClose={() => { setPanelCoreId(null); setPanelBundleId(null); clearSum() }}>
         {panelBundleId ? <BundleTab data={data} stg={stg} hist={hist} daily={daily} bundleId={panelBundleId} onBack={() => { setPanelBundleId(null); if (!panelCoreId) setPanelCoreId(null) }} goCore={id => { setPanelBundleId(null); setPanelCoreId(id) }} />
         : panelCoreId ? <CoreTab data={data} stg={stg} hist={hist} daily={daily} coreId={panelCoreId} onBack={() => setPanelCoreId(null)} goBundle={id => setPanelBundleId(id)} />
         : null}
