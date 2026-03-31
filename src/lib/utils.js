@@ -1,6 +1,6 @@
 // === FORMATTERS ===
 export const R = n => n == null ? "\u2014" : Math.round(n).toLocaleString("en-US");
-export const D1 = n => n == null || n === 0 ? "\u2014" : n.toFixed(1);
+export const D1 = n => n == null || n === 0 ? "\u2014" : n >= 10 ? Math.round(n).toLocaleString("en-US") : n.toFixed(1);
 export const $ = n => n == null ? "\u2014" : "$" + Math.round(n).toLocaleString("en-US");
 export const $2 = n => n == null ? "\u2014" : "$" + n.toLocaleString("en-US", { maximumFractionDigits: 2 });
 export const $4 = n => "$" + n.toFixed(4);
