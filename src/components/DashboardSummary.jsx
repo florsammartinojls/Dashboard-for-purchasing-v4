@@ -144,7 +144,7 @@ export default function DashboardSummary({ data, stg, goVendor, workflow, saveWo
     const borderCls = v.urgency === "critical" ? "border-red-500/30" : v.urgency === "warning" ? "border-amber-500/30" : "border-gray-800";
     const wfSt = getWfStatus(v.name);
     return (
-      <div className={`border rounded-lg overflow-hidden ${borderCls} hover:border-gray-600 transition-colors`}>
+      <div className={`border rounded-lg ${borderCls} hover:border-gray-600 transition-colors`}>
         <div className="flex items-center gap-3 px-4 py-3 bg-gray-900/50 hover:bg-gray-800/80">
           <div className="cursor-pointer flex items-center gap-3 flex-1 min-w-0" onClick={() => goVendor(v.name)}>
             <Dot status={v.urgency} />
