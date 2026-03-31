@@ -401,9 +401,9 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
     const alloc = rawAllocMap[b.j] || { rawUnits: 0, baseDOC: 0, baseInv: 0 };
     const effectiveDOC = b.cd > 0 ? Math.round((alloc.baseInv + alloc.rawUnits + eq) / b.cd) : null;
     return <tr className={`border-t border-gray-800/20 hover:bg-indigo-900/10 text-xs ${hasBundleOrd(b) ? "bg-emerald-900/10" : "bg-indigo-950/30"}`}>
-      <td className="py-1 px-1 sticky left-0 bg-indigo-950/30 z-10 border-l-2 border-indigo-500/40" /> ```  Y actualizá los otros sticky backgrounds de indigo en BundleRow de `/20` a `/30`: ``` bg-indigo-950/20 → bg-indigo-950/30
-      <td className="py-1 px-1 sticky left-5 bg-indigo-950/20 z-10"><button onClick={() => goBundle(b.j)} className="text-indigo-400 font-mono hover:underline">{b.j}</button></td>
-      <td className="py-1 px-1 text-indigo-200 truncate max-w-[100px] sticky left-24 bg-indigo-950/20 z-10">
+      <td className="py-1 px-1 sticky left-0 bg-indigo-950/30 z-10 border-l-2 border-indigo-500/40" />
+      <td className="py-1 px-1 sticky left-5 bg-indigo-950/30 z-10"><button onClick={() => goBundle(b.j)} className="text-indigo-400 font-mono hover:underline">{b.j}</button></td>
+      <td className="py-1 px-1 text-indigo-200 truncate max-w-[100px] sticky left-24 bg-indigo-950/30 z-10">
         {b.t}{b.asin && <a href={`https://sellercentral.amazon.com/myinventory/inventory?fulfilledBy=all&page=1&pageSize=25&searchField=all&searchTerm=${b.asin}&sort=date_created_desc&status=all`} target="_blank" rel="noopener noreferrer" className="ml-1 text-gray-500 hover:text-blue-400 text-[9px] font-mono">{b.asin}</a>}
         {aged && aged.fbaHealth !== "Healthy" && <span className={`ml-1 text-xs ${aged.fbaHealth === "At Risk" ? "text-amber-400" : "text-red-400"}`}>{aged.fbaHealth}</span>}
         {aged && aged.storageLtsf > 0 && <span className="ml-1 text-xs text-red-300">${aged.storageLtsf.toFixed(0)}</span>}
@@ -420,11 +420,11 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
       {!collapsed[b.j] && <td colSpan={4} />}
       {showRS && <><td className="py-1 border-l-2 border-cyan-800 px-0.5" /><SC v={b.fibDoc} className="py-1 px-1 text-right text-cyan-300">{R(b.fibDoc)}</SC><td className={`py-1 px-1 text-right ${margin >= 30 ? "text-emerald-400" : margin >= 15 ? "text-amber-400" : margin > 0 ? "text-red-400" : "text-gray-600"}`}>{margin > 0 ? Math.round(margin) + "%" : "—"}</td><SC v={rp?.rawUnits} className="py-1 px-1 text-right">{R(rp?.rawUnits || 0)}</SC><SC v={rp?.batched} className="py-1 px-1 text-right">{R(rp?.batched || 0)}</SC><SC v={b.fibInv} className="py-1 px-1 text-right text-cyan-300">{R(b.fibInv || 0)}</SC><SC v={rp?.pprcUnits} className="py-1 px-1 text-right">{R(rp?.pprcUnits || 0)}</SC><td className="py-1 px-1 text-right text-red-400">{inb7f > 0 ? R(inb7f) : "0"}</td></>}
       <td className="py-1 border-l-2 border-gray-600 px-1" />
-      <td className="py-0.5 px-0.5 sticky right-36 bg-indigo-950/20 z-10"><NumInput value={gPcs(b.j)} onChange={v => setF(b.j, 'pcs', v)} /></td>
-      <td className="py-0.5 px-0.5 sticky right-24 bg-indigo-950/20 z-10"><NumInput value={gCas(b.j)} onChange={v => setF(b.j, 'cas', v)} /></td>
+      <td className="py-0.5 px-0.5 sticky right-36 bg-indigo-950/30 z-10"><NumInput value={gPcs(b.j)} onChange={v => setF(b.j, 'pcs', v)} /></td>
+      <td className="py-0.5 px-0.5 sticky right-24 bg-indigo-950/30 z-10"><NumInput value={gCas(b.j)} onChange={v => setF(b.j, 'cas', v)} /></td>
       {showCosts && <><td className="py-0.5 px-0.5"><NumInput value={gInbS(b.j)} onChange={v => setF(b.j, 'inbS', v)} /></td><td className="py-0.5 px-0.5"><NumInput value={gCogP(b.j)} onChange={v => setF(b.j, 'cogP', v)} /></td><td className="py-0.5 px-0.5"><NumInput value={gCogC(b.j)} onChange={v => setF(b.j, 'cogC', v)} /></td></>}
-      <SC v={cost} className="py-1 px-1 text-right text-amber-300 sticky right-12 bg-indigo-950/20 z-10">{cost > 0 ? $(cost) : "—"}</SC>
-      <td className={`py-1 px-1 text-right sticky right-0 bg-indigo-950/20 z-10 ${effectiveDOC ? (effectiveDOC <= 30 ? "text-red-400" : effectiveDOC <= 60 ? "text-amber-400" : "text-emerald-400") : "text-gray-600"}`}>{effectiveDOC ? R(effectiveDOC) : "—"}</td>
+      <SC v={cost} className="py-1 px-1 text-right text-amber-300 sticky right-12 bg-indigo-950/30 z-10">{cost > 0 ? $(cost) : "—"}</SC>
+      <td className={`py-1 px-1 text-right sticky right-0 bg-indigo-950/30 z-10 ${effectiveDOC ? (effectiveDOC <= 30 ? "text-red-400" : effectiveDOC <= 60 ? "text-amber-400" : "text-emerald-400") : "text-gray-600"}`}>{effectiveDOC ? R(effectiveDOC) : "—"}</td>
       <td className="py-1 px-1"><button onClick={() => goBundle(b.j)} className="text-indigo-400 px-0.5 bg-indigo-400/10 rounded text-xs">V</button></td>
     </tr>;
   };
