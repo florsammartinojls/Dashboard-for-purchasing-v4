@@ -2,6 +2,7 @@ import React, { useState, useMemo, useCallback, useEffect } from "react";
 import { api, apiPost } from "./lib/api";
 import { R, D1, gS, fTs, gTD, isD, cAI, cNQ } from "./lib/utils";
 import { Loader, Stg, QuickSum, SumCtx, SlidePanel, Dot, WorkflowChip, VendorNotes } from "./components/Shared";
+import DashboardSummary from "./components/DashboardSummary";
 import PurchTab from "./components/PurchTab";
 import CoreTab from "./components/CoreTab";
 import BundleTab from "./components/BundleTab";
@@ -71,22 +72,20 @@ const DEFAULT_GL = [
   { term: "Healthy", desc: "DOC > Lead Time + Buffer. Sufficient inventory." },
   { term: "Buffer Days", desc: "Extra safety margin days per core (set in source sheet). Default ~14 days." },
   { term: "⚡ Spike", desc: "7D DSR is 25%+ above composite DSR. Need calculation uses 7D DSR instead to cover the demand spike." },
-  // === SEASONAL FORECASTING ===
   { term: "📊 Seasonal Breakdown", desc: "Click the 📊 button on any core row to see the full 5-step seasonal forecast: 1) Consumption during lead time, 2) Inventory at arrival, 3) Coverage window need, 4) Last-year shape × sustained growth, 5) Purchase frequency safety. Shows plain English summary + month-by-month projection tables." },
-  { term: "Inv at Arrival (Step 1)", desc: "Projects how much inventory you'll have left when the order actually arrives. = Current inventory − Σ(projected consumption during lead time). If negative → ⚠ STOCKOUT before arrival. Example: 15,000 pcs today, DSR ~100/day, LT 120 days → consumed ~12,000-14,000 (seasonal) → arrival inventory ~1,000-3,000." },
-  { term: "Coverage Window (Step 2)", desc: "After arrival: how much demand must your order cover? Projected demand from arrival date → arrival + target DOC, month by month using seasonal shape. The need = coverage demand − remaining inventory at arrival." },
-  { term: "Last-Year Shape (Step 4)", desc: "The 'curve' of last year's sales, normalized. If June sold 2× the monthly average → shape = 2.0. Formula: projectedDSR(month) = currentDSR × shape[month] ÷ shape[now] × safety. The key: currentDSR ALREADY captures your current sales level, so we only adjust for the seasonal SHAPE — no growth factor needed." },
-  { term: "Shape Normalization", desc: "projectedDSR = currentDSR × dampedNorm × safety. dampedNorm = 1 + (shape[M]/shape[now] − 1) × 50%. Example: March shape 0.99, May shape 1.71 → raw ratio 1.73x → damped = 1 + 0.73×0.5 = 1.37x → projected May = 76 × 1.37 = 104/day. The 50% dampening prevents over-projection: half the seasonal swing is already captured in your current DSR." },
-  { term: "CV (Coefficient of Variation)", desc: "Measures how seasonal a product is. CV < 0.15 = flat. CV 0.15–0.35 = mild. CV > 0.35 = strong (e.g. Q4 products). Used to determine product type for shape weighting." },
-  { term: "Purchase Frequency (Step 5)", desc: "Inferred from PO history: how many times/year do you order from this vendor? ≤2 orders/yr → Low frequency → safety ×1.10 (buy extra). 3-6/yr → Normal → ×1.05. >6/yr → High → ×1.0. Shows ⚠ comment when low frequency detected. Never recommends less than lead time coverage." },
-  { term: "Fill Rec v3", desc: "Cores: projectedDSR = currentDSR × shape[month] ÷ shape[now] × safety. Need = Σ(projected demand over targetDOC) − current inventory. No growth factor (currentDSR already captures level). Bundles: distributed from core need by %28d weight, PPRC shifts allocation (not subtracted twice). Single bundle at 100% → no core raw." },
-  { term: "Fill to MOQ", desc: "When Fill Rec total < vendor MOQ$, distributes extra intelligently. Priority: 1) cores with peak season in coverage window, 2) cores with high sustained growth factor, 3) cores with lowest DOC ratio. Adds one case pack at a time to highest-scored core." },
-  { term: "AGL Toggle", desc: "Per-vendor toggle in Bundles/Mix mode. When ON, bundles use 80-day lead time instead of the vendor's standard LT. Used when bundles ship direct via AGL (faster route)." },
-  { term: "⚠ Unbundle Warning", desc: "When Fill Rec allocates bundles and the total order exceeds core need by +15 DOC or more, shows a warning. This happens when PPRC is imbalanced — one bundle has lots of PPRC (already covered) but others need stock, forcing you to over-order at core level. Consider: 1) rebalancing PPRC allocation, 2) sending some bundles direct (AGL), 3) accepting the stretch if it's temporary." },
-  { term: "Fill Rec: Distribution", desc: "In Mix/Bundles mode, Fill Rec uses core seasonal need as the TOTAL reference. Distributes proportionally by %28d weight. For each bundle: gap = proportional demand − (FIB + PPRC + batched). If gap > 0 → order. If gap ≤ 0 → bundle is already covered (PPRC/FIB sufficient). Stretching a bit beyond core need is OK when PPRC is unevenly distributed." },
-  // === EXISTING TERMS ===
+  { term: "Inv at Arrival (Step 1)", desc: "Projects how much inventory you'll have left when the order actually arrives. = Current inventory − Σ(projected consumption during lead time). If negative → ⚠ STOCKOUT before arrival." },
+  { term: "Coverage Window (Step 2)", desc: "After arrival: how much demand must your order cover? Projected demand from arrival date → arrival + target DOC, month by month using seasonal shape." },
+  { term: "Last-Year Shape (Step 4)", desc: "The 'curve' of last year's sales, normalized. Formula: projectedDSR(month) = currentDSR × shape[month] ÷ shape[now] × safety." },
+  { term: "Shape Normalization", desc: "projectedDSR = currentDSR × dampedNorm × safety. dampedNorm = 1 + (shape[M]/shape[now] − 1) × 50%." },
+  { term: "CV (Coefficient of Variation)", desc: "Measures how seasonal a product is. CV < 0.15 = flat. CV 0.15–0.35 = mild. CV > 0.35 = strong." },
+  { term: "Purchase Frequency (Step 5)", desc: "Inferred from PO history: how many times/year do you order from this vendor? ≤2 orders/yr → Low frequency → safety ×1.10. 3-6/yr → Normal → ×1.05. >6/yr → High → ×1.0." },
+  { term: "Fill Rec v3", desc: "Cores: projectedDSR = currentDSR × shape[month] ÷ shape[now] × safety. Need = Σ(projected demand over targetDOC) − current inventory." },
+  { term: "Fill to MOQ", desc: "When Fill Rec total < vendor MOQ$, distributes extra intelligently by priority scoring." },
+  { term: "AGL Toggle", desc: "Per-vendor toggle in Bundles/Mix mode. When ON, bundles use 80-day lead time instead of vendor's standard LT." },
+  { term: "⚠ Unbundle Warning", desc: "When Fill Rec allocates bundles and total order exceeds core need by +15 DOC or more." },
+  { term: "Fill Rec: Distribution", desc: "In Mix/Bundles mode, Fill Rec uses core seasonal need as the TOTAL reference. Distributes proportionally by %28d weight." },
   { term: "Fill Rec: Bundles", desc: "Need = (Target DOC × bundle DSR) − FIB Inventory. Order = Need (no MOQ on bundles)." },
-  { term: "Fill Rec: Mix", desc: "1) For each bundle: Effective DOC = current DOC + (core inbound ÷ qty_per_bundle ÷ bundle DSR). 2) Need = (Target DOC − Effective DOC) × bundle DSR. 3) If need < vendor MOQ → don't order bundle, convert to core pieces instead. 4) Core order = own need + converted bundle pieces, rounded to case pack." },
+  { term: "Fill Rec: Mix", desc: "1) Effective DOC calc 2) Need calc 3) B.MOQ check 4) Core order with converted pieces." },
   { term: "FIBDOC", desc: "FBA Inbound Days of Coverage." },
   { term: "PFIBDOC", desc: "Projected FIB DOC after restock." },
   { term: "+RS", desc: "Toggle Bundle detail columns: FIB Pcs, SC Inv, Reserved, Inbound, 7f Missing." },
@@ -112,16 +111,16 @@ const DEFAULT_GL = [
   { term: "ST", desc: "Sell-Through — ASIN in sell-through evaluation mode." },
   { term: "+/−", desc: "Expand or collapse detail columns per core row." },
   { term: "✕", desc: "Dismiss a core row (hide it temporarily while reviewing). 'Show All' brings them back." },
-  { term: "7f Inbound", desc: "Pieces still in transit from 7f Receiving — used as 'Inbound' in bundle DOC calculations instead of the standard inbound field." },
+  { term: "7f Inbound", desc: "Pieces still in transit from 7f Receiving." },
   { term: "B.CasePack", desc: "Bundle case pack derived from 7f Receiving (pieces ÷ cases from most recent receiving entry)." },
-  { term: "B.MOQ", desc: "Bundle MOQ per vendor (editable, only in Bundles/Mix view). When Fill Rec runs: if a bundle's need ≥ B.MOQ → order as bundle (rounded up to B.MOQ). If need < B.MOQ → skip bundle, convert to core pieces instead (need × qty_per_bundle)." },
-  { term: "After DOC (Bundle)", desc: "Always shown. Base = (FIB Inv + 7f Inbound + PPRC) ÷ DSR + raw waterfall allocation + order qty. Uses 7f receiving data for inbound (pieces still in transit)." },
-  { term: "After DOC (Core)", desc: "Core inventory after orders. = (All-In + Core Order + Mix Adj - Bundle Orders × qty_per_bundle) ÷ DSR. Subtracts bundle orders that consume core pieces." },
-  { term: "Raw 20d Min", desc: "When Fill Rec recommends core, minimum order covers 20 days of DSR as raw material = DSR × 20." },
-  { term: "Raw Waterfall", desc: "Core raw units are allocated across its bundles by priority: lowest effective DOC gets raw first until reaching Target DOC, then next bundle. When raw runs out, remaining bundles get nothing." },
+  { term: "B.MOQ", desc: "Bundle MOQ per vendor (editable, only in Bundles/Mix view)." },
+  { term: "After DOC (Bundle)", desc: "Base = (FIB Inv + 7f Inbound + PPRC) ÷ DSR + raw waterfall allocation + order qty." },
+  { term: "After DOC (Core)", desc: "Core inventory after orders. = (All-In + Core Order + Mix Adj - Bundle Orders × qty_per_bundle) ÷ DSR." },
+  { term: "Raw 20d Min", desc: "Minimum order covers 20 days of DSR as raw material = DSR × 20." },
+  { term: "Raw Waterfall", desc: "Core raw units allocated across bundles by priority: lowest effective DOC gets raw first." },
   { term: "PO#", desc: "Auto-generated: PO-ExcelSerial-VendorCode. Override with manual entry." },
-  { term: "💬 Vendor Notes", desc: "Click to view/add notes about a vendor. Categories: Communication, Lead Time, Pricing, Discount, Quality, Other. Notes are persistent and shared — visible to all users. Blue badge shows count." },
-  { term: "Orders Tab", desc: "PO History from 7f Receiving. View by PO (newest first), by Vendor (highest spend first), or by Core/JLS. Click to expand and see line items. Search by PO#, vendor, or core/JLS#." },
+  { term: "💬 Vendor Notes", desc: "Click to view/add notes about a vendor. Categories: Communication, Lead Time, Pricing, Discount, Quality, Other." },
+  { term: "Orders Tab", desc: "PO History from 7f Receiving. View by PO, by Vendor, or by Core/JLS." },
   { term: "Quick Sum", desc: "Click numeric cells to select them. Sum & Avg appear in the bottom bar. Click ✕ to clear." },
 ];
 
@@ -144,14 +143,22 @@ function GlossTab() {
 }
 
 // === MAIN APP ===
-const TABS = [{ id: "purchasing", l: "Purchasing" }, { id: "core", l: "Core Detail" }, { id: "bundle", l: "Bundle Detail" }, { id: "orders", l: "Orders" }, { id: "vendors", l: "Vendors" }, { id: "glossary", l: "Glossary" }];
+const TABS = [
+  { id: "dashboard", l: "Dashboard" },
+  { id: "purchasing", l: "Purchasing" },
+  { id: "core", l: "Core Detail" },
+  { id: "bundle", l: "Bundle Detail" },
+  { id: "orders", l: "Orders" },
+  { id: "vendors", l: "Vendors" },
+  { id: "glossary", l: "Glossary" }
+];
 
 export default function App() {
   const urlParams = useMemo(() => new URLSearchParams(window.location.search), []);
   const initCore = urlParams.get('core');
   const initBundle = urlParams.get('bundle');
   const initVendorParam = urlParams.get('vendor');
-  const [tab, setTab] = useState(initCore ? "core" : initBundle ? "bundle" : "purchasing");
+  const [tab, setTab] = useState(initCore ? "core" : initBundle ? "bundle" : initVendorParam ? "purchasing" : "dashboard");
   const [showS, setShowS] = useState(false);
   const [stg, setStg] = useState({ buyer: '', domesticDoc: 90, intlDoc: 180, fA: "yes", fI: "blank", fV: "yes" });
   const [coreId, setCoreId] = useState(initCore || null);
@@ -183,7 +190,6 @@ export default function App() {
   }, []);
   useEffect(() => { load() }, [load]);
 
-  // UPDATED: pass _coreInv, _coreDays, _bundleSales for seasonal forecasting v2
   const dataH = useMemo(() => ({ ...data, _coreInv: hist.coreInv, _coreDays: daily.coreDays, _bundleSales: hist.bundleSales }), [data, hist, daily]);
 
   const sc = useMemo(() => {
@@ -231,7 +237,7 @@ export default function App() {
       <header className="bg-gray-900 border-b border-gray-800 px-4 py-3 sticky top-0 z-40">
         <div className="flex items-center justify-between max-w-7xl mx-auto">
           <div className="flex items-center gap-3">
-            <h1 className="text-white font-bold text-lg">FBA Dashboard <span className="text-xs text-blue-400">V2.5</span></h1>
+            <h1 className="text-white font-bold text-lg">FBA Dashboard <span className="text-xs text-blue-400">V3</span></h1>
             <span className="text-xs text-emerald-400 bg-emerald-400/10 px-2 py-0.5 rounded font-medium">LIVE — {data.cores.length}</span>
             {stg.buyer && <span className="text-xs text-gray-400 bg-gray-800 px-2 py-0.5 rounded">{stg.buyer}</span>}
             {fTs(ts) && <span className="text-xs text-gray-500">{fTs(ts)}</span>}
@@ -252,6 +258,7 @@ export default function App() {
         <div className="flex gap-0 max-w-7xl mx-auto overflow-x-auto">{TABS.map(t => <button key={t.id} onClick={() => { setPrevTab(tab); setTab(t.id); if (t.id !== "core") setCoreId(null); if (t.id !== "bundle") setBundleId(null); clearSum() }} className={`px-4 py-2.5 text-sm font-medium border-b-2 whitespace-nowrap ${tab === t.id ? "border-blue-500 text-blue-400" : "border-transparent text-gray-500 hover:text-gray-300"}`}>{t.l}</button>)}</div>
       </nav>
       <main className="max-w-7xl mx-auto">
+        {tab === "dashboard" && <DashboardSummary data={dataH} stg={stg} goVendor={goVendor} workflow={data.workflow} saveWorkflow={saveWorkflow} deleteWorkflow={deleteWorkflow} vendorComments={data.vendorComments} saveVendorComment={saveVendorComment} onEnterPurchasing={() => setTab("purchasing")} />}
         {tab === "purchasing" && <PurchTab data={dataH} stg={stg} goCore={goCore} goBundle={goBundle} goVendor={goVendor} ov={ov} setOv={setOv} initV={initV} clearIV={clearIV} saveWorkflow={saveWorkflow} deleteWorkflow={deleteWorkflow} saveVendorComment={saveVendorComment} />}
         {tab === "core" && <CoreTab data={data} stg={stg} hist={hist} daily={daily} coreId={coreId} onBack={handleBackFromCore} goBundle={goBundle} />}
         {tab === "bundle" && <BundleTab data={data} stg={stg} hist={hist} daily={daily} bundleId={bundleId} onBack={handleBackFromBundle} goCore={goCore} />}
