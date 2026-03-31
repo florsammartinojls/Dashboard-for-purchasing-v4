@@ -3,7 +3,7 @@ import React, { useState, useMemo } from "react";
 import { R, D1, $, gS, cAI, cNQ, gTD, isD } from "../lib/utils";
 import { Dot, WorkflowChip, VendorNotes } from "./Shared";
 
-export default function DashboardSummary({ data, stg, goVendor, workflow, saveWorkflow, deleteWorkflow, vendorComments, saveVendorComment, onEnterPurchasing }) {
+export default function DashboardSummary({ data, stg, goVendor, workflow, saveWorkflow, deleteWorkflow, vendorComments, saveVendorComment, onEnterPurchasing, activeBundleCores }) {
   const [originF, setOriginF] = useState("all");
   const [showCleanup, setShowCleanup] = useState(false);
   const [showDead, setShowDead] = useState(false);
