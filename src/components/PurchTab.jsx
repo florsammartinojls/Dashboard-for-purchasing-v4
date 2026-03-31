@@ -34,6 +34,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
   const [dismissed, setDismissed] = useState({});
   const [showIgnored, setShowIgnored] = useState(false);
   const [showNoBundleCores, setShowNoBundleCores] = useState(false);
+  const [breakdown, setBreakdown] = useState(null);
   const [aglMap, setAglMap] = useState({}); // vendor → true/false
 
   useEffect(() => { if (initV) { setVm("vendor"); setVf(initV); clearIV() } }, [initV, clearIV]);
@@ -449,8 +450,9 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
         onClick={() => setShowNoBundleCores(!showNoBundleCores)} 
         className={`ml-1 px-2 py-0.5 rounded text-xs ${showNoBundleCores ? "bg-amber-500/20 text-amber-400" : "bg-gray-700 text-gray-500"}`}
       >
-        {showNoBundleCores ? "Hide" : "Show"} No-Bundle
-      </button>
+      {showNoBundleCores ? "Hide" : "Show"} No-Bundle
+      </button>}
+      <button onClick={() => setShowIgnored(!showIgnored)} className={`ml-1 px-2 py-0.5 rounded text-xs ${showIgnored ? "bg-red-500/20 text-red-400" : "bg-gray-700 text-gray-500"}`}>{showIgnored ? "Hide" : "Show"} Ignored</button>
       </div>
     </div>
     {vm === "vendor" && <div className="flex flex-wrap gap-3 mb-4 items-center text-sm"><span className="text-gray-500 text-xs">PO#:</span><input type="text" value={poN} onChange={e => setPoN(e.target.value)} placeholder="Auto" className="bg-gray-800 border border-gray-700 text-white rounded px-2 py-1 w-28 text-sm" /><span className="text-gray-500 text-xs">Date:</span><input type="date" value={poD} onChange={e => setPoD(e.target.value)} className="bg-gray-800 border border-gray-700 text-white rounded px-2 py-1 text-sm" /><span className="text-gray-500 text-xs">Buyer:</span><span className="text-white font-semibold">{stg.buyer || <span className="text-red-400">Set in ⚙️</span>}</span></div>}
