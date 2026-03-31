@@ -9,6 +9,7 @@ import { Dot, WorkflowChip, VendorNotes } from "./Shared";
 export default function DashboardSummary({ data, stg, goVendor, workflow, saveWorkflow, deleteWorkflow, vendorComments, saveVendorComment, onEnterPurchasing }) {
   const [originF, setOriginF] = useState("all");
   const [showCleanup, setShowCleanup] = useState(false);
+  const [showDead, setShowDead] = useState(false);
   const [expandedSection, setExpandedSection] = useState({ critical: true, warning: true, ok: false });
 
   const vMap = useMemo(() => {
@@ -20,12 +21,30 @@ export default function DashboardSummary({ data, stg, goVendor, workflow, saveWo
   // ── Identify cores without bundles (active cores with no active bundle) ──
   const activeBundleCores = useMemo(() => {
     const set = new Set();
-    (data.bundles || []).filter(b => b.active === "Yes").forEach(b => { if (b.core1) set.add(b.core1) });
+    const activeBundleJLS = new Set();
+    (data.bundles || []).filter(b => b.active === "Yes").forEach(b => {
+      // Direct core1/core2/core3 links
+      if (b.core1) set.add(b.core1);
+      if (b.core2) set.add(b.core2);
+      if (b.core3) set.add(b.core3);
+      // Track active bundle JLS for jlsList matching
+      activeBundleJLS.add(b.j.trim().toLowerCase());
+    });
+    // Also check cores' jlsList field (Attached JLS #s)
+    (data.cores || []).forEach(c => {
+      if (set.has(c.id)) return; // already matched
+      const raw = (c.jlsList || "").split(/[,;\n\r]+/).map(j => j.trim().toLowerCase()).filter(Boolean);
+      if (raw.some(j => activeBundleJLS.has(j))) set.add(c.id);
+    });
     return set;
-  }, [data.bundles]);
+  }, [data.bundles, data.cores]);
 
   const noBundleCores = useMemo(() =>
     (data.cores || []).filter(c => c.active === "Yes" && c.visible === "Yes" && !activeBundleCores.has(c.id) && c.dsr > 0)
+  , [data.cores, activeBundleCores]);
+
+  const deadCores = useMemo(() =>
+    (data.cores || []).filter(c => c.active === "Yes" && c.visible === "Yes" && !activeBundleCores.has(c.id) && (!c.dsr || c.dsr === 0))
   , [data.cores, activeBundleCores]);
 
   // ── Vendor-level aggregation ──
@@ -254,6 +273,45 @@ export default function DashboardSummary({ data, stg, goVendor, workflow, saveWo
                 </div>
               ))}
               {noBundleCores.length > 20 && <span className="text-[10px] text-gray-600">+{noBundleCores.length - 20} more</span>}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Dead cores: active, no bundle, no sales */}
+      {deadCores.length > 0 && (
+        <div className="bg-red-900/10 border border-red-500/15 rounded-lg px-4 py-2.5 mb-5">
+          <div className="flex justify-between items-center cursor-pointer" onClick={() => setShowDead(!showDead)}>
+            <span className="text-xs text-red-400/80">
+              ⚠ {deadCores.length} active core{deadCores.length !== 1 ? "s" : ""} with NO sales and NO active bundle — consider deactivating
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={e => {
+                  e.stopPropagation();
+                  const header = "Core ID,Title,Vendor,DOC,All-In,MOQ\n";
+                  const rows = deadCores.map(c => [c.id, '"' + (c.ti || "").replace(/"/g, '""') + '"', '"' + (c.ven || "") + '"', c.doc || 0, cAI(c), c.moq || 0].join(",")).join("\n");
+                  const blob = new Blob([header + rows], { type: "text/csv" });
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement("a"); a.href = url; a.download = "dead_cores_no_bundle_no_sales.csv"; a.click();
+                  URL.revokeObjectURL(url);
+                }}
+                className="text-[10px] text-red-400 hover:text-red-300 bg-red-400/10 px-2 py-0.5 rounded"
+              >⬇ CSV</button>
+              <span className="text-[10px] text-gray-600">{showDead ? "▲" : "▼"}</span>
+            </div>
+          </div>
+          {showDead && (
+            <div className="mt-2 space-y-0.5 max-h-40 overflow-y-auto">
+              {deadCores.slice(0, 20).map(c => (
+                <div key={c.id} className="flex items-center gap-3 text-[11px] text-gray-500 py-0.5">
+                  <span className="text-blue-400 font-mono">{c.id}</span>
+                  <span className="truncate flex-1">{c.ti}</span>
+                  <span>{c.ven}</span>
+                  <span className="text-red-400/60">DSR: 0</span>
+                </div>
+              ))}
+              {deadCores.length > 20 && <span className="text-[10px] text-gray-600">+{deadCores.length - 20} more — download CSV for full list</span>}
             </div>
           )}
         </div>
