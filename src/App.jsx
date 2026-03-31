@@ -192,6 +192,30 @@ export default function App() {
 
   const dataH = useMemo(() => ({ ...data, _coreInv: hist.coreInv, _coreDays: daily.coreDays, _bundleSales: hist.bundleSales }), [data, hist, daily]);
 
+  // Cores that have at least one effectively-active bundle (shared between Dashboard + PurchTab)
+  const activeBundleCores = useMemo(() => {
+    const set = new Set();
+    const activeBundleJLS = new Set();
+    const bI = stg.bI || "blank";
+    (data.bundles || []).filter(b => {
+      if (b.active !== "Yes") return false;
+      if (bI === "blank" && !!b.ignoreUntil) return false;
+      if (bI === "set" && !b.ignoreUntil) return false;
+      return true;
+    }).forEach(b => {
+      if (b.core1) set.add(b.core1);
+      if (b.core2) set.add(b.core2);
+      if (b.core3) set.add(b.core3);
+      activeBundleJLS.add(b.j.trim().toLowerCase());
+    });
+    (data.cores || []).forEach(c => {
+      if (set.has(c.id)) return;
+      const raw = (c.jlsList || "").split(/[,;\n\r]+/).map(j => j.trim().toLowerCase()).filter(Boolean);
+      if (raw.some(j => activeBundleJLS.has(j))) set.add(c.id);
+    });
+    return set;
+  }, [data.bundles, data.cores, stg]);
+
   const sc = useMemo(() => {
     const c = { critical: 0, warning: 0, healthy: 0 };
     (data.cores || []).forEach(x => {
@@ -258,8 +282,8 @@ export default function App() {
         <div className="flex gap-0 max-w-7xl mx-auto overflow-x-auto">{TABS.map(t => <button key={t.id} onClick={() => { setPrevTab(tab); setTab(t.id); if (t.id !== "core") setCoreId(null); if (t.id !== "bundle") setBundleId(null); clearSum() }} className={`px-4 py-2.5 text-sm font-medium border-b-2 whitespace-nowrap ${tab === t.id ? "border-blue-500 text-blue-400" : "border-transparent text-gray-500 hover:text-gray-300"}`}>{t.l}</button>)}</div>
       </nav>
       <main className="max-w-7xl mx-auto">
-        {tab === "dashboard" && <DashboardSummary data={dataH} stg={stg} goVendor={goVendor} workflow={data.workflow} saveWorkflow={saveWorkflow} deleteWorkflow={deleteWorkflow} vendorComments={data.vendorComments} saveVendorComment={saveVendorComment} onEnterPurchasing={() => setTab("purchasing")} />}
-        {tab === "purchasing" && <PurchTab data={dataH} stg={stg} goCore={goCore} goBundle={goBundle} goVendor={goVendor} ov={ov} setOv={setOv} initV={initV} clearIV={clearIV} saveWorkflow={saveWorkflow} deleteWorkflow={deleteWorkflow} saveVendorComment={saveVendorComment} />}
+        {tab === "dashboard" && <DashboardSummary data={dataH} stg={stg} goVendor={goVendor} workflow={data.workflow} saveWorkflow={saveWorkflow} deleteWorkflow={deleteWorkflow} vendorComments={data.vendorComments} saveVendorComment={saveVendorComment} onEnterPurchasing={() => setTab("purchasing")} activeBundleCores={activeBundleCores} />}
+        {tab === "purchasing" && <PurchTab data={dataH} stg={stg} goCore={goCore} goBundle={goBundle} goVendor={goVendor} ov={ov} setOv={setOv} initV={initV} clearIV={clearIV} saveWorkflow={saveWorkflow} deleteWorkflow={deleteWorkflow} saveVendorComment={saveVendorComment} activeBundleCores={activeBundleCores} />}
         {tab === "core" && <CoreTab data={data} stg={stg} hist={hist} daily={daily} coreId={coreId} onBack={handleBackFromCore} goBundle={goBundle} />}
         {tab === "bundle" && <BundleTab data={data} stg={stg} hist={hist} daily={daily} bundleId={bundleId} onBack={handleBackFromBundle} goCore={goCore} />}
         {tab === "orders" && <OrdersTab data={data} />}
