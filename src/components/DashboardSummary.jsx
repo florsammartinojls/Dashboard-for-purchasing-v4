@@ -76,12 +76,12 @@ export default function DashboardSummary({ data, stg, goVendor, workflow, saveWo
         critCores: [], warnCores: []
       };
       const vs = g[c.ven];
-      vs[st === "critical" ? "cr" : st === "warning" ? "wa" : "he"]++;
+      if (st === "critical" && nq > 0) vs.cr++; else if (st === "critical" && nq <= 0) vs.he++; // covered by bundles, not actionable else if (st === "warning") vs.wa++; else vs.he++;
       vs.cores++;
       vs.totalDsr += c.dsr || 0;
       if (c.doc < vs.minDoc) vs.minDoc = c.doc;
       if (nq > 0) { vs.needBuy++; vs.totalCost += cost; }
-      if (st === "critical") vs.critCores.push({ id: c.id, ti: c.ti, doc: c.doc, dsr: c.dsr, needQty: nq, cost });
+      if (st === "critical" && nq > 0) vs.critCores.push({ id: c.id, ti: c.ti, doc: c.doc, dsr: c.dsr, needQty: nq, cost });
       if (st === "warning") vs.warnCores.push({ id: c.id, ti: c.ti, doc: c.doc, dsr: c.dsr, needQty: nq, cost });
     });
     return Object.values(g).map(v => ({
