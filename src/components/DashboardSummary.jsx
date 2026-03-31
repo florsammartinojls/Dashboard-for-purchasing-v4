@@ -180,8 +180,8 @@ export default function DashboardSummary({ data, stg, goVendor, workflow, saveWo
                 <span className="w-1.5 h-1.5 rounded-full bg-red-500 flex-shrink-0" />
                 <span className="text-blue-400 font-mono">{c.id}</span>
                 <span className="text-gray-400 truncate flex-1">{c.ti}</span>
-                <span className="text-red-400 font-semibold">DOC {c.doc}</span>
-                {c.cost > 0 && <span className="text-gray-500">{$(c.cost)}</span>}
+                <span className="text-red-400 font-semibold">DOC {Math.round(c.doc)}</span>
+                {c.cost > 0 && <span className="text-gray-500">{$(Math.round(c.cost))}</span>}  
               </div>
             ))}
             {v.critCores.length > 3 && <span className="text-[10px] text-gray-600">+{v.critCores.length - 3} more</span>}
