@@ -10,6 +10,7 @@ export default function DashboardSummary({ data, stg, goVendor, workflow, saveWo
   const [originF, setOriginF] = useState("all");
   const [showCleanup, setShowCleanup] = useState(false);
   const [showDead, setShowDead] = useState(false);
+  const [showHousekeeping, setShowHousekeeping] = useState(false);
   const [expandedSection, setExpandedSection] = useState({ critical: true, warning: true, ok: false });
 
   const vMap = useMemo(() => {
@@ -316,6 +317,7 @@ export default function DashboardSummary({ data, stg, goVendor, workflow, saveWo
           )}
         </div>
       )}
+      </>}
 
       {/* ══ Filters + Enter full view ══ */}
       <div className="flex flex-wrap items-center gap-2 mb-5">
@@ -328,6 +330,13 @@ export default function DashboardSummary({ data, stg, goVendor, workflow, saveWo
           <option value="us">US Only</option>
           <option value="intl">International</option>
         </select>
+
+        <button
+          onClick={() => setShowHousekeeping(!showHousekeeping)}
+          className={`text-xs px-3 py-1.5 rounded-lg font-medium ${showHousekeeping ? "bg-amber-600 text-white" : "bg-gray-800 border border-gray-700 text-gray-400"}`}
+        >
+          🧹 {noBundleCores.length + deadCores.length} Cleanup{showHousekeeping ? " ✓" : ""}
+        </button>
 
         <div className="flex gap-2 text-xs ml-auto">
           <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-500" />{totalCrit}</span>
