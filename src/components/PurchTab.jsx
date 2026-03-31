@@ -275,13 +275,17 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
 
         // 4. Core raw: ONLY when there are B.MOQ converted extras. 
         // If bundles cover 100% of core sales → no core raw needed
-        const hasBundlesCoveringCore = cBundles.length > 0;
+       // 4. Core raw: order as core when bundles didn't cover the need
         let coreRawNeed = 0;
         if (coreExtrasFromBundles.pieces > 0) {
-          // Have converted B.MOQ extras that couldn't go as bundles → order as core
+          // B.MOQ converted extras → order as core
           coreRawNeed = coreExtrasFromBundles.pieces;
-        } else if (!hasBundlesCoveringCore && coreNeed > 0) {
-          // No bundles at all → order as core raw
+        } else if (cBundles.length === 0 && coreNeed > 0) {
+          // No bundles at all → order as core
+          coreRawNeed = coreNeed;
+        } else if (coreNeed > 0 && totalBundleOrderCorePcs === 0) {
+          // Bundles exist but none needed ordering (PPRC covers them)
+          // Still need to order core raw to cover the gap
           coreRawNeed = coreNeed;
         }
         // Note: if bundles exist but total bundle order < coreNeed, that's OK — 
