@@ -399,8 +399,8 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
     const bCasePack = casePackFromRec[b.j] || 0;
     const alloc = rawAllocMap[b.j] || { rawUnits: 0, baseDOC: 0, baseInv: 0 };
     const effectiveDOC = b.cd > 0 ? Math.round((alloc.baseInv + alloc.rawUnits + eq) / b.cd) : null;
-    return <tr className={`border-t border-gray-800/20 hover:bg-indigo-900/10 text-xs ${hasBundleOrd(b) ? "bg-emerald-900/10" : "bg-indigo-950/20"}`}>
-      <td className="py-1 px-1 sticky left-0 bg-indigo-950/20 z-10" />
+    return <tr className={`border-t border-gray-800/20 hover:bg-indigo-900/10 text-xs ${hasBundleOrd(b) ? "bg-emerald-900/10" : "bg-indigo-950/30"}`}>
+      <td className="py-1 px-1 sticky left-0 bg-indigo-950/30 z-10 border-l-2 border-indigo-500/40" /> ```  Y actualizá los otros sticky backgrounds de indigo en BundleRow de `/20` a `/30`: ``` bg-indigo-950/20 → bg-indigo-950/30
       <td className="py-1 px-1 sticky left-5 bg-indigo-950/20 z-10"><button onClick={() => goBundle(b.j)} className="text-indigo-400 font-mono hover:underline">{b.j}</button></td>
       <td className="py-1 px-1 text-indigo-200 truncate max-w-[100px] sticky left-24 bg-indigo-950/20 z-10">
         {b.t}{b.asin && <a href={`https://sellercentral.amazon.com/myinventory/inventory?fulfilledBy=all&page=1&pageSize=25&searchField=all&searchTerm=${b.asin}&sort=date_created_desc&status=all`} target="_blank" rel="noopener noreferrer" className="ml-1 text-gray-500 hover:text-blue-400 text-[9px] font-mono">{b.asin}</a>}
