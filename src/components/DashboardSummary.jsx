@@ -1,10 +1,11 @@
 // src/components/DashboardSummary.jsx
 import React, { useState, useMemo } from "react";
 import { R, D1, $, gS, cAI, cNQ, gTD, isD } from "../lib/utils";
-import { Dot } from "./Shared";
+import { Dot, WorkflowChip } from "./Shared";
 
 export default function DashboardSummary({ data, stg, goVendor, workflow, saveWorkflow, deleteWorkflow, vendorComments, saveVendorComment, onEnterPurchasing, activeBundleCores }) {
   const [originF, setOriginF] = useState("all");
+  const [statusF, setStatusF] = useState("untriaged");
   const [showCleanup, setShowCleanup] = useState(false);
   const [showDead, setShowDead] = useState(false);
   const [showHousekeeping, setShowHousekeeping] = useState(false);
@@ -15,6 +16,21 @@ export default function DashboardSummary({ data, stg, goVendor, workflow, saveWo
     (data.vendors || []).forEach(v => m[v.name] = v);
     return m;
   }, [data.vendors]);
+
+  // ── Workflow helpers ──
+  const wfMap = useMemo(() => {
+    const m = {};
+    (workflow || []).forEach(w => m[w.id] = w);
+    return m;
+  }, [workflow]);
+
+  const getWf = (id) => wfMap[id] || null;
+  const getWfStatus = (id) => wfMap[id]?.status || null;
+  const hasAnyStatus = (id) => {
+    const wf = wfMap[id];
+    return wf && wf.status && wf.status !== "";
+  };
+  const wfColor = { Buy: "bg-emerald-500/20 text-emerald-400", Reviewing: "bg-amber-500/20 text-amber-400", Ignore: "bg-red-500/20 text-red-400", Done: "bg-blue-500/20 text-blue-400" };
 
   // ── Cleanup lists ──
   const noBundleCores = useMemo(() =>
@@ -32,7 +48,7 @@ export default function DashboardSummary({ data, stg, goVendor, workflow, saveWo
     return s;
   }, [noBundleCores, deadCores]);
 
-  // ── Vendor-level aggregation (EXCLUDES no-bundle cores) ──
+  // ── Vendor-level aggregation ──
   const vendorStats = useMemo(() => {
     const g = {};
     (data.cores || []).filter(c => {
@@ -75,18 +91,26 @@ export default function DashboardSummary({ data, stg, goVendor, workflow, saveWo
     }));
   }, [data.cores, vMap, stg, noBundleSet]);
 
-  // ── Apply origin filter ──
+  // ── Apply origin + status filters ──
   const filtered = useMemo(() => {
     let arr = vendorStats;
     if (originF === "us") arr = arr.filter(v => v.isDom);
     if (originF === "intl") arr = arr.filter(v => !v.isDom);
+    // Status filter
+    if (statusF === "untriaged") arr = arr.filter(v => !hasAnyStatus(v.name));
+    else if (statusF === "Buy") arr = arr.filter(v => getWfStatus(v.name) === "Buy");
+    else if (statusF === "Reviewing") arr = arr.filter(v => getWfStatus(v.name) === "Reviewing");
+    else if (statusF === "Ignore") arr = arr.filter(v => getWfStatus(v.name) === "Ignore");
+    else if (statusF === "Done") arr = arr.filter(v => getWfStatus(v.name) === "Done");
+    // "all" shows everything
     return arr;
-  }, [vendorStats, originF]);
+  }, [vendorStats, originF, statusF, wfMap]);
 
   const critVendors = useMemo(() => filtered.filter(v => v.urgency === "critical").sort((a, b) => a.minDoc - b.minDoc), [filtered]);
   const warnVendors = useMemo(() => filtered.filter(v => v.urgency === "warning").sort((a, b) => a.minDoc - b.minDoc), [filtered]);
   const okVendors = useMemo(() => filtered.filter(v => v.urgency === "ok").sort((a, b) => a.name.localeCompare(b.name)), [filtered]);
 
+  // Totals from filtered (react to all filters)
   const totalCrit = filtered.reduce((s, v) => s + v.cr, 0);
   const totalWarn = filtered.reduce((s, v) => s + v.wa, 0);
   const totalOk = filtered.reduce((s, v) => s + v.he, 0);
@@ -94,16 +118,19 @@ export default function DashboardSummary({ data, stg, goVendor, workflow, saveWo
   const totalCost = filtered.reduce((s, v) => s + v.totalCost, 0);
   const critVendorCount = critVendors.length;
 
-  const isIgnored = (id) => {
-    const wf = (workflow || []).find(w => w.id === id);
-    if (!wf || wf.status !== "Ignore") return false;
-    if (!wf.ignoreUntil) return true;
-    const until = new Date(wf.ignoreUntil);
-    return !isNaN(until.getTime()) && until >= new Date(new Date().toDateString());
-  };
-
-  const getWfStatus = (id) => ((workflow || []).find(w => w.id === id))?.status || null;
-  const wfColor = { Buy: "bg-emerald-500/20 text-emerald-400", Reviewing: "bg-amber-500/20 text-amber-400", Ignore: "bg-red-500/20 text-red-400", Done: "bg-blue-500/20 text-blue-400" };
+  // Count by workflow status (for filter labels)
+  const wfCounts = useMemo(() => {
+    const c = { untriaged: 0, Buy: 0, Reviewing: 0, Ignore: 0, Done: 0 };
+    let arr = vendorStats;
+    if (originF === "us") arr = arr.filter(v => v.isDom);
+    if (originF === "intl") arr = arr.filter(v => !v.isDom);
+    arr.forEach(v => {
+      const st = getWfStatus(v.name);
+      if (!st) c.untriaged++;
+      else if (c[st] !== undefined) c[st]++;
+    });
+    return c;
+  }, [vendorStats, originF, wfMap]);
 
   const downloadCSV = (rows, filename, header) => {
     const blob = new Blob([header + "\n" + rows.join("\n")], { type: "text/csv" });
@@ -112,32 +139,38 @@ export default function DashboardSummary({ data, stg, goVendor, workflow, saveWo
     URL.revokeObjectURL(url);
   };
 
+  // ── Vendor Card ──
   const VendorCard = ({ v }) => {
-    if (isIgnored(v.name)) return null;
     const borderCls = v.urgency === "critical" ? "border-red-500/30" : v.urgency === "warning" ? "border-amber-500/30" : "border-gray-800";
     const wfSt = getWfStatus(v.name);
     return (
       <div className={`border rounded-lg overflow-hidden ${borderCls} hover:border-gray-600 transition-colors`}>
-        <div className="flex items-center gap-3 px-4 py-3 bg-gray-900/50 hover:bg-gray-800/80 cursor-pointer" onClick={() => goVendor(v.name)}>
-          <Dot status={v.urgency} />
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-white font-semibold text-sm">{v.name}</span>
-              <span className="text-[10px] text-gray-500 bg-gray-800 px-1.5 py-0.5 rounded">{v.country || "—"}</span>
-              <span className="text-[10px] text-gray-500">LT:{v.lt}d</span>
-              {wfSt && <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${wfColor[wfSt] || "bg-gray-700 text-gray-400"}`}>{wfSt}</span>}
+        <div className="flex items-center gap-3 px-4 py-3 bg-gray-900/50 hover:bg-gray-800/80">
+          <div className="cursor-pointer flex items-center gap-3 flex-1 min-w-0" onClick={() => goVendor(v.name)}>
+            <Dot status={v.urgency} />
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-white font-semibold text-sm">{v.name}</span>
+                <span className="text-[10px] text-gray-500 bg-gray-800 px-1.5 py-0.5 rounded">{v.country || "—"}</span>
+                <span className="text-[10px] text-gray-500">LT:{v.lt}d</span>
+                {wfSt && <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${wfColor[wfSt] || "bg-gray-700 text-gray-400"}`}>{wfSt}</span>}
+              </div>
+              <div className="flex items-center gap-3 mt-1 text-xs text-gray-500">
+                <span>{v.cores} cores</span>
+                {v.cr > 0 && <span className="text-red-400 font-semibold">{v.cr} critical</span>}
+                {v.wa > 0 && <span className="text-amber-400 font-semibold">{v.wa} warning</span>}
+                {v.needBuy > 0 && <span className="text-amber-300">{v.needBuy} need buy</span>}
+                {v.minDoc <= 7 && v.minDoc >= 0 && <span className="text-red-400 font-bold">DOC {v.minDoc}d</span>}
+              </div>
             </div>
-            <div className="flex items-center gap-3 mt-1 text-xs text-gray-500">
-              <span>{v.cores} cores</span>
-              {v.cr > 0 && <span className="text-red-400 font-semibold">{v.cr} critical</span>}
-              {v.wa > 0 && <span className="text-amber-400 font-semibold">{v.wa} warning</span>}
-              {v.needBuy > 0 && <span className="text-amber-300">{v.needBuy} need buy</span>}
-              {v.minDoc <= 7 && v.minDoc >= 0 && <span className="text-red-400 font-bold">DOC {v.minDoc}d</span>}
+            <div className="flex items-center gap-2 flex-shrink-0">
+              {v.totalCost > 0 && <span className="text-amber-300 text-sm font-semibold">{$(v.totalCost)}</span>}
+              <span className="text-gray-600 text-xs">→</span>
             </div>
           </div>
-          <div className="flex items-center gap-2 flex-shrink-0">
-            {v.totalCost > 0 && <span className="text-amber-300 text-sm font-semibold">{$(v.totalCost)}</span>}
-            <span className="text-gray-600 text-xs">→</span>
+          {/* Workflow chip — click stops propagation so it doesn't open vendor */}
+          <div className="relative flex-shrink-0" onClick={e => e.stopPropagation()}>
+            <WorkflowChip id={v.name} type="vendor" workflow={workflow} onSave={saveWorkflow} onDelete={deleteWorkflow} buyer={stg.buyer || ""} />
           </div>
         </div>
         {v.critCores.length > 0 && v.critCores.length <= 5 && (
@@ -209,25 +242,47 @@ export default function DashboardSummary({ data, stg, goVendor, workflow, saveWo
         </div>
       )}
 
+      {/* ══ Filters ══ */}
       <div className="flex flex-wrap items-center gap-2 mb-5">
         <select value={originF} onChange={e => setOriginF(e.target.value)} className="bg-gray-800 border border-gray-700 text-gray-300 text-sm rounded-lg px-2 py-1.5">
           <option value="all">All Origins</option>
           <option value="us">US Only</option>
           <option value="intl">International</option>
         </select>
+
+        {/* Status/triage filter */}
+        <div className="flex bg-gray-800 rounded-lg p-0.5 gap-0.5">
+          {[
+            { k: "untriaged", l: "To Do", c: wfCounts.untriaged },
+            { k: "all", l: "All", c: null },
+            { k: "Buy", l: "Buy", c: wfCounts.Buy },
+            { k: "Reviewing", l: "Review", c: wfCounts.Reviewing },
+            { k: "Ignore", l: "Ignore", c: wfCounts.Ignore },
+            { k: "Done", l: "Done", c: wfCounts.Done },
+          ].map(f => (
+            <button key={f.k} onClick={() => setStatusF(f.k)}
+              className={`px-2 py-1 rounded text-xs font-medium ${statusF === f.k ? "bg-blue-600 text-white" : "text-gray-400 hover:text-gray-200"}`}>
+              {f.l}{f.c != null && f.c > 0 ? ` ${f.c}` : ""}
+            </button>
+          ))}
+        </div>
+
         <button onClick={() => setShowHousekeeping(!showHousekeeping)} className={`text-xs px-3 py-1.5 rounded-lg font-medium ${showHousekeeping ? "bg-amber-600 text-white" : "bg-gray-800 border border-gray-700 text-gray-400"}`}>
           🧹 {filteredNoBundleCores.length + filteredDeadCores.length} Cleanup{showHousekeeping ? " ✓" : ""}
         </button>
+
         <div className="flex gap-2 text-xs ml-auto">
           <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-500" />{totalCrit}</span>
           <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-500" />{totalWarn}</span>
           <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500" />{totalOk}</span>
         </div>
+
         <button onClick={onEnterPurchasing} className="text-xs bg-blue-600/80 text-white px-3 py-1.5 rounded-lg font-medium hover:bg-blue-600 transition-colors">
           Full Purchasing View →
         </button>
       </div>
 
+      {/* ══ Housekeeping ══ */}
       {showHousekeeping && (
         <div className="space-y-2 mb-5">
           {filteredNoBundleCores.length > 0 && (
@@ -281,11 +336,16 @@ export default function DashboardSummary({ data, stg, goVendor, workflow, saveWo
         </div>
       )}
 
+      {/* ══ Vendors by urgency ══ */}
       <Section id="critical" label="Critical — order now" count={totalCrit} vendors={critVendors} />
       <Section id="warning" label="Warning — plan this week" count={totalWarn} vendors={warnVendors} />
       <Section id="ok" label="Healthy — no action needed" count={totalOk} vendors={okVendors} />
 
-      {filtered.length === 0 && <div className="text-center text-gray-500 py-12">No vendors match current filters.</div>}
+      {filtered.length === 0 && (
+        <div className="text-center text-gray-500 py-12">
+          {statusF === "untriaged" ? "All vendors have been triaged! Switch to a status filter to review them." : "No vendors match current filters."}
+        </div>
+      )}
     </div>
   );
 }
