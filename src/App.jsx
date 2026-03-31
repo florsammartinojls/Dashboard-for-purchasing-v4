@@ -230,8 +230,8 @@ export default function App() {
     return c;
   }, [data, stg]);
 
-  const goCore = useCallback(id => { setPrevTab(tab); setCoreId(id); setTab("core"); clearSum() }, [tab]);
-  const goBundle = useCallback(id => { setPrevTab(tab); setBundleId(id); setTab("bundle"); clearSum() }, [tab]);
+  const goCore = useCallback(id => { if (tab === "purchasing") { setPanelCoreId(id); setPanelBundleId(null); clearSum() } else { setPrevTab(tab); setCoreId(id); setTab("core"); clearSum() } }, [tab]);
+  const goBundle = useCallback(id => { if (tab === "purchasing" || panelCoreId) { setPanelBundleId(id); clearSum() } else { setPrevTab(tab); setBundleId(id); setTab("bundle"); clearSum() } }, [tab, panelCoreId]);
   const goVendor = useCallback(n => { window.open(window.location.pathname + '?vendor=' + encodeURIComponent(n), '_blank') }, []);
   const clearIV = useCallback(() => setInitV(null), []);
   const handleBackFromCore = useCallback(() => setTab("purchasing"), []);
