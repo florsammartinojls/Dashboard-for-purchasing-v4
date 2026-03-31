@@ -20,7 +20,14 @@ export default function DashboardSummary({ data, stg, goVendor, workflow, saveWo
   const activeBundleCores = useMemo(() => {
     const set = new Set();
     const activeBundleJLS = new Set();
-    (data.bundles || []).filter(b => b.active === "Yes").forEach(b => {
+    const bI = stg.bI || "blank";
+    (data.bundles || []).filter(b => {
+      if (b.active !== "Yes") return false;
+      // Respect bundle ignore settings (same logic as PurchTab)
+      if (bI === "blank" && !!b.ignoreUntil) return false;
+      if (bI === "set" && !b.ignoreUntil) return false;
+      return true;
+    }).forEach(b => {
       if (b.core1) set.add(b.core1);
       if (b.core2) set.add(b.core2);
       if (b.core3) set.add(b.core3);
@@ -32,7 +39,7 @@ export default function DashboardSummary({ data, stg, goVendor, workflow, saveWo
       if (raw.some(j => activeBundleJLS.has(j))) set.add(c.id);
     });
     return set;
-  }, [data.bundles, data.cores]);
+  }, [data.bundles, data.cores, stg]);
 
   // ── Cleanup lists ──
   const noBundleCores = useMemo(() =>
