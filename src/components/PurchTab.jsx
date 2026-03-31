@@ -14,7 +14,8 @@ function SC({ v, children, className }) {
 
 const AGL_LT = 80;
 
-export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, setOv, initV, clearIV, saveWorkflow, deleteWorkflow, saveVendorComment }) {
+
+export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, setOv, initV, clearIV, saveWorkflow, deleteWorkflow, saveVendorComment, activeBundleCores }) {
   const [vm, setVm] = useState(initV ? "vendor" : "core");
   const [sort, setSort] = useState("status");
   const [vf, setVf] = useState(initV || "");
@@ -32,7 +33,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
   const [collapsed, setCollapsed] = useState({});
   const [dismissed, setDismissed] = useState({});
   const [showIgnored, setShowIgnored] = useState(false);
-  const [breakdown, setBreakdown] = useState(null);
+  const [showNoBundleCores, setShowNoBundleCores] = useState(false);
   const [aglMap, setAglMap] = useState({}); // vendor → true/false
 
   useEffect(() => { if (initV) { setVm("vendor"); setVf(initV); clearIV() } }, [initV, clearIV]);
@@ -79,7 +80,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
       if (stg.fV === "yes" && c.visible !== "Yes") return false;
       if (stg.fV === "no" && c.visible === "Yes") return false;
       if (stg.fI === "blank" && !!c.ignoreUntil) return false;
-      if (stg.fI === "set" && !c.ignoreUntil) return false;
+      if (!showNoBundleCores && activeBundleCores && !activeBundleCores.has(c.id)) return false;
       return true;
     }).map(c => {
       const v = vMap[c.ven] || {}; const lt = v.lt || 30; const tg = gTD(v, stg);
@@ -109,7 +110,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
       if (sort === "dsr") return b.dsr - a.dsr;
       if (sort === "need$") return b.needDollar - a.needDollar;
       return 0;
-    }), [data, stg, vf, sf, sort, vMap, nf, minD, locF, profiles, purchFreqMap]);
+    }), [data, stg, vf, sf, sort, vMap, nf, minD, locF, profiles, purchFreqMap, showNoBundleCores, activeBundleCores]);
 
   const venBundles = useMemo(() => (data.bundles || []).filter(b => {
     if (bA === "yes" && b.active !== "Yes") return false;
@@ -444,7 +445,12 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
       {vm === "core" && <><select value={sort} onChange={e => setSort(e.target.value)} className="bg-gray-800 border border-gray-700 text-gray-300 text-sm rounded-lg px-2 py-1.5"><option value="status">Priority</option><option value="doc">DOC</option><option value="dsr">DSR</option><option value="need$">$</option></select><span className="text-gray-500 text-xs">Min:</span><input type="number" value={minD} onChange={e => setMinD(+e.target.value)} className="bg-gray-800 border border-gray-700 text-white text-sm rounded px-2 py-1 w-14" /></>}
       {vm === "vendor" && <div className="flex bg-gray-800 rounded-lg p-0.5">{[["cores", "Cores"], ["bundles", "Bundles"], ["mix", "Mix"]].map(([k, l]) => <button key={k} onClick={() => setVendorSub(k)} className={`px-2.5 py-1 rounded-md text-xs font-medium ${vendorSub === k ? "bg-indigo-600 text-white" : "text-gray-400"}`}>{l}</button>)}</div>}
       <div className="flex gap-2 ml-auto text-xs"><span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-500" />{sc.critical}</span><span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-500" />{sc.warning}</span><span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500" />{sc.healthy}</span><span className="text-gray-500">|</span><span className="text-gray-300 font-semibold">{enr.length}</span>
-      {vm === "vendor" && <button onClick={() => setShowIgnored(!showIgnored)} className={`ml-2 px-2 py-0.5 rounded text-xs ${showIgnored ? "bg-red-500/20 text-red-400" : "bg-gray-700 text-gray-500"}`}>{showIgnored ? "Hide" : "Show"} Ignored</button>}
+      {vm === "vendor" && <button 
+        onClick={() => setShowNoBundleCores(!showNoBundleCores)} 
+        className={`ml-1 px-2 py-0.5 rounded text-xs ${showNoBundleCores ? "bg-amber-500/20 text-amber-400" : "bg-gray-700 text-gray-500"}`}
+      >
+        {showNoBundleCores ? "Hide" : "Show"} No-Bundle
+      </button>
       </div>
     </div>
     {vm === "vendor" && <div className="flex flex-wrap gap-3 mb-4 items-center text-sm"><span className="text-gray-500 text-xs">PO#:</span><input type="text" value={poN} onChange={e => setPoN(e.target.value)} placeholder="Auto" className="bg-gray-800 border border-gray-700 text-white rounded px-2 py-1 w-28 text-sm" /><span className="text-gray-500 text-xs">Date:</span><input type="date" value={poD} onChange={e => setPoD(e.target.value)} className="bg-gray-800 border border-gray-700 text-white rounded px-2 py-1 text-sm" /><span className="text-gray-500 text-xs">Buyer:</span><span className="text-white font-semibold">{stg.buyer || <span className="text-red-400">Set in ⚙️</span>}</span></div>}
