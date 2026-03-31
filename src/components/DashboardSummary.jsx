@@ -221,14 +221,27 @@ export default function DashboardSummary({ data, stg, goVendor, workflow, saveWo
       {/* Cores without bundles */}
       {noBundleCores.length > 0 && (
         <div
-          className="bg-gray-800/30 border border-gray-700/50 rounded-lg px-4 py-2.5 mb-5 cursor-pointer hover:border-gray-600"
-          onClick={() => setShowCleanup(!showCleanup)}
+          className="bg-gray-800/30 border border-gray-700/50 rounded-lg px-4 py-2.5 mb-5"
         >
-          <div className="flex justify-between items-center">
+          <div className="flex justify-between items-center cursor-pointer" onClick={() => setShowCleanup(!showCleanup)}>
             <span className="text-xs text-gray-400">
               🧹 {noBundleCores.length} active core{noBundleCores.length !== 1 ? "s" : ""} with sales but no active bundle
             </span>
-            <span className="text-[10px] text-gray-600">{showCleanup ? "▲" : "▼"}</span>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={e => {
+                  e.stopPropagation();
+                  const header = "Core ID,Title,Vendor,DSR,DOC,All-In,MOQ\n";
+                  const rows = noBundleCores.map(c => [c.id, '"' + (c.ti || "").replace(/"/g, '""') + '"', '"' + (c.ven || "") + '"', c.dsr || 0, c.doc || 0, cAI(c), c.moq || 0].join(",")).join("\n");
+                  const blob = new Blob([header + rows], { type: "text/csv" });
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement("a"); a.href = url; a.download = "cores_no_bundle.csv"; a.click();
+                  URL.revokeObjectURL(url);
+                }}
+                className="text-[10px] text-blue-400 hover:text-blue-300 bg-blue-400/10 px-2 py-0.5 rounded"
+              >⬇ CSV</button>
+              <span className="text-[10px] text-gray-600">{showCleanup ? "▲" : "▼"}</span>
+            </div>
           </div>
           {showCleanup && (
             <div className="mt-2 space-y-0.5 max-h-40 overflow-y-auto">
