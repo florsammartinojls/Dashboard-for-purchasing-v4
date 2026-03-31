@@ -358,9 +358,10 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
     const hasSeasonal = c.sProfile?.hasHistory; const isUrgent = c.sCoverage?.urgent;
 
     return <><tr className={`border-t border-gray-800/30 hover:bg-gray-800/20 text-xs ${hasCoreOrd(c) ? "bg-emerald-900/10" : ""} ${isUrgent ? "bg-red-900/10" : ""}`}>
-      <td className="py-1 px-1 sticky left-0 bg-gray-950 z-10"><Dot status={c.status} /></td>
-      <td className="py-1 px-1 sticky left-5 bg-gray-950 z-10"><button onClick={() => goCore(c.id)} className="text-blue-400 font-mono hover:underline">{c.id}</button></td>
-      <td className="py-1 px-1 text-gray-200 truncate max-w-[100px] sticky left-24 bg-gray-950 z-10">{c.ti}{isUrgent && <span className="ml-1 text-red-400 text-[9px] font-bold">⚠OOS</span>}</td>
+      <td className="py-1 px-0.5 sticky left-0 bg-gray-950 z-10 w-4"><Dot status={c.status} /></td>
+      <td className="py-1 px-0.5 sticky left-4 bg-gray-950 z-10 whitespace-nowrap"><button onClick={() => goCore(c.id)} className="text-blue-400 font-mono hover:underline text-[11px]">{c.id}</button></td>
+      <td className="py-1 px-1 text-gray-200 truncate max-w-[130px] sticky left-[85px] bg-gray-950 z-10">
+        {c.ti}{isUrgent && <span className="ml-1 text-red-400 text-[9px] font-bold">⚠OOS</span>}</td>
       <SC v={c.dsr} className="py-1 px-1 text-right">{D1(c.dsr)}</SC>
       <SC v={c.d7} className="py-1 px-1 text-right">{D1(c.d7)}</SC>
       <td className="py-1 px-1 text-center">{c.d7 > c.dsr ? <span className={c.spike ? "text-orange-400 font-bold" : "text-emerald-400"}>▲</span> : c.d7 < c.dsr ? <span className="text-red-400">▼</span> : "—"}{c.spike && <span className="text-orange-400 text-xs ml-0.5">⚡</span>}</td>
@@ -401,9 +402,9 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
     const alloc = rawAllocMap[b.j] || { rawUnits: 0, baseDOC: 0, baseInv: 0 };
     const effectiveDOC = b.cd > 0 ? Math.round((alloc.baseInv + alloc.rawUnits + eq) / b.cd) : null;
     return <tr className={`border-t border-gray-800/20 hover:bg-indigo-900/10 text-xs ${hasBundleOrd(b) ? "bg-emerald-900/10" : "bg-indigo-950/30"}`}>
-      <td className="py-1 px-1 sticky left-0 bg-indigo-950/30 z-10 border-l-2 border-indigo-500/40" />
-      <td className="py-1 px-1 sticky left-5 bg-indigo-950/30 z-10"><button onClick={() => goBundle(b.j)} className="text-indigo-400 font-mono hover:underline">{b.j}</button></td>
-      <td className="py-1 px-1 text-indigo-200 truncate max-w-[100px] sticky left-24 bg-indigo-950/30 z-10">
+     <td className="py-1 px-0.5 sticky left-0 bg-indigo-950/30 z-10 w-4 border-l-2 border-indigo-500/40" />
+     <td className="py-1 px-0.5 sticky left-4 bg-indigo-950/30 z-10 whitespace-nowrap"><button onClick={() => goBundle(b.j)} className="text-indigo-400 font-mono hover:underline text-[11px]">{b.j}</button></td>
+     <td className="py-1 px-1 text-indigo-200 truncate max-w-[130px] sticky left-[85px] bg-indigo-950/30 z-10">
         {b.t}{b.asin && <a href={`https://sellercentral.amazon.com/myinventory/inventory?fulfilledBy=all&page=1&pageSize=25&searchField=all&searchTerm=${b.asin}&sort=date_created_desc&status=all`} target="_blank" rel="noopener noreferrer" className="ml-1 text-gray-500 hover:text-blue-400 text-[9px] font-mono">{b.asin}</a>}
         {aged && aged.fbaHealth !== "Healthy" && <span className={`ml-1 text-xs ${aged.fbaHealth === "At Risk" ? "text-amber-400" : "text-red-400"}`}>{aged.fbaHealth}</span>}
         {aged && aged.storageLtsf > 0 && <span className="ml-1 text-xs text-red-300">${aged.storageLtsf.toFixed(0)}</span>}
