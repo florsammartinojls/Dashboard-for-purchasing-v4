@@ -43,7 +43,14 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
     const wf = (data.workflow || []).find(w => w.id === id);
     if (!wf || wf.status !== "Ignore") return false;
     if (!wf.ignoreUntil) return true;
-    const until = new Date(wf.ignoreUntil);
+    const parts = (wf.ignoreUntil || "").split(/[-/]/);
+    let until;
+    if (parts.length === 3) {
+      const [a, b, c] = parts.map(Number);
+      until = a > 100 ? new Date(a, b - 1, c) : a > 12 ? new Date(c, b - 1, a) : new Date(c, a - 1, b);
+    } else {
+      until = new Date(wf.ignoreUntil);
+    }
     return !isNaN(until.getTime()) && until >= new Date(new Date().toDateString());
   }, [data.workflow]);
 
