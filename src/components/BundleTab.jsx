@@ -189,7 +189,7 @@ export default function BundleTab({ data, stg, hist, daily, bundleId, onBack, go
         { l: "Pre-Processed", v: R(b.reserved) },
         { l: "Inbound to FBA", v: R(b.inbound) },
         { l: "Raw Pieces (core)", v: R(core?.raw ?? 0) },
-        { l: "Inbound 7f", v: R(inb7fTotal), sub: inb7fEta ? fD(inb7fEta) : null },
+        { l: "Inbound 7f (core)", v: R(inb7fTotal), sub: inb7fEta ? fD(inb7fEta) : null },
       ].map(k => <div key={k.l}><div className="text-gray-500 text-xs">{k.l}</div><div className="text-white font-bold text-lg">{k.v}</div>{k.sub && <div className="text-blue-400 text-xs">{k.sub}</div>}</div>)}</div></div>
       <div className="bg-gray-900 rounded-xl p-4 border border-gray-800"><h4 className="text-gray-500 text-xs uppercase mb-3">Profitability</h4><div className="grid grid-cols-3 gap-y-4">{[{ l: "Price", v: fee?.pr }, { l: "COGS", v: fee?.pdmtCogs }, { l: "AICOGS", v: fee?.aicogs }, { l: "Fee", v: fee?.totalFee }, { l: "GP", v: fee?.gp, c: "text-emerald-400" }].map(k => <div key={k.l}><div className="text-gray-500 text-xs">{k.l}</div><div className={`font-bold text-lg ${k.c || "text-white"}`}>{k.v != null ? $2(k.v) : "—"}</div></div>)}</div></div>
     </div>
