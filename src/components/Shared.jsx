@@ -87,6 +87,27 @@ export function SlidePanel({ open, onClose, children }) {
 const WF_STATUSES = ["Buy", "Reviewing", "Ignore", "Done", ""];
 const WF_COLORS = { Buy: "bg-emerald-500/20 text-emerald-400", Reviewing: "bg-amber-500/20 text-amber-400", Ignore: "bg-red-500/20 text-red-400", Done: "bg-blue-500/20 text-blue-400" };
 
+// Parse dates that might come as yyyy-mm-dd, mm/dd/yyyy, or dd/mm/yyyy
+function parseDate(s) {
+  if (!s) return null;
+  // Already yyyy-mm-dd (from date input)
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return new Date(s + 'T00:00:00');
+  // mm/dd/yyyy or dd/mm/yyyy — if first part > 12, it must be dd/mm/yyyy
+  const parts = s.split('/');
+  if (parts.length === 3) {
+    const [a, b, c] = parts.map(Number);
+    if (a > 12) return new Date(c, b - 1, a); // dd/mm/yyyy
+    return new Date(c, a - 1, b); // mm/dd/yyyy
+  }
+  const d = new Date(s);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+function fmtDateUS(s) {
+  const d = parseDate(s);
+  if (!d) return s || "";
+  return (d.getMonth() + 1).toString().padStart(2, '0') + '/' + d.getDate().toString().padStart(2, '0') + '/' + d.getFullYear();
+}
 export function WorkflowChip({ id, type, workflow, onSave, onDelete, buyer }) {
   const [open, setOpen] = useState(false);
   const existing = (workflow || []).find(w => w.id === id);
@@ -96,7 +117,7 @@ export function WorkflowChip({ id, type, workflow, onSave, onDelete, buyer }) {
   useEffect(() => { const ex = (workflow || []).find(w => w.id === id); if (ex) { setStatus(ex.status || ""); setNote(ex.note || ""); setIgnoreUntil(ex.ignoreUntil || "") } }, [workflow, id]);
   const save = () => { onSave({ id, type, status, note, ignoreUntil, updatedBy: buyer || "" }); setOpen(false) };
   const del = () => { onDelete({ id }); setOpen(false); setStatus(""); setNote(""); setIgnoreUntil("") };
-  if (!open) return <button onClick={() => setOpen(true)} className={`text-xs px-1.5 py-0.5 rounded ${existing?.status ? WF_COLORS[existing.status] || "bg-gray-700 text-gray-300" : "bg-gray-800 text-gray-500 hover:text-gray-300"}`}>{existing?.status ? <>{existing.status}{existing.note ? " · " + existing.note.substring(0, 15) + (existing.note.length > 15 ? "…" : "") : ""}</> : "📝"}</button>;
+  if (!open) return <button onClick={() => setOpen(true)} className={`text-xs px-1.5 py-0.5 roundedif (!open) return <button onClick={() => setOpen(true)} className={`text-xs px-1.5 py-0.5 rounded ${existing?.status ? WF_COLORS[existing.status] || "bg-gray-700 text-gray-300" : "bg-gray-800 text-gray-500 hover:text-gray-300"}`}>{existing?.status ? <>{existing.status}{existing.ignoreUntil ? " · " + fmtDateUS(existing.ignoreUntil) : ""}{existing.note ? " · " + existing.note.substring(0, 15) + (existing.note.length > 15 ? "…" : "") : ""}</> : "📝"}</button>;
   return <div className="absolute z-50 mt-1 bg-gray-900 border border-gray-700 rounded-lg shadow-xl p-3 w-64" onClick={e => e.stopPropagation()}>
     <div className="space-y-2">
       <div><label className="text-xs text-gray-500 block mb-1">Status</label><div className="flex gap-1 flex-wrap">{WF_STATUSES.filter(Boolean).map(s => <button key={s} onClick={() => setStatus(s)} className={`text-xs px-2 py-1 rounded ${status === s ? WF_COLORS[s] : "bg-gray-800 text-gray-400"}`}>{s}</button>)}</div></div>
