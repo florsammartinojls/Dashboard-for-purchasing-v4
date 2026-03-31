@@ -1,7 +1,7 @@
 // src/components/DashboardSummary.jsx
 import React, { useState, useMemo } from "react";
 import { R, D1, $, gS, cAI, cNQ, gTD, isD } from "../lib/utils";
-import { Dot, WorkflowChip, VendorNotes } from "./Shared";
+import { Dot } from "./Shared";
 
 export default function DashboardSummary({ data, stg, goVendor, workflow, saveWorkflow, deleteWorkflow, vendorComments, saveVendorComment, onEnterPurchasing, activeBundleCores }) {
   const [originF, setOriginF] = useState("all");
@@ -15,31 +15,6 @@ export default function DashboardSummary({ data, stg, goVendor, workflow, saveWo
     (data.vendors || []).forEach(v => m[v.name] = v);
     return m;
   }, [data.vendors]);
-
-  // ── Identify active bundles → cores that have at least one active bundle ──
-  const activeBundleCores = useMemo(() => {
-    const set = new Set();
-    const activeBundleJLS = new Set();
-    const bI = stg.bI || "blank";
-    (data.bundles || []).filter(b => {
-      if (b.active !== "Yes") return false;
-      // Respect bundle ignore settings (same logic as PurchTab)
-      if (bI === "blank" && !!b.ignoreUntil) return false;
-      if (bI === "set" && !b.ignoreUntil) return false;
-      return true;
-    }).forEach(b => {
-      if (b.core1) set.add(b.core1);
-      if (b.core2) set.add(b.core2);
-      if (b.core3) set.add(b.core3);
-      activeBundleJLS.add(b.j.trim().toLowerCase());
-    });
-    (data.cores || []).forEach(c => {
-      if (set.has(c.id)) return;
-      const raw = (c.jlsList || "").split(/[,;\n\r]+/).map(j => j.trim().toLowerCase()).filter(Boolean);
-      if (raw.some(j => activeBundleJLS.has(j))) set.add(c.id);
-    });
-    return set;
-  }, [data.bundles, data.cores, stg]);
 
   // ── Cleanup lists ──
   const noBundleCores = useMemo(() =>
@@ -57,7 +32,7 @@ export default function DashboardSummary({ data, stg, goVendor, workflow, saveWo
     return s;
   }, [noBundleCores, deadCores]);
 
-  // ── Vendor-level aggregation (EXCLUDES no-bundle cores by default) ──
+  // ── Vendor-level aggregation (EXCLUDES no-bundle cores) ──
   const vendorStats = useMemo(() => {
     const g = {};
     (data.cores || []).filter(c => {
@@ -67,7 +42,6 @@ export default function DashboardSummary({ data, stg, goVendor, workflow, saveWo
       if (stg.fV === "no" && c.visible === "Yes") return false;
       if (stg.fI === "blank" && !!c.ignoreUntil) return false;
       if (stg.fI === "set" && !c.ignoreUntil) return false;
-      // Exclude cores without active bundle from main view
       if (noBundleSet.has(c.id)) return false;
       return true;
     }).forEach(c => {
@@ -109,12 +83,10 @@ export default function DashboardSummary({ data, stg, goVendor, workflow, saveWo
     return arr;
   }, [vendorStats, originF]);
 
-  // ── Group by urgency ──
   const critVendors = useMemo(() => filtered.filter(v => v.urgency === "critical").sort((a, b) => a.minDoc - b.minDoc), [filtered]);
   const warnVendors = useMemo(() => filtered.filter(v => v.urgency === "warning").sort((a, b) => a.minDoc - b.minDoc), [filtered]);
   const okVendors = useMemo(() => filtered.filter(v => v.urgency === "ok").sort((a, b) => a.name.localeCompare(b.name)), [filtered]);
 
-  // ── Totals (react to origin filter) ──
   const totalCrit = filtered.reduce((s, v) => s + v.cr, 0);
   const totalWarn = filtered.reduce((s, v) => s + v.wa, 0);
   const totalOk = filtered.reduce((s, v) => s + v.he, 0);
@@ -122,7 +94,6 @@ export default function DashboardSummary({ data, stg, goVendor, workflow, saveWo
   const totalCost = filtered.reduce((s, v) => s + v.totalCost, 0);
   const critVendorCount = critVendors.length;
 
-  // ── Workflow helpers ──
   const isIgnored = (id) => {
     const wf = (workflow || []).find(w => w.id === id);
     if (!wf || wf.status !== "Ignore") return false;
@@ -131,14 +102,9 @@ export default function DashboardSummary({ data, stg, goVendor, workflow, saveWo
     return !isNaN(until.getTime()) && until >= new Date(new Date().toDateString());
   };
 
-  const getWfStatus = (id) => {
-    const wf = (workflow || []).find(w => w.id === id);
-    return wf?.status || null;
-  };
-
+  const getWfStatus = (id) => ((workflow || []).find(w => w.id === id))?.status || null;
   const wfColor = { Buy: "bg-emerald-500/20 text-emerald-400", Reviewing: "bg-amber-500/20 text-amber-400", Ignore: "bg-red-500/20 text-red-400", Done: "bg-blue-500/20 text-blue-400" };
 
-  // ── CSV download helper ──
   const downloadCSV = (rows, filename, header) => {
     const blob = new Blob([header + "\n" + rows.join("\n")], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
@@ -146,7 +112,6 @@ export default function DashboardSummary({ data, stg, goVendor, workflow, saveWo
     URL.revokeObjectURL(url);
   };
 
-  // ── Vendor Card ──
   const VendorCard = ({ v }) => {
     if (isIgnored(v.name)) return null;
     const borderCls = v.urgency === "critical" ? "border-red-500/30" : v.urgency === "warning" ? "border-amber-500/30" : "border-gray-800";
@@ -193,7 +158,6 @@ export default function DashboardSummary({ data, stg, goVendor, workflow, saveWo
     );
   };
 
-  // ── Section Toggle ──
   const Section = ({ id, label, count, vendors }) => {
     const isOpen = expandedSection[id] ?? false;
     if (vendors.length === 0) return null;
@@ -210,26 +174,18 @@ export default function DashboardSummary({ data, stg, goVendor, workflow, saveWo
     );
   };
 
-  // ── Origin-filtered cleanup lists (for CSV) ──
   const filteredNoBundleCores = useMemo(() => {
     if (originF === "all") return noBundleCores;
-    return noBundleCores.filter(c => {
-      const v = vMap[c.ven]; const dom = isD(v?.country);
-      return originF === "us" ? dom : !dom;
-    });
+    return noBundleCores.filter(c => { const v = vMap[c.ven]; return originF === "us" ? isD(v?.country) : !isD(v?.country); });
   }, [noBundleCores, originF, vMap]);
 
   const filteredDeadCores = useMemo(() => {
     if (originF === "all") return deadCores;
-    return deadCores.filter(c => {
-      const v = vMap[c.ven]; const dom = isD(v?.country);
-      return originF === "us" ? dom : !dom;
-    });
+    return deadCores.filter(c => { const v = vMap[c.ven]; return originF === "us" ? isD(v?.country) : !isD(v?.country); });
   }, [deadCores, originF, vMap]);
 
   return (
     <div className="p-4 max-w-4xl mx-auto">
-      {/* ══ LAYER 1: 3-second summary ══ */}
       {totalCrit > 0 && (
         <div className="bg-red-500/8 border border-red-500/25 rounded-xl p-5 mb-3">
           <div className="flex justify-between items-start flex-wrap gap-3">
@@ -253,33 +209,25 @@ export default function DashboardSummary({ data, stg, goVendor, workflow, saveWo
         </div>
       )}
 
-      {/* ══ Filters ══ */}
       <div className="flex flex-wrap items-center gap-2 mb-5">
         <select value={originF} onChange={e => setOriginF(e.target.value)} className="bg-gray-800 border border-gray-700 text-gray-300 text-sm rounded-lg px-2 py-1.5">
           <option value="all">All Origins</option>
           <option value="us">US Only</option>
           <option value="intl">International</option>
         </select>
-
-        <button
-          onClick={() => setShowHousekeeping(!showHousekeeping)}
-          className={`text-xs px-3 py-1.5 rounded-lg font-medium ${showHousekeeping ? "bg-amber-600 text-white" : "bg-gray-800 border border-gray-700 text-gray-400"}`}
-        >
+        <button onClick={() => setShowHousekeeping(!showHousekeeping)} className={`text-xs px-3 py-1.5 rounded-lg font-medium ${showHousekeeping ? "bg-amber-600 text-white" : "bg-gray-800 border border-gray-700 text-gray-400"}`}>
           🧹 {filteredNoBundleCores.length + filteredDeadCores.length} Cleanup{showHousekeeping ? " ✓" : ""}
         </button>
-
         <div className="flex gap-2 text-xs ml-auto">
           <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-500" />{totalCrit}</span>
           <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-500" />{totalWarn}</span>
           <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500" />{totalOk}</span>
         </div>
-
         <button onClick={onEnterPurchasing} className="text-xs bg-blue-600/80 text-white px-3 py-1.5 rounded-lg font-medium hover:bg-blue-600 transition-colors">
           Full Purchasing View →
         </button>
       </div>
 
-      {/* ══ Housekeeping (hidden by default) ══ */}
       {showHousekeeping && (
         <div className="space-y-2 mb-5">
           {filteredNoBundleCores.length > 0 && (
@@ -306,7 +254,6 @@ export default function DashboardSummary({ data, stg, goVendor, workflow, saveWo
               )}
             </div>
           )}
-
           {filteredDeadCores.length > 0 && (
             <div className="bg-red-900/10 border border-red-500/15 rounded-lg px-4 py-2.5">
               <div className="flex justify-between items-center cursor-pointer" onClick={() => setShowDead(!showDead)}>
@@ -334,7 +281,6 @@ export default function DashboardSummary({ data, stg, goVendor, workflow, saveWo
         </div>
       )}
 
-      {/* ══ LAYER 2: Vendors by urgency ══ */}
       <Section id="critical" label="Critical — order now" count={totalCrit} vendors={critVendors} />
       <Section id="warning" label="Warning — plan this week" count={totalWarn} vendors={warnVendors} />
       <Section id="ok" label="Healthy — no action needed" count={totalOk} vendors={okVendors} />
