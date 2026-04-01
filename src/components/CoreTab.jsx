@@ -103,7 +103,7 @@ export default function CoreTab({ data, stg, hist, daily, coreId, onBack, goBund
         pct: tBD > 0 ? +((b.cd / tBD) * 100).toFixed(1) : 0,
         l28pct: totL28 > 0 ? +((l28 / totL28) * 100).toFixed(1) : 0, l28
       };
-    }).sort((a, b) => (b.cd || 0) - (a.cd || 0));
+    }).sort((a, b) => (a.fibDoc || 0) - (b.fibDoc || 0));
   }, [cBA, feM, saM, tBD]);
 
   const etaT = useMemo(() => inbS.filter(s => s.eta).map(s => fE(s.eta)).join(", "), [inbS]);
