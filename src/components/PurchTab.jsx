@@ -200,9 +200,12 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
       // Group bundles by core
       const bundlesByCore = {};
       (bundles || []).forEach(b => {
-        if (!b.core1 || !coreMap[b.core1]) return;
-        if (!bundlesByCore[b.core1]) bundlesByCore[b.core1] = [];
-        bundlesByCore[b.core1].push(b);
+        // Associate bundle with ALL its cores, not just core1
+        [b.core1, b.core2, b.core3].filter(Boolean).forEach(cid => {
+          if (!coreMap[cid]) return;
+          if (!bundlesByCore[cid]) bundlesByCore[cid] = [];
+          if (!bundlesByCore[cid].some(x => x.j === b.j)) bundlesByCore[cid].push(b);
+        });
       });
 
       cores.forEach(c => {
