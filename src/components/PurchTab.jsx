@@ -502,7 +502,21 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
             <span className="text-xs text-gray-400">{v.payment}</span>
             {pf && pf.comment && <span className="text-xs text-amber-400">{pf.comment}</span>}
             {pf && <span className="text-xs text-gray-500">{pf.ordersPerYear}/yr · ×{pf.safetyMultiplier}</span>}
-{(() => { const recs = (data.receivingFull || []).filter(r => r.vendor === v.name && r.pcs > 0); if (recs.length < 2) return null; const minOrder = Math.min(...recs.map(r => r.pcs)); const avgOrder = Math.round(recs.reduce((s, r) => s + r.pcs, 0) / recs.length); return <span className="text-xs text-gray-500">Min: {R(minOrder)} · Avg: {R(avgOrder)}</span>; })()}
+            {(() => {
+              const alerts = [];
+              grp.cores.forEach(c => {
+                const eq = coreEffQ(c);
+                if (eq <= 0) return;
+                const coreRecs = (data.receivingFull || []).filter(r => (r.core || "").trim().toLowerCase() === c.id.toLowerCase() && r.pcs > 0);
+                if (coreRecs.length >= 2) {
+                  const minCore = Math.min(...coreRecs.map(r => r.pcs));
+                  if (eq < minCore) alerts.push({ id: c.id, qty: eq, min: minCore, type: "core" });
+                }
+              });
+              if (alerts.length === 0) return null;
+              return <div className="w-full mt-1">{alerts.map(a => <div key={a.id} className="text-xs text-amber-400">⚠ {a.id}: ordering {R(a.qty)} but lowest {a.type} purchase was {R(a.min)}</div>)}</div>;
+            })()}
+
             {(vendorSub === "bundles" || vendorSub === "mix") && <>
               <span className="flex items-center gap-1 text-xs text-gray-400">B.MOQ:<NumInput value={gBMoq('_bmoq_' + v.name)} onChange={val => setF('_bmoq_' + v.name, 'bMoq', val)} placeholder="0" className="bg-gray-800 border border-gray-600 text-white rounded px-1 py-0.5 w-14 text-center text-xs" /></span>
               <button onClick={() => setAglMap(p => ({ ...p, [v.name]: !p[v.name] }))} className={`text-xs px-2 py-0.5 rounded font-medium ${isAgl ? "bg-cyan-600 text-white" : "bg-gray-700 text-gray-400"}`} title="AGL: use 80d lead time for bundles">AGL{isAgl ? " ✓" : ""}</button>
