@@ -536,6 +536,22 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
               <button disabled={!poI.length} onClick={() => { genPO(v, poI, vendorPO, stg.buyer, poD); setToast("PO " + vendorPO) }} className={`text-xs px-3 py-1.5 rounded font-medium ${poI.length ? "bg-emerald-600 text-white" : "bg-gray-700 text-gray-500 cursor-not-allowed"}`}>PO</button>
               <button disabled={!poI.length} onClick={() => { cp7f(v, poI, vendorPO, stg.buyer, poD); setToast("7f copied!") }} className={`text-xs px-3 py-1.5 rounded font-medium ${poI.length ? "bg-teal-600 text-white" : "bg-gray-700 text-gray-500 cursor-not-allowed"}`}>7f</button>
               <button disabled={!poI.length} onClick={() => { cp7g(v, poI, vendorPO, stg.buyer); setToast("7g copied!") }} className={`text-xs px-3 py-1.5 rounded font-medium ${poI.length ? "bg-purple-600 text-white" : "bg-gray-700 text-gray-500 cursor-not-allowed"}`}>7g</button>
-              {v.contactEmail && <button onClick={() => { const subj = encodeURIComponent('PO ' + vendorPO + ' — JLS Trading Co.'); const firstName = (v.contactName || '').split(' ')[0] || 'there'; const body = encodeURIComponent('Hi ' + firstName + ',\nHow are you?\nHope you are doing well!\n\nI\'ve attached ' + vendorPO + '\nCould you please give me a quote?\n\nThanks a lot,\n' + (stg.buyer || ''));
+              {v.contactEmail && <button onClick={() => { const subj = encodeURIComponent('PO ' + vendorPO + ' — JLS Trading Co.'); const firstName = (v.contactName || '').split(' ')[0] || 'there'; const body = encodeURIComponent('Hi ' + firstName + ',\nHow are you?\nHope you are doing well!\n\nI\'ve attached ' + vendorPO + '\nCould you please give me a quote?\n\nThanks a lot,\n' + {v.contactEmail && <button onClick={() => { const subj = encodeURIComponent('PO ' + vendorPO + ' — JLS Trading Co.'); const firstName = (v.contactName || '').split(' ')[0] || 'there'; const body = encodeURIComponent('Hi ' + firstName + ',\nHow are you?\nHope you are doing well!\n\nI\'ve attached ' + vendorPO + '\nCould you please give me a quote?\n\nThanks a lot,\n' + (stg.buyer || '')); window.open('mailto:' + v.contactEmail + '?subject=' + subj + '&body=' + body) }} className="text-xs px-3 py-1.5 rounded font-medium bg-blue-600 text-white">📧</button>}
+            </div>
+          </div>
+        </div>
+        <div className="overflow-auto max-h-[70vh]"><table className="w-full text-xs"><thead><VTH isCol={anyCol} /></thead><tbody>
+          {vendorSub === "bundles" ? <>{grp.bundles.map(b => <BundleRow key={b.j} b={b} />)}{grp.bundles.length === 0 && <tr><td colSpan={40} className="py-4 text-center text-gray-500">No bundles</td></tr>}</>
+            : vendorSub === "mix" ? <>{grp.cores.map(c => {
+              const cBs = (data.bundles || []).filter(b => { if (b.core1 !== c.id) return false; if (bA === "yes" && b.active !== "Yes") return false; if (bA === "no" && b.active === "Yes") return false; if (bI === "blank" && !!b.ignoreUntil) return false; if (bI === "set" && !b.ignoreUntil) return false; return true }).map(b => ({ ...b, fee: feMap[b.j] }));
+              return <Fragment key={c.id}><CoreRow c={c} />{!dismissed[c.id] && cBs.map(b => <BundleRow key={b.j} b={b} />)}</Fragment>;
+            })}</>
+              : <>{grp.cores.map(c => <CoreRow key={c.id} c={c} />)}</>}
+        </tbody></table></div>
+      </div>;
+    })}
 
+    {vm === "vendor" && vG.length === 0 && <div className="text-center text-gray-500 py-12">No vendors match current filters.</div>}
+  </div>;
+}
 }
