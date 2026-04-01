@@ -536,7 +536,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
               <button disabled={!poI.length} onClick={() => { genPO(v, poI, vendorPO, stg.buyer, poD); setToast("PO " + vendorPO) }} className={`text-xs px-3 py-1.5 rounded font-medium ${poI.length ? "bg-emerald-600 text-white" : "bg-gray-700 text-gray-500 cursor-not-allowed"}`}>PO</button>
               <button disabled={!poI.length} onClick={() => { cp7f(v, poI, vendorPO, stg.buyer, poD); setToast("7f copied!") }} className={`text-xs px-3 py-1.5 rounded font-medium ${poI.length ? "bg-teal-600 text-white" : "bg-gray-700 text-gray-500 cursor-not-allowed"}`}>7f</button>
               <button disabled={!poI.length} onClick={() => { cp7g(v, poI, vendorPO, stg.buyer); setToast("7g copied!") }} className={`text-xs px-3 py-1.5 rounded font-medium ${poI.length ? "bg-purple-600 text-white" : "bg-gray-700 text-gray-500 cursor-not-allowed"}`}>7g</button>
-              {v.contactEmail && <button onClick={() => { const subj = encodeURIComponent('PO ' + vendorPO + ' — JLS Trading Co.'); const firstName = (v.contactName || '').split(' ')[0] || 'there'; const body = encodeURIComponent('Hi ' + firstName + ',\nHow are you?\nHope you are doing well!\n\nI\'ve attached ' + vendorPO + '\nCould you please give me a quote?\n\nThanks a lot,\n' + {v.contactEmail && <button onClick={() => { const subj = encodeURIComponent('PO ' + vendorPO + ' — JLS Trading Co.'); const firstName = (v.contactName || '').split(' ')[0] || 'there'; const body = encodeURIComponent('Hi ' + firstName + ',\nHow are you?\nHope you are doing well!\n\nI\'ve attached ' + vendorPO + '\nCould you please give me a quote?\n\nThanks a lot,\n' + (stg.buyer || '')); window.open('mailto:' + v.contactEmail + '?subject=' + subj + '&body=' + body) }} className="text-xs px-3 py-1.5 rounded font-medium bg-blue-600 text-white">📧</button>}
+              {v.contactEmail && <button onClick={() => { const subj = encodeURIComponent('PO ' + vendorPO + ' — JLS Trading Co.'); const firstName = (v.contactName || '').split(' ')[0] || 'there'; const body = encodeURIComponent('Hi ' + firstName + ',\nHow are you?\nHope you are doing well!\n\nI\'ve attached ' + vendorPO + '\nCould you please give me a quote?\n\nThanks a lot,\n' + (stg.buyer || '')); window.open('mailto:' + v.contactEmail + '?subject=' + subj + '&body=' + body) }} className="text-xs px-3 py-1.5 rounded font-medium bg-blue-600 text-white">📧</button>}
             </div>
           </div>
         </div>
@@ -553,5 +553,4 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
 
     {vm === "vendor" && vG.length === 0 && <div className="text-center text-gray-500 py-12">No vendors match current filters.</div>}
   </div>;
-}
 }
