@@ -24,6 +24,7 @@ export default function BundleTab({ data, stg, hist, daily, bundleId, onBack, go
   const b = sel ? (data.bundles || []).find(x => x.j === sel) : null;
   const fee = b ? (data.fees || []).find(f => f.j === b.j) : null;
   const sale = b ? (data.sales || []).find(s => s.j === b.j) : null;
+  const replen = b ? (data.replenRec || []).find(r => r.j === b.j) : null;
   const core = b ? (data.cores || []).find(c => c.id === b.core1) : null;
   const abcA = useMemo(() => data.abcA || [], [data.abcA]);
   const abcT = useMemo(() => data.abcT || [], [data.abcT]);
@@ -190,7 +191,7 @@ export default function BundleTab({ data, stg, hist, daily, bundleId, onBack, go
         { l: "FIB DOC", v: R(b.fibDoc) },
         { l: "FIB Inventory", v: R(b.fibInv) },
         { l: "SC Inventory", v: R(b.scInv) },
-        { l: "Pre-Processed", v: R(b.ppUnits) },
+        { l: "Pre-Processed", v: R(replen?.pprcUnits ?? b.reserved) },
         { l: "Inbound to FBA", v: R(b.inbound) },
         { l: "Raw Pieces (core)", v: R(core?.raw ?? 0) },
         { l: "Inbound 7f (core)", v: R(inb7fTotal), sub: inb7fEta ? fD(inb7fEta) + (daysUntilArr != null ? ' · ' + daysUntilArr + 'd' : '') : null },
