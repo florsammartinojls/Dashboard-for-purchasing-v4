@@ -49,7 +49,7 @@ export default function BundleTab({ data, stg, hist, daily, bundleId, onBack, go
   }, [bundleInbound]);
 
   // Bundle inventory history (merged summary + daily aggregation) → Units = sum of Complete DSR
-  const bInv = useMemo(() => (hist?.bundleInv || []).filter(h => h.j === sel), [hist, sel]);
+  const bInv = useMemo(() => (hist?.bundleSales || []).filter(h => h.j === sel), [hist, sel]);
   const uYrs = useMemo(() => gY(bInv), [bInv]);
   const yD = useMemo(() => MN.map((m, i) => {
     const r = { month: m };
