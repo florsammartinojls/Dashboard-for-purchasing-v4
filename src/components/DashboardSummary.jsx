@@ -1,6 +1,7 @@
 // src/components/DashboardSummary.jsx
 import React, { useState, useMemo } from "react";
-import { R, D1, $, gS, cAI, cNQ, gTD, isD } from "../lib/utils";
+import { R, D1, $, gS, cAI, cNQ, cOQ, gTD, isD } from "../lib/utils";
+import { batchProfiles, calcCoverageNeed, calcPurchaseFrequency, DEFAULT_PROFILE } from "../lib/seasonal";
 import { Dot, WorkflowChip } from "./Shared";
 
 export default function DashboardSummary({ data, stg, goVendor, workflow, saveWorkflow, deleteWorkflow, vendorComments, saveVendorComment, onEnterPurchasing, activeBundleCores }) {
@@ -31,6 +32,14 @@ export default function DashboardSummary({ data, stg, goVendor, workflow, saveWo
     return wf && wf.status && wf.status !== "";
   };
   const wfColor = { Buy: "bg-emerald-500/20 text-emerald-400", Reviewing: "bg-amber-500/20 text-amber-400", Ignore: "bg-red-500/20 text-red-400", Done: "bg-blue-500/20 text-blue-400" };
+
+  // ── Seasonal engine (same as PurchTab) ──
+  const profiles = useMemo(() => batchProfiles(data.cores || [], data._coreInv || [], data._coreDays || []), [data.cores, data._coreInv, data._coreDays]);
+  const purchFreqMap = useMemo(() => {
+    const m = {};
+    (data.vendors || []).forEach(v => { m[v.name] = calcPurchaseFrequency(v.name, data.receivingFull || []) });
+    return m;
+  }, [data.vendors, data.receivingFull]);
 
   // ── Cleanup lists ──
   const noBundleCores = useMemo(() =>
@@ -65,8 +74,11 @@ export default function DashboardSummary({ data, stg, goVendor, workflow, saveWo
       const lt = v.lt || 30;
       const tg = gTD(v, stg);
       const st = gS(c.doc, lt, c.buf || 14, stg);
-      const nq = cNQ(c, tg);
-      const oq = nq > 0 ? Math.max(nq, c.moq || 0) : 0;
+      const profile = profiles[c.id] || DEFAULT_PROFILE;
+      const pf = purchFreqMap[c.ven];
+      const coverage = calcCoverageNeed(c, lt, tg, profile, pf);
+      const nq = coverage.need;
+      const oq = nq > 0 ? cOQ(nq, c.moq, c.casePack) : 0;
       const cost = oq * (c.cost || 0);
       if (!g[c.ven]) g[c.ven] = {
         name: c.ven, country: v.country || "", lt, moq: v.moqDollar || 0,
@@ -89,7 +101,7 @@ export default function DashboardSummary({ data, stg, goVendor, workflow, saveWo
       minDoc: v.minDoc === Infinity ? 0 : v.minDoc,
       urgency: v.cr > 0 ? "critical" : v.wa > 0 ? "warning" : "ok"
     }));
-  }, [data.cores, vMap, stg, noBundleSet]);
+  }, [data.cores, vMap, stg, noBundleSet, profiles, purchFreqMap]);
 
   // ── Apply origin + status filters ──
   const filtered = useMemo(() => {
