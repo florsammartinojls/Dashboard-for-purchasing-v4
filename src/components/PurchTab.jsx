@@ -376,7 +376,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
       <td className="py-0.5 px-0.5 sticky right-36 bg-gray-950 z-10"><NumInput value={gPcs(c.id)} onChange={v => setF(c.id, 'pcs', v)} /></td>
       <td className="py-0.5 px-0.5 sticky right-24 bg-gray-950 z-10"><NumInput value={gCas(c.id)} onChange={v => setF(c.id, 'cas', v)} /></td>
       {showCosts && <><td className="py-0.5 px-0.5"><NumInput value={gInbS(c.id)} onChange={v => setF(c.id, 'inbS', v)} /></td><td className="py-0.5 px-0.5"><NumInput value={gCogP(c.id)} onChange={v => setF(c.id, 'cogP', v)} /></td><td className="py-0.5 px-0.5"><NumInput value={gCogC(c.id)} onChange={v => setF(c.id, 'cogC', v)} /></td></>}
-      {(() => { const recs = (data.receivingFull || []).filter(r => (r.core || "").trim().toLowerCase() === c.id.toLowerCase() && r.pcs > 0); if (recs.length >= 2 && eq > 0) { const avgOrder = Math.round(recs.reduce((s, r) => s + r.pcs, 0) / recs.length); if (eq < avgOrder * 0.25) return <td className="py-1 px-0.5 text-center" title={"Avg order: " + avgOrder.toLocaleString()}><span className="text-amber-400 text-[9px]">⚠ low</span></td>; } return null; })()}
+      
       <SC v={cost} className="py-1 px-1 text-right text-amber-300 sticky right-12 bg-gray-950 z-10">{cost > 0 ? $(cost) : "—"}</SC>
       <td className={`py-1 px-1 text-right sticky right-0 bg-gray-950 z-10 ${ad ? dc(ad, c.critDays, c.warnDays) : "text-gray-500"}`}>{ad ? R(ad) : "—"}</td>
       <td className="py-1 px-0.5 flex gap-0.5">
@@ -502,6 +502,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
             <span className="text-xs text-gray-400">{v.payment}</span>
             {pf && pf.comment && <span className="text-xs text-amber-400">{pf.comment}</span>}
             {pf && <span className="text-xs text-gray-500">{pf.ordersPerYear}/yr · ×{pf.safetyMultiplier}</span>}
+{(() => { const recs = (data.receivingFull || []).filter(r => r.vendor === v.name && r.pcs > 0); if (recs.length < 2) return null; const minOrder = Math.min(...recs.map(r => r.pcs)); const avgOrder = Math.round(recs.reduce((s, r) => s + r.pcs, 0) / recs.length); return <span className="text-xs text-gray-500">Min: {R(minOrder)} · Avg: {R(avgOrder)}</span>; })()}
             {(vendorSub === "bundles" || vendorSub === "mix") && <>
               <span className="flex items-center gap-1 text-xs text-gray-400">B.MOQ:<NumInput value={gBMoq('_bmoq_' + v.name)} onChange={val => setF('_bmoq_' + v.name, 'bMoq', val)} placeholder="0" className="bg-gray-800 border border-gray-600 text-white rounded px-1 py-0.5 w-14 text-center text-xs" /></span>
               <button onClick={() => setAglMap(p => ({ ...p, [v.name]: !p[v.name] }))} className={`text-xs px-2 py-0.5 rounded font-medium ${isAgl ? "bg-cyan-600 text-white" : "bg-gray-700 text-gray-400"}`} title="AGL: use 80d lead time for bundles">AGL{isAgl ? " ✓" : ""}</button>
