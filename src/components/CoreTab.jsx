@@ -58,7 +58,7 @@ export default function CoreTab({ data, stg, hist, daily, coreId, onBack, goBund
   const cBA = useMemo(() => {
     if (!core) return [];
     // Parse Attached JLS #s — handle commas, semicolons, newlines, spaces
-    const raw = (core.jlsList || "").split(/[,;\n\r]+/).map(j => j.trim()).filter(Boolean);
+    const raw = (core.jlsList || "").split(/[,;|\n\r]+/).map(j => j.trim()).filter(Boolean);
     if (raw.length > 0) {
       const jlsSet = new Set(raw.map(j => j.toLowerCase()));
       const matched = (data.bundles || []).filter(b =>
