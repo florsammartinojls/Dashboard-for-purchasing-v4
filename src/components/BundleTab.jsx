@@ -186,7 +186,7 @@ export default function BundleTab({ data, stg, hist, daily, bundleId, onBack, go
         { l: "FIB DOC", v: R(b.fibDoc) },
         { l: "FIB Inventory", v: R(b.fibInv) },
         { l: "SC Inventory", v: R(b.scInv) },
-        { l: "Pre-Processed", v: R(b.reserved) },
+        { l: "Pre-Processed", v: R(b.ppUnits) },
         { l: "Inbound to FBA", v: R(b.inbound) },
         { l: "Raw Pieces (core)", v: R(core?.raw ?? 0) },
         { l: "Inbound 7f (core)", v: R(inb7fTotal), sub: inb7fEta ? fD(inb7fEta) : null },
