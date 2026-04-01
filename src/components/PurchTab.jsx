@@ -507,7 +507,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
               grp.cores.forEach(c => {
                 const eq = coreEffQ(c);
                 if (eq <= 0) return;
-                const coreRecs = (data.receivingFull || []).filter(r => (r.core || "").trim().toLowerCase() === c.id.toLowerCase() && r.pcs > 0);
+                const coreRecs = (data.receivingFull || []).filter(r => (r.core || "").trim().toLowerCase() === c.id.toLowerCase() && r.pcs > 0 && r.vendor === v.name);
                 if (coreRecs.length >= 2) {
                   const minCore = Math.min(...coreRecs.map(r => r.pcs));
                   if (eq < minCore) alerts.push({ id: c.id, qty: eq, min: minCore, type: "core" });
