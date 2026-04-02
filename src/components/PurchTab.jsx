@@ -312,7 +312,7 @@ const isIgnored = useCallback((id) => {
           warnings.push(`${c.id}: +${overDOC} DOC over need (PPRC imbalance) — review unbundle`);
         }
       });
-    }} else {
+    } else {
       // Cores mode — seasonal needQty, discount bundle inventory
       cores.filter(c => c.needQty > 0).forEach(c => {
         const cBundles = (data.bundles || []).filter(b => b.core1 === c.id && b.active === "Yes");
