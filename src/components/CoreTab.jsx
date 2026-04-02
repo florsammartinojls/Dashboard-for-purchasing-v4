@@ -236,7 +236,7 @@ export default function CoreTab({ data, stg, hist, daily, coreId, onBack, goBund
               return (
               <tr key={i}>
                 <td className="py-1.5 px-2 text-gray-300">{s.orderNum}</td>
-                <td className="py-1.5 px-2 text-blue-400 font-mono">{s.core}</td>
+                <td className="py-1.5 px-2 font-mono"><span className={s.core.startsWith('Core') ? 'text-blue-400' : 'text-indigo-400'}>{s.core}</span>{s.core.startsWith('JLS') && <span className="ml-1 text-gray-600 text-[9px]">bundle</span>}</td>
                 <td className="py-1.5 px-2 text-gray-300 truncate max-w-[140px]">{s.shortTitle || "—"}</td>
                 <td className="py-1.5 px-2 text-gray-400">{s.vendor}</td>
                 <td className="py-1.5 px-2 text-right text-white">{R(s.pieces)}</td>
