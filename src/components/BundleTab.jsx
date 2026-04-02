@@ -23,7 +23,7 @@ export default function BundleTab({ data, stg, hist, daily, bundleId, onBack, go
 
   const b = sel ? (data.bundles || []).find(x => x.j === sel) : null;
   const fee = b ? (data.fees || []).find(f => f.j === b.j) : null;
-  const sale = b ? (data.sales || []).find(s => s.j === b.j) : null;
+  const replen = b ? (data.replenRec || []).find(r => r.j === b.j) : null;
   const replen = b ? (data.replenRec || []).find(r => r.j === b.j) : null;
   const core = b ? (data.cores || []).find(c => c.id === b.core1) : null;
   const abcA = useMemo(() => data.abcA || [], [data.abcA]);
@@ -52,6 +52,10 @@ export default function BundleTab({ data, stg, hist, daily, bundleId, onBack, go
     if (!inb7fEta) return null;
     return Math.ceil((new Date(inb7fEta) - new Date()) / 86400000);
   }, [inb7fEta]);
+  const daysUntilArr = useMemo(() => {
+  if (!inb7fEta) return null;
+  return Math.ceil((new Date(inb7fEta) - new Date()) / 86400000);
+}, [inb7fEta]);
 
   // Bundle inventory history (merged summary + daily aggregation) → Units = sum of Complete DSR
   const bInv = useMemo(() => (hist?.bundleSales || []).filter(h => h.j === sel), [hist, sel]);
@@ -164,7 +168,7 @@ export default function BundleTab({ data, stg, hist, daily, bundleId, onBack, go
 
   // === DETAIL VIEW ===
   return <div className="p-4 max-w-7xl mx-auto">
-    <button onClick={() => { setSel(null); onBack() }} className="text-gray-400 hover:text-white text-sm mb-4">← Back</button>
+    <button onClick={() => setSel(null)} className="text-gray-400 hover:text-white text-sm mb-4">← Back</button>
     {/* Header */}
     <div className="bg-gray-900 rounded-xl p-4 mb-4 border border-gray-800">
       <div className="flex flex-wrap items-center gap-3 mb-2">
@@ -201,7 +205,7 @@ export default function BundleTab({ data, stg, hist, daily, bundleId, onBack, go
     {/* Revenue Table */}
     {sale && <div className="bg-gray-900 rounded-xl p-4 mb-4 border border-gray-800"><h3 className="text-white font-semibold text-sm mb-3">Revenue</h3><table className="w-full text-sm"><thead><tr className="text-gray-500 text-xs uppercase"><th className="py-2 text-left" /><th className="py-2 text-right border-r border-gray-700">Lifetime</th><th className="py-2 text-right">Last Year</th><th className="py-2 text-right border-r border-gray-700">%LT</th><th className="py-2 text-right">This Year</th><th className="py-2 text-right">%LT</th></tr></thead><tbody><tr className="border-t border-gray-800"><td className="py-2 text-gray-400">Revenue</td><td className="py-2 text-right text-white border-r border-gray-700">{$(sale.ltR)}</td><td className="py-2 text-right">{$(sale.lyR)}</td><td className="py-2 text-right text-gray-400 text-xs border-r border-gray-700">{sale.ltR > 0 ? P(sale.lyR / sale.ltR * 100) : ""}</td><td className="py-2 text-right">{$(sale.tyR)}</td><td className="py-2 text-right text-gray-400 text-xs">{sale.ltR > 0 ? P(sale.tyR / sale.ltR * 100) : ""}</td></tr><tr className="border-t border-gray-800"><td className="py-2 text-gray-400">Profit</td><td className="py-2 text-right text-emerald-400 border-r border-gray-700">{$(sale.ltP)}</td><td className="py-2 text-right text-emerald-400">{$(sale.lyP)}</td><td className="py-2 text-right text-gray-400 text-xs border-r border-gray-700">{sale.ltP > 0 ? P(sale.lyP / sale.ltP * 100) : ""}</td><td className="py-2 text-right text-emerald-400">{$(sale.tyP)}</td><td className="py-2 text-right text-gray-400 text-xs">{sale.ltP > 0 ? P(sale.tyP / sale.ltP * 100) : ""}</td></tr></tbody></table></div>}
     {/* Daily */}
-    {bDays.length > 0 && <div className="bg-gray-900 rounded-xl p-4 mb-4 border border-gray-800"><h3 className="text-white font-semibold text-sm mb-3">Daily ({bDays.length}d)</h3><div className="overflow-x-auto"><table className="w-full text-xs"><thead><tr className="text-gray-500 uppercase"><th className="py-1 px-1 text-left">Date</th><th className="py-1 px-1 text-right">DSR</th><th className="py-1 px-1 text-right">1D</th><th className="py-1 px-1 text-right">3D</th><th className="py-1 px-1 text-right">7D</th><th className="py-1 px-1 text-right">DOC</th><th className="py-1 px-1 text-right">FIB</th><th className="py-1 px-1 text-right">SC</th><th className="py-1 px-1 text-right">Res</th><th className="py-1 px-1 text-right">Inb</th><th className="py-1 px-1 text-right">Cash</th></tr></thead><tbody>{bDays.map((d, i) => <tr key={d.date} className={i % 2 === 0 ? "bg-gray-800/30" : ""}><td className="py-1 px-1 text-gray-300 whitespace-nowrap">{fD(d.date)}</td><td className="py-1 px-1 text-right text-white font-semibold">{D1(d.dsr)}</td><td className="py-1 px-1 text-right">{D1(d.d1)}</td><td className="py-1 px-1 text-right">{D1(d.d3)}</td><td className="py-1 px-1 text-right">{D1(d.d7)}</td><td className="py-1 px-1 text-right">{R(d.doc)}</td><td className="py-1 px-1 text-right">{R(d.fib)}</td><td className="py-1 px-1 text-right">{R(d.sc)}</td><td className="py-1 px-1 text-right">{R(d.res)}</td><td className="py-1 px-1 text-right">{R(d.inb)}</td><td className="py-1 px-1 text-right">{$(d.cash)}</td></tr>)}</tbody></table></div></div>}
+    {bDays.length > 0 && <div className="bg-gray-900 rounded-xl p-4 mb-4 border border-gray-800"><h3 className="text-white font-semibold text-sm mb-3">Daily ({bDays.length}d)</h3><div className="overflow-x-auto"><table className="w-full text-xs"><thead><tr className="text-gray-500 uppercase"><th className="py-1 px-1 text-left">Date</th><th className="py-1 px-1 text-right">DSR</th><th className="py-1 px-1 text-right">1D</th><th className="py-1 px-1 text-right">3D</th><th className="py-1 px-1 text-right">7D</th><th className="py-1 px-1 text-right">DOC</th><th className="py-1 px-1 text-right">FIB Inv</th><th className="py-1 px-1 text-right">SC Inv</th><th className="py-1 px-1 text-right">Res</th><th className="py-1 px-1 text-right">Inb</th><th className="py-1 px-1 text-right">BRaw</th><th className="py-1 px-1 text-right">BPPR</th></tr></thead><tbody>{bDays.map((d, i) => <tr key={d.date} className={i % 2 === 0 ? "bg-gray-800/30" : ""}><td className="py-1 px-1 text-gray-300 whitespace-nowrap">{fD(d.date)}</td><td className="py-1 px-1 text-right text-white font-semibold">{D1(d.dsr)}</td><td className="py-1 px-1 text-right">{D1(d.d1)}</td><td className="py-1 px-1 text-right">{D1(d.d3)}</td><td className="py-1 px-1 text-right">{D1(d.d7)}</td><td className="py-1 px-1 text-right">{R(d.doc)}</td><td className="py-1 px-1 text-right">{R(d.fib)}</td><td className="py-1 px-1 text-right">{R(d.sc)}</td><td className="py-1 px-1 text-right">{R(d.res)}</td><td className="py-1 px-1 text-right">{R(d.inb)}</td><td className="py-1 px-1 text-right">{R(d.bRaw)}</td><td className="py-1 px-1 text-right">{R(d.bPprc)}</td></tr>)}</tbody></table></div></div>}
     {/* Recent Sales */}
     {sale && <div className="bg-gray-900 rounded-xl p-4 mb-4 border border-gray-800"><h3 className="text-white font-semibold text-sm mb-3">Recent</h3><div className="grid grid-cols-2 sm:grid-cols-4 gap-4">{[{ l: "This Mo", u: sale.tmU, r: sale.tmR, p: sale.tmP }, { l: "Last Mo", u: sale.lmU, r: sale.lmR, p: sale.lmP }, { l: "7d", u: sale.l7U, r: sale.l7R, p: sale.l7P }, { l: "28d", u: sale.l28U, r: sale.l28R, p: sale.l28P }].map(x => <div key={x.l}><div className="text-gray-500 text-xs">{x.l}</div><div className="text-white font-semibold">{R(x.u)} u</div><div className="text-gray-400 text-xs">{$(x.r)}</div><div className="text-emerald-400 text-xs">{$(x.p)}</div></div>)}</div></div>}
     {/* YoY Units (sum of Complete DSR) + Price History */}
@@ -214,7 +218,7 @@ export default function BundleTab({ data, stg, hist, daily, bundleId, onBack, go
               <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
               <XAxis dataKey="month" tick={{ fill: "#9ca3af", fontSize: 10 }} />
               <YAxis tick={{ fill: "#9ca3af", fontSize: 10 }} />
-              <Tooltip {...TTP} />
+              <Tooltip {...TTP} formatter={(v) => v != null ? Math.round(v).toLocaleString('en-US') : '—'} />
               <Legend />
               {uYrs.map(y => <Bar key={y} dataKey={"u_" + y} fill={YC[y] || "#6b7280"} opacity={0.85} radius={[2, 2, 0, 0]} name={"Units " + y} />)}
             </BarChart>
@@ -224,7 +228,7 @@ export default function BundleTab({ data, stg, hist, daily, bundleId, onBack, go
               <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
               <XAxis dataKey="month" tick={{ fill: "#9ca3af", fontSize: 10 }} />
               <YAxis tick={{ fill: "#9ca3af", fontSize: 10 }} domain={['auto', 'auto']} />
-              <Tooltip {...TTP} />
+              <Tooltip {...TTP} formatter={(v) => v != null ? Math.round(v).toLocaleString('en-US') : '—'} />
               <Legend />
               {pYrs.map(y => <Line key={y} dataKey={"p_" + y} stroke={YC[y] || "#6b7280"} strokeWidth={2} dot={{ r: 2 }} connectNulls name={"$" + y} />)}
             </LineChart>
