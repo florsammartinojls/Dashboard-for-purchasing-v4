@@ -543,9 +543,11 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
         <div className="overflow-auto max-h-[70vh]"><table className="w-full text-xs"><thead><VTH isCol={anyCol} /></thead><tbody>
           {vendorSub === "bundles" ? <>{grp.bundles.map(b => <BundleRow key={b.j} b={b} />)}{grp.bundles.length === 0 && <tr><td colSpan={40} className="py-4 text-center text-gray-500">No bundles</td></tr>}</>
             : vendorSub === "mix" ? <>{grp.cores.map(c => {
-              const cBs = (data.bundles || []).filter(b => { if (b.core1 !== c.id) return false; if (bA === "yes" && b.active !== "Yes") return false; if (bA === "no" && b.active === "Yes") return false; if (bI === "blank" && !!b.ignoreUntil) return false; if (bI === "set" && !b.ignoreUntil) return false; return true }).map(b => ({ ...b, fee: feMap[b.j] })).sort((a, b) => (a.fibDoc || 0) - (b.fibDoc || 0));
-              return <Fragment key={c.id}><CoreRow c={c} />{!dismissed[c.id] && cBs.map(b => <BundleRow key={b.j} b={b} />)}</Fragment>;
-            })}</>
+            const cBs = (data.bundles || []).filter(b => { if (b.core1 !== c.id) return false; if (bA === "yes" && b.active !== "Yes") return false; if (bA === "no" && b.active === "Yes") return false; if (bI === "blank" && !!b.ignoreUntil) return false; if (bI === "set" && !b.ignoreUntil) return false; return true }).map(b => ({ ...b, fee: feMap[b.j] })).sort((a, b) => (a.fibDoc || 0) - (b.fibDoc || 0));
+            const orderedBs = nf === "need" ? cBs.filter(b => hasBundleOrd(b)) : cBs;
+            if (nf === "need" && !hasCoreOrd(c) && orderedBs.length === 0) return null;
+            return <Fragment key={c.id}><CoreRow c={c} />{!dismissed[c.id] && orderedBs.map(b => <BundleRow key={b.j} b={b} />)}</Fragment>;
+          })}</>
               : <>{grp.cores.map(c => <CoreRow key={c.id} c={c} />)}</>}
         </tbody></table></div>
       </div>;
