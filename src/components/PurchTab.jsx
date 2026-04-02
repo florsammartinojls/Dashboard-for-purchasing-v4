@@ -94,7 +94,8 @@ const isIgnored = useCallback((id) => {
     }).map(c => {
       const v = vMap[c.ven] || {}; const lt = v.lt || 30; const tg = gTD(v, stg);
       const cd = lt; const wd = lt + (c.buf || 14);
-      const st = gS(c.doc, lt, c.buf, { critDays: cd, warnDays: wd });
+      const effectiveDoc = c.dsr > 0 ? Math.round(cAI(c) / c.dsr) : c.doc;
+      const st = gS(effectiveDoc, lt, c.buf, { critDays: cd, warnDays: wd });
       const ai = cAI(c);
       const profile = profiles[c.id] || DEFAULT_PROFILE;
       const pf = purchFreqMap[c.ven];
@@ -102,7 +103,7 @@ const isIgnored = useCallback((id) => {
       const sNeed = coverage.need;
       const oq = cOQ(sNeed, c.moq, c.casePack);
       const seas = cSeas(c.id, (data._coreInv || []));
-      return { ...c, status: st, allIn: ai, needQty: sNeed, orderQty: oq, needDollar: +(oq * c.cost).toFixed(2), docAfter: cDA(c, oq), lt, critDays: cd, warnDays: wd, targetDoc: tg, vc: v.country || "", seas, isDom: isD(v.country), spike: c.d7 > 0 && c.dsr > 0 && c.d7 >= c.dsr * 1.25, sProfile: profile, sCoverage: coverage };
+      return { ...c, status: st, allIn: ai, doc: effectiveDoc, needQty: sNeed, orderQty: oq, needDollar: +(oq * c.cost).toFixed(2), docAfter: cDA(c, oq), lt, critDays: cd, warnDays: wd, targetDoc: tg, vc: v.country || "", seas, isDom: isD(v.country), spike: c.d7 > 0 && c.dsr > 0 && c.d7 >= c.dsr * 1.25, sProfile: profile, sCoverage: coverage };
     }).filter(c => {
       if (vf && c.ven !== vf) return false;
       if (sf && c.status !== sf) return false;
