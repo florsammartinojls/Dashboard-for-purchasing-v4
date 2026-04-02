@@ -255,7 +255,7 @@ export default function App() {
 
   if (loading) return <div className="min-h-screen bg-gray-950"><Loader text="Loading live data..." /></div>;
   if (error) return <div className="min-h-screen bg-gray-950 flex items-center justify-center"><div className="text-center"><p className="text-red-400 mb-4">{error}</p><button onClick={load} className="bg-blue-600 text-white px-6 py-2 rounded-lg">Retry</button></div></div>;
-  if (!rdy.h || !rdy.d) return <div className="min-h-screen bg-gray-950"><Loader text="Loading history & seasonal data..." /></div>;
+  
 
   return <SumCtx.Provider value={{ addCell }}>
     <div className="min-h-screen bg-gray-950 text-gray-200">
