@@ -267,7 +267,7 @@ export default function OrdersTab({ data }) {
             {source === "7f" ? (
               <table className="w-full text-xs">
                 <thead><tr className="text-gray-500 uppercase">
-                  <th className="py-1 px-2 text-left">Date</th><th className="py-1 px-2 text-left">Vendor</th>
+                  <th className="py-1 px-2 text-left">Date</th><th className="py-1 px-1 text-left">Vendor</th>
                   <th className="py-1 px-2 text-left">PO#</th><th className="py-1 px-2 text-left">VSKU</th>
                   <th className="py-1 px-2 text-right">Pcs</th><th className="py-1 px-2 text-right">Cases</th>
                   <th className="py-1 px-2 text-right">Price</th><th className="py-1 px-2 text-right">Total</th>
@@ -291,7 +291,8 @@ export default function OrdersTab({ data }) {
                 <tfoot><tr className="border-t-2 border-gray-700 font-semibold">
                   <td colSpan={4} className="py-2 px-2 text-gray-400">{cg.orderCount} orders</td>
                   <td className="py-2 px-2 text-right text-white">{R(cg.totalPcs)}</td><td colSpan={2} />
-                  <td className="py-2 px-2 text-right text-amber-300">{$(cg.totalValue)}</td><td colSpan={2} />
+                  <td className="py-2 px-2 text-right text-amber-300">{$2(cg.totalCost)}</td>
+                  <td colSpan={3} />                  
                 </tr></tfoot>
               </table>
             ) : (
@@ -301,24 +302,22 @@ export default function OrdersTab({ data }) {
                   <th className="py-1 px-2 text-right">Pcs</th><th className="py-1 px-2 text-right">Material</th>
                   <th className="py-1 px-2 text-right">Inb Ship</th><th className="py-1 px-2 text-right">Tariffs</th>
                   <th className="py-1 px-2 text-right">Other</th><th className="py-1 px-2 text-right">Total Cost</th>
-                  <th className="py-1 px-2 text-right">CPP</th><th className="py-1 px-2 text-left">Note</th>
+                  <th className="py-1 px-2 text-right">CPP</th><th className="py-1 px-2 text-right">%Chg</th><th className="py-1 px-2 text-left">Note</th>
                 </tr></thead>
                 <tbody>{cg.orders.sort((a, b) => (b.date || "").localeCompare(a.date || "")).map((r, i) => {
                   const prevOrder = cg.orders.sort((a, b) => (b.date || "").localeCompare(a.date || ""))[i + 1];
                   const pctChg = prevOrder && prevOrder.cpp > 0 && r.cpp > 0 ? ((r.cpp - prevOrder.cpp) / prevOrder.cpp * 100) : null;
                   return <tr key={i} className={`border-t border-gray-800/30 ${i % 2 === 0 ? "bg-gray-800/20" : ""}`}>
                     <td className="py-1.5 px-2 text-gray-300">{fDateUS(r.date)}</td>
-                    <td className="py-1.5 px-2 text-gray-300 truncate max-w-[150px]">{r.name}</td>
+                    <td className="py-1.5 px-1 text-gray-300 truncate max-w-[80px]">{r.name}</td>
                     <SC v={r.pcs} className="py-1.5 px-2 text-right text-white">{R(r.pcs)}</SC>
                     <SC v={r.matPrice} className="py-1.5 px-2 text-right">{r.matPrice > 0 ? $2(r.matPrice) : "—"}</SC>
                     <SC v={r.inbShip} className="py-1.5 px-2 text-right text-gray-400">{r.inbShip > 0 ? $2(r.inbShip) : "—"}</SC>
                     <SC v={r.tariffs} className="py-1.5 px-2 text-right text-gray-400">{r.tariffs > 0 ? $2(r.tariffs) : "—"}</SC>
                     <SC v={r.other} className="py-1.5 px-2 text-right text-gray-400">{r.other > 0 ? $2(r.other) : "—"}</SC>
                     <SC v={r.totalCost} className="py-1.5 px-2 text-right text-amber-300">{r.totalCost > 0 ? $2(r.totalCost) : "—"}</SC>
-                    <td className="py-1.5 px-2 text-right">
-                      <span className="text-white">{r.cpp > 0 ? $4(r.cpp) : "—"}</span>
-                      {pctChg != null && <span className={`ml-1 text-[10px] ${pctChg > 0 ? "text-red-400" : pctChg < 0 ? "text-emerald-400" : "text-gray-500"}`}>{pctChg > 0 ? "+" : ""}{pctChg.toFixed(1)}%</span>}
-                    </td>
+                    <td className="py-1.5 px-2 text-right text-white">{r.cpp > 0 ? $4(r.cpp) : "—"}</td>
+                    <td className={`py-1.5 px-2 text-right ${pctChg != null && pctChg > 0 ? "text-red-400" : pctChg != null && pctChg < 0 ? "text-emerald-400" : "text-gray-500"}`}>{pctChg != null ? (pctChg > 0 ? "+" : "") + pctChg.toFixed(1) + "%" : "—"}</td>
                     <td className="py-1.5 px-2 text-gray-500 truncate max-w-[120px]">{r.note || "—"}</td>
                   </tr>;
                 })}</tbody>
