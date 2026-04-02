@@ -300,6 +300,10 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
        
 
         // 5. Check overallocation: if total orders > core need + 15 DOC → warn
+        // 5a. Place core order if needed
+        if (coreRawNeed > 0) {
+          u[c.id] = { ...(u[c.id] || {}), pcs: cOQ(coreRawNeed, c.moq, c.casePack) };
+        }        
         const totalOrderCorePcs = totalBundleOrderCorePcs + (coreRawNeed > 0 ? cOQ(coreRawNeed, c.moq, c.casePack) : 0);
         const overDOC = c.dsr > 0 ? Math.round((totalOrderCorePcs - coreNeed) / c.dsr) : 0;
         if (overDOC > 15 && coreNeed > 0) {
