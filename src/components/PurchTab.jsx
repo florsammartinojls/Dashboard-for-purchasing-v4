@@ -113,6 +113,7 @@ const isIgnored = useCallback((id) => {
       const seas = cSeas(c.id, (data._coreInv || []));
       const invAnomaly = ai > 0 && c.dsr > 0 && Math.abs(effectiveDoc - ai / c.dsr) > effectiveDoc * 0.2;
 return { ...c, status: st, allIn: ai, doc: effectiveDoc, needQty: sNeed, orderQty: oq, needDollar: +(oq * c.cost).toFixed(2), docAfter: cDA(c, oq), lt, critDays: cd, warnDays: wd, targetDoc: tg, vc: v.country || "", seas, isDom: isD(v.country), spike: c.d7 > 0 && c.dsr > 0 && c.d7 >= c.dsr * 1.25, sProfile: profile, sCoverage: coverage, invAnomaly };
+    }).filter(c => {
       if (vf && c.ven !== vf) return false;
       if (sf && c.status !== sf) return false;
       if (minD > 0 && c.doc < minD) return false;
