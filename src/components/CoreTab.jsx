@@ -181,14 +181,25 @@ export default function CoreTab({ data, stg, hist, daily, coreId, onBack, goBund
         <p className="text-gray-500 text-xs">{core.ven} · VSKU:{core.vsku || "—"} · {$2(core.cost)} · LT:{lt}d · Buf:{core.buf || 14}d · Tgt:{tg}d</p>
       </div>
 
-      {/* KPIs */}
+    {/* KPIs */}
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-4">
         {[
           { l: "C.DSR", v: D1(core.dsr) },
           { l: "7D", v: D1(core.d7) },
-          { l: "DOC", v: R(core.doc), c: dc(core.doc, lt, lt + (core.buf || 14)) },
           { l: "All-In Own Pcs", v: R(ai) },
-          { l: "Inbound (sheet)", v: R(core.inb) }, { l: "Inbound 7f", v: R(inbS.reduce((s, i) => s + (i.pieces || 0), 0)), sub: etaT }
+          { l: "DOC", v: R(core.doc), c: dc(core.doc, lt, lt + (core.buf || 14)) },
+          { l: "All-In Own/CDSR", v: core.dsr > 0 ? R(Math.round(ai / core.dsr)) : "—" },
+        ].map(k => (
+          <div key={k.l} className="bg-gray-900 rounded-lg p-3 border border-gray-800">
+            <div className="text-gray-500 text-xs mb-1">{k.l}</div>
+            <div className={`text-lg font-bold ${k.c || "text-white"}`}>{k.v}</div>
+          </div>
+        ))}
+      </div>
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-4">
+        {[
+          { l: "Inbound (sheet)", v: R(core.inb) },
+          { l: "Inbound 7f", v: R(inbS.reduce((s, i) => s + (i.pieces || 0), 0)), sub: etaT },
         ].map(k => (
           <div key={k.l} className="bg-gray-900 rounded-lg p-3 border border-gray-800">
             <div className="text-gray-500 text-xs mb-1">{k.l}</div>
