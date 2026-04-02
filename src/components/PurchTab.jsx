@@ -39,9 +39,9 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
 
   useEffect(() => { if (initV) { setVm("vendor"); setVf(initV); clearIV() } }, [initV, clearIV]);
 
-  const isIgnored = useCallback((id) => {
+const isIgnored = useCallback((id) => {
     const wf = (data.workflow || []).find(w => w.id === id);
-    if (!wf || wf.status !== "Ignore") return false;
+    if (!wf || !wf.status) return false;
     if (!wf.ignoreUntil) return true;
     const parts = (wf.ignoreUntil || "").split(/[-/]/);
     let until;
