@@ -123,15 +123,23 @@ export function WorkflowChip({ id, type, workflow, onSave, onDelete, buyer, coun
   const [note, setNote] = useState(existing?.note || "");
   const [ignoreUntil, setIgnoreUntil] = useState(existing?.ignoreUntil || "");
   useEffect(() => { const ex = (workflow || []).find(w => w.id === id); if (ex) { setStatus(ex.status || ""); setNote(ex.note || ""); setIgnoreUntil(ex.ignoreUntil || "") } }, [workflow, id]);
-  const getDefaultExpiry = () => {
-    const d = new Date();
+  const getDefaultDays = () => {
     const isDom = ['us','usa','united states',''].includes((country || '').toLowerCase().trim());
-    d.setDate(d.getDate() + (isDom ? 1 : 5));
-    return d.toISOString().split('T')[0];
+    return isDom ? 1 : 5;
+  };
+  const [days, setDays] = useState('');
+  const daysToDate = (d) => {
+    const dt = new Date();
+    dt.setDate(dt.getDate() + parseInt(d));
+    return dt.toISOString().split('T')[0];
   };
   const pickStatus = (s) => {
     setStatus(s);
-    if (!ignoreUntil) setIgnoreUntil(getDefaultExpiry());
+    if (!days) {
+      const def = getDefaultDays();
+      setDays(String(def));
+      setIgnoreUntil(daysToDate(def));
+    }
   };
   const save = () => { onSave({ id, type, status, note, ignoreUntil, updatedBy: buyer || "" }); setOpen(false) };
   const del = () => { onDelete({ id }); setOpen(false); setStatus(""); setNote(""); setIgnoreUntil("") };
@@ -141,7 +149,7 @@ export function WorkflowChip({ id, type, workflow, onSave, onDelete, buyer, coun
     <div className="space-y-2">
       <div><label className="text-xs text-gray-500 block mb-1">Status</label><div className="flex gap-1 flex-wrap">{WF_STATUSES.filter(Boolean).map(s => <button key={s} onClick={() => pickStatus(s)} className={`text-xs px-2 py-1 rounded ${status === s ? WF_COLORS[s] : "bg-gray-800 text-gray-400"}`}>{s}</button>)}</div></div>
       <div><label className="text-xs text-gray-500 block mb-1">Note</label><input type="text" value={note} onChange={e => setNote(e.target.value)} placeholder="e.g. Negotiating price..." className="bg-gray-800 border border-gray-600 text-white rounded px-2 py-1 w-full text-xs" /></div>
-      <div><label className="text-xs text-gray-500 block mb-1">Ignore Until</label><input type="text" value={ignoreUntil ? fmtDateUS(ignoreUntil) : ''} placeholder="mm/dd/yyyy" onChange={e => { const v = e.target.value.replace(/[^0-9/]/g, ''); if (v.length <= 10) { const p = v.split('/'); if (p.length === 3 && p[2].length === 4) { setIgnoreUntil(p[2] + '-' + p[0].padStart(2,'0') + '-' + p[1].padStart(2,'0')) } else { setIgnoreUntil(v) } } }} onBlur={() => { const d = parseDate(ignoreUntil); if (d) setIgnoreUntil(d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0')) }} className="bg-gray-800 border border-gray-600 text-white rounded px-2 py-1 w-full text-xs" /></div>
+      <div><label className="text-xs text-gray-500 block mb-1">Ignore for (days)</label><div className="flex gap-2 items-center"><input type="number" value={days} onChange={e => { const v = e.target.value; setDays(v); if (parseInt(v) > 0) setIgnoreUntil(daysToDate(v)); }} placeholder={String(getDefaultDays())} className="bg-gray-800 border border-gray-600 text-white rounded px-2 py-1 w-16 text-xs text-center" />{ignoreUntil && <span className="text-gray-500 text-[10px]">→ {fmtDateUS(ignoreUntil)}</span>}</div></div>
     </div>
   </div>;
 }
