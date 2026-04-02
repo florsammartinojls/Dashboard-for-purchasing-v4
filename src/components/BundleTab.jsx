@@ -24,7 +24,6 @@ export default function BundleTab({ data, stg, hist, daily, bundleId, onBack, go
   const b = sel ? (data.bundles || []).find(x => x.j === sel) : null;
   const fee = b ? (data.fees || []).find(f => f.j === b.j) : null;
   const replen = b ? (data.replenRec || []).find(r => r.j === b.j) : null;
-  const replen = b ? (data.replenRec || []).find(r => r.j === b.j) : null;
   const core = b ? (data.cores || []).find(c => c.id === b.core1) : null;
   const abcA = useMemo(() => data.abcA || [], [data.abcA]);
   const abcT = useMemo(() => data.abcT || [], [data.abcT]);
@@ -52,11 +51,7 @@ export default function BundleTab({ data, stg, hist, daily, bundleId, onBack, go
     if (!inb7fEta) return null;
     return Math.ceil((new Date(inb7fEta) - new Date()) / 86400000);
   }, [inb7fEta]);
-  const daysUntilArr = useMemo(() => {
-  if (!inb7fEta) return null;
-  return Math.ceil((new Date(inb7fEta) - new Date()) / 86400000);
-}, [inb7fEta]);
-
+  
   // Bundle inventory history (merged summary + daily aggregation) → Units = sum of Complete DSR
   const bInv = useMemo(() => (hist?.bundleSales || []).filter(h => h.j === sel), [hist, sel]);
   const uYrs = useMemo(() => gY(bInv), [bInv]);
