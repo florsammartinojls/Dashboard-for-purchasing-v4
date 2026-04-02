@@ -47,6 +47,14 @@ export default function CoreTab({ data, stg, hist, daily, coreId, onBack, goBund
     return r;
   }), [cHF, yrs]);
 
+  // Sequential DSR timeline chart
+  const dsrTimeline = useMemo(() => {
+    return cHF.filter(h => h.avgDsr > 0 || h.units > 0).map(h => {
+      const dsr = h.avgDsr > 0 ? h.avgDsr : (h.dataDays > 0 ? Math.round(h.units / h.dataDays * 10) / 10 : 0);
+      return { date: h.y + '-' + String(h.m).padStart(2, '0'), dsr, units: h.units || 0, oos: h.oosDays || 0 };
+    }).sort((a, b) => a.date.localeCompare(b.date));
+  }, [cHF]);
+
   // Bundle association — Attached JLS #s first (robust matching), then core1 fallback
   const bA = stg.bA || "yes"; const bI = stg.bI || "blank";
   const bundleFilter = b => {
@@ -391,7 +399,22 @@ export default function CoreTab({ data, stg, hist, daily, coreId, onBack, goBund
           </div>
         </div>
       )}
-
+{/* DSR Timeline */}
+      {dsrTimeline.length > 3 && (
+        <div className="bg-gray-900 rounded-xl p-4 mb-4 border border-gray-800">
+          <h3 className="text-white font-semibold text-sm mb-2">DSR Trend (all time)</h3>
+          <ResponsiveContainer width="100%" height={200}>
+            <LineChart data={dsrTimeline}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
+              <XAxis dataKey="date" tick={{ fill: "#9ca3af", fontSize: 10 }} axisLine={{ stroke: "#374151" }} tickLine={false} interval={Math.max(0, Math.floor(dsrTimeline.length / 12))} />
+              <YAxis tick={{ fill: "#9ca3af", fontSize: 10 }} axisLine={false} tickLine={false} domain={[0, 'auto']} />
+              <Tooltip contentStyle={{ backgroundColor: "#111827", border: "1px solid #374151", borderRadius: "8px", fontSize: 12 }} formatter={(v) => v != null ? v.toFixed(1) : '—'} />
+              <Line dataKey="dsr" stroke="#3b82f6" strokeWidth={2} dot={false} name="Avg DSR" />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+      
       {/* Pipeline */}
       <div className="bg-gray-900 rounded-xl p-4 mb-4 border border-gray-800">
         <h3 className="text-white font-semibold text-sm mb-3">Pipeline</h3>
