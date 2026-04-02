@@ -19,6 +19,13 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
   const initVendorFromURL = new URLSearchParams(window.location.search).get('vendor');
   const [vm, setVm] = useState(initV || initVendorFromURL ? "vendor" : "core");
   const [vf, setVf] = useState(initV || initVendorFromURL || "");
+  useEffect(() => {
+  if (initVendorFromURL && !initV) {
+    const decoded = decodeURIComponent(initVendorFromURL);
+    const match = (data.vendors || []).find(v => v.name === decoded || v.name.toLowerCase() === decoded.toLowerCase());
+    if (match) setVf(match.name);
+  }
+}, [data.vendors]);
   const [sort, setSort] = useState("status");
     const [sf, setSf] = useState("");
   const [nf, setNf] = useState("all");
