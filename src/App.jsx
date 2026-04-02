@@ -164,7 +164,7 @@ export default function App() {
   const [stg, setStg] = useState({ buyer: '', domesticDoc: 90, intlDoc: 180, fA: "yes", fI: "blank", fV: "yes" });
   const [coreId, setCoreId] = useState(initCore || null);
   const [bundleId, setBundleId] = useState(initBundle || null);
-  const [data, setData] = useState({ cores: [], bundles: [], vendors: [], sales: [], fees: [], inbound: [], abcA: [], abcT: [], abcSub: '', restock: [], priceComp: [], agedInv: [], killMgmt: [], workflow: [], receiving: [], replenRec: [], receivingFull: [], vendorComments: [] });
+  const [data, setData] = useState({ cores: [], bundles: [], vendors: [], sales: [], fees: [], inbound: [], abcA: [], abcT: [], abcSub: '', restock: [], priceComp: [], agedInv: [], killMgmt: [], workflow: [], receiving: [], replenRec: [], receivingFull: [], vendorComments: [], priceCompFull: [] });
   const [hist, setHist] = useState({ bundleSales: [], coreInv: [], bundleInv: [], priceHist: [] });
   const [daily, setDaily] = useState({ coreDays: [], bundleDays: [] });
   const [ov, setOv] = useState({});
@@ -183,7 +183,7 @@ export default function App() {
   const load = useCallback(() => {
     setLoading(true); setError(null);
     api('live').then(d => {
-      setData({ cores: d.cores || [], bundles: d.bundles || [], vendors: d.vendors || [], sales: d.sales || [], fees: d.fees || [], inbound: d.inbound || [], abcA: d.abcA || [], abcT: d.abcT || [], abcSub: d.abcSub || '', restock: d.restock || [], priceComp: d.priceComp || [], agedInv: d.agedInv || [], killMgmt: d.killMgmt || [], workflow: d.workflow || [], receiving: d.receiving || [], replenRec: d.replenRec || [], receivingFull: d.receivingFull || [], vendorComments: d.vendorComments || [] });
+      setData({ cores: d.cores || [], bundles: d.bundles || [], vendors: d.vendors || [], sales: d.sales || [], fees: d.fees || [], inbound: d.inbound || [], abcA: d.abcA || [], abcT: d.abcT || [], abcSub: d.abcSub || '', restock: d.restock || [], priceComp: d.priceComp || [], agedInv: d.agedInv || [], killMgmt: d.killMgmt || [], workflow: d.workflow || [], receiving: d.receiving || [], replenRec: d.replenRec || [], receivingFull: d.receivingFull || [], vendorComments: d.vendorComments || [], priceCompFull: d.priceCompFull || [] });
       setTs(d.timestamp || ""); setLoading(false);
       api('history').then(h => { setHist(h); setRdy(r => ({ ...r, h: true })) }).catch(() => setRdy(r => ({ ...r, h: true })));
       api('daily').then(d => { setDaily(d); setRdy(r => ({ ...r, d: true })) }).catch(() => setRdy(r => ({ ...r, d: true })));
