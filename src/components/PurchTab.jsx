@@ -24,6 +24,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
   const [minD, setMinD] = useState(0);
   const [locF, setLocF] = useState("all");
   const [toast, setToast] = useState(null);
+  const [toastPersist, setToastPersist] = useState(false);
   const [poN, setPoN] = useState("");
   const [poD, setPoD] = useState("");
   const [vendorSub, setVendorSub] = useState("cores");
@@ -316,7 +317,7 @@ const isIgnored = useCallback((id) => {
     }
 
     setOv(u);
-    if (warnings.length > 0) setToast("⚠ " + warnings.join(" | "));
+    if (warnings.length > 0) { setToast("⚠ " + warnings.join(" | ")); setToastPersist(true); }
   };
 
   const r2w = n => Math.round(n * 100) / 100;
@@ -456,13 +457,13 @@ const isIgnored = useCallback((id) => {
     <th className="py-2 px-1 w-20">{rsToggle} {costsToggle}</th>
   </tr>;
 
-  return <div className="p-4">{toast && <Toast msg={toast} onClose={() => setToast(null)} />}
+  return <div className="p-4">{toast && <Toast msg={toast} onClose={() => { setToast(null); setToastPersist(false); }} persist={toastPersist} />}
     {breakdown && <CalcBreakdown data={breakdown} onClose={() => setBreakdown(null)} />}
     <div className="flex flex-wrap gap-2 items-center mb-4">
       <div className="flex bg-gray-800 rounded-lg p-0.5">{["core", "vendor"].map(m => <button key={m} onClick={() => setVm(m)} className={`px-3 py-1.5 rounded-md text-sm font-medium ${vm === m ? "bg-blue-600 text-white" : "text-gray-400"}`}>{m === "core" ? "By Core" : "By Vendor"}</button>)}</div>
       <SS value={vf} onChange={setVf} options={vNames} />
       <select value={sf} onChange={e => setSf(e.target.value)} className="bg-gray-800 border border-gray-700 text-gray-300 text-sm rounded-lg px-2 py-1.5"><option value="">All Status</option><option value="critical">Critical</option><option value="warning">Warning</option><option value="healthy">Healthy</option></select>
-      <select value={locF} onChange={e => setLocF(e.target.value)} className="bg-gray-800 border border-gray-700 text-gray-300 text-sm rounded-lg px-2 py-1.5"><option value="all">All</option><option value="us">US Only</option><option value="intl">International</option></select>
+      {!vf && <select value={locF} onChange={e => setLocF(e.target.value)} className="bg-gray-800 border border-gray-700 text-gray-300 text-sm rounded-lg px-2 py-1.5"><option value="all">All</option><option value="us">US Only</option><option value="intl">International</option></select>}
       <select value={nf} onChange={e => setNf(e.target.value)} className="bg-gray-800 border border-gray-700 text-gray-300 text-sm rounded-lg px-2 py-1.5"><option value="all">All</option><option value="need">Needs Buy</option><option value="ok">No Need</option></select>
       {vm === "core" && <><select value={sort} onChange={e => setSort(e.target.value)} className="bg-gray-800 border border-gray-700 text-gray-300 text-sm rounded-lg px-2 py-1.5"><option value="status">Priority</option><option value="doc">DOC</option><option value="dsr">DSR</option><option value="need$">$</option></select><span className="text-gray-500 text-xs">Min:</span><input type="number" value={minD} onChange={e => setMinD(+e.target.value)} className="bg-gray-800 border border-gray-700 text-white text-sm rounded px-2 py-1 w-14" /></>}
       {vm === "vendor" && <div className="flex bg-gray-800 rounded-lg p-0.5">{[["cores", "Cores"], ["bundles", "Bundles"], ["mix", "Mix"]].map(([k, l]) => <button key={k} onClick={() => setVendorSub(k)} className={`px-2.5 py-1 rounded-md text-xs font-medium ${vendorSub === k ? "bg-indigo-600 text-white" : "text-gray-400"}`}>{l}</button>)}</div>}
@@ -544,7 +545,7 @@ const isIgnored = useCallback((id) => {
             </div>
           </div>
         </div>
-        <div className="overflow-auto max-h-[70vh]"><table className="w-full text-xs"><thead><VTH isCol={anyCol} /></thead><tbody>
+        <div className="overflow-auto max-h-[70vh] max-w-[calc(100vw-2rem)]"><table className="w-full text-xs"><thead><VTH isCol={anyCol} /></thead><tbody>
           {vendorSub === "bundles" ? <>{grp.bundles.map(b => <BundleRow key={b.j} b={b} />)}{grp.bundles.length === 0 && <tr><td colSpan={40} className="py-4 text-center text-gray-500">No bundles</td></tr>}</>
             : vendorSub === "mix" ? <>{grp.cores.map(c => {
             const cBs = (data.bundles || []).filter(b => { if (b.core1 !== c.id) return false; if (bA === "yes" && b.active !== "Yes") return false; if (bA === "no" && b.active === "Yes") return false; if (bI === "blank" && !!b.ignoreUntil) return false; if (bI === "set" && !b.ignoreUntil) return false; return true }).map(b => ({ ...b, fee: feMap[b.j] })).sort((a, b) => (a.fibDoc || 0) - (b.fibDoc || 0));
