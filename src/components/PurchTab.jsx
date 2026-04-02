@@ -16,7 +16,8 @@ const AGL_LT = 80;
 
 
 export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, setOv, initV, clearIV, saveWorkflow, deleteWorkflow, saveVendorComment, activeBundleCores }) {
-  const [vm, setVm] = useState(initV ? "vendor" : "core");
+  const initVendorFromURL = new URLSearchParams(window.location.search).get('vendor');
+  const [vm, setVm] = useState(initV || initVendorFromURL ? "vendor" : "core");
   const [sort, setSort] = useState("status");
   const [vf, setVf] = useState(initV || "");
   const [sf, setSf] = useState("");
