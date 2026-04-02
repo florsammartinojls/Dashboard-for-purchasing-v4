@@ -312,19 +312,10 @@ const isIgnored = useCallback((id) => {
           warnings.push(`${c.id}: +${overDOC} DOC over need (PPRC imbalance) — review unbundle`);
         }
       });
-    } else {
-      // Cores mode — seasonal needQty, discount bundle inventory
-      cores.filter(c => c.needQty > 0).forEach(c => {
-        const cBundles = (data.bundles || []).filter(b => b.core1 === c.id && b.active === "Yes");
-        const bundleInvCorePcs = cBundles.reduce((s, b) => {
-          const rp = replenMap[b.j];
-          const bInv = (b.fibInv || 0) + (rp?.pprcUnits || 0) + (rp?.batched || 0);
-          return s + bInv * (b.qty1 || 1);
-        }, 0);
-        const adjustedNeed = Math.max(0, c.needQty - bundleInvCorePcs);
-        if (adjustedNeed > 0) u[c.id] = { ...(u[c.id] || {}), pcs: cOQ(adjustedNeed, c.moq, c.casePack) };
-      });
-    }
+} else {
+        // Cores mode — seasonal needQty already computed
+        cores.filter(c => c.needQty > 0).forEach(c => { u[c.id] = { ...(u[c.id] || {}), pcs: cOQ(c.needQty, c.moq, c.casePack) } });
+      }
 
     setOv(u);
     if (warnings.length > 0) { setToast("⚠ " + warnings.join(" | ")); setToastPersist(true); }
