@@ -122,7 +122,7 @@ export function WorkflowChip({ id, type, workflow, onSave, onDelete, buyer, coun
   const [status, setStatus] = useState(existing?.status || "");
   const [note, setNote] = useState(existing?.note || "");
   const [ignoreUntil, setIgnoreUntil] = useState(existing?.ignoreUntil || "");
-  useEffect(() => { const ex = (workflow || []).find(w => w.id === id); if (ex) { setStatus(ex.status || ""); setNote(ex.note || ""); setIgnoreUntil(ex.ignoreUntil || "") } }, [workflow, id]);
+  useEffect(() => { const ex = (workflow || []).find(w => w.id === id); if (ex) { setStatus(ex.status || ""); setNote(ex.note || ""); setIgnoreUntil(ex.ignoreUntil || ""); if (ex.ignoreUntil) { const d = new Date(ex.ignoreUntil + 'T00:00:00'); const diff = Math.ceil((d - new Date()) / 86400000); setDays(diff > 0 ? String(diff) : '0'); } else { setDays(''); } } }, [workflow, id]);
   const getDefaultDays = () => {
     const isDom = ['us','usa','united states',''].includes((country || '').toLowerCase().trim());
     return isDom ? 1 : 5;
