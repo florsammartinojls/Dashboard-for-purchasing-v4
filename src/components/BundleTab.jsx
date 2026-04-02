@@ -163,7 +163,7 @@ export default function BundleTab({ data, stg, hist, daily, bundleId, onBack, go
 
   // === DETAIL VIEW ===
   return <div className="p-4 max-w-7xl mx-auto">
-    <button onClick={() => setSel(null)} className="text-gray-400 hover:text-white text-sm mb-4">← Back</button>
+    <button onClick={() => { if (bundleId) onBack(); else setSel(null); }} className="text-gray-400 hover:text-white text-sm mb-4">← Back</button>
     {/* Header */}
     <div className="bg-gray-900 rounded-xl p-4 mb-4 border border-gray-800">
       <div className="flex flex-wrap items-center gap-3 mb-2">
