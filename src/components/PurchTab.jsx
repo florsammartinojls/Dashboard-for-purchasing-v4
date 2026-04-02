@@ -42,7 +42,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
 
 const isIgnored = useCallback((id) => {
     const wf = (data.workflow || []).find(w => w.id === id);
-    if (!wf || !wf.status) return false;
+    if (!wf || wf.status !== "Ignore") return false;
     if (!wf.ignoreUntil) return true;
     const parts = (wf.ignoreUntil || "").split(/[-/]/);
     let until;
@@ -177,7 +177,7 @@ const isIgnored = useCallback((id) => {
     const g = {};
     enr.forEach(c => { if (!g[c.ven]) g[c.ven] = { v: vMap[c.ven] || { name: c.ven }, cores: [], bundles: [] }; g[c.ven].cores.push(c) });
     Object.keys(g).forEach(vn => { g[vn].bundles = venBundles.filter(b => (b.vendors || "").indexOf(vn) >= 0) });
-    return Object.values(g).filter(grp => showIgnored || !isIgnored(grp.v.name)).sort((a, b) => b.cores.filter(c => c.status === "critical").length - a.cores.filter(c => c.status === "critical").length);
+    return Object.values(g).filter(grp => vf || showIgnored || !isIgnored(grp.v.name)).sort((a, b) => b.cores.filter(c => c.status === "critical").length - a.cores.filter(c => c.status === "critical").length);
   }, [enr, vm, vMap, venBundles, isIgnored, showIgnored]);
 
   const getPOI = (cores, bundles) => {
