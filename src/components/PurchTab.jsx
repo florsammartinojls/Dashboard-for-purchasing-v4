@@ -489,7 +489,8 @@ const isIgnored = useCallback((id) => {
       const poI = getPOI(grp.cores, vendorSub !== "cores" ? grp.bundles : []);
       const poT = poI.reduce((s, i) => s + i.qty * i.cost, 0);
       const poC = poI.reduce((s, i) => s + (v.vou === 'Cases' && i.isCoreItem ? Math.ceil(i.qty / (i.cp || 1)) : 0), 0);
-      const meets = poT >= (v.moqDollar || 0);
+      const effectiveMoqD = v.moqDollar || (gO('_dmoq_' + v.name).dMoq ?? 0);
+      const meets = effectiveMoqD > 0 ? poT >= effectiveMoqD : true;
       const anyCol = Object.values(collapsed).some(Boolean);
       const vendorPO = autoPO(v.code);
       const moqGap = (v.moqDollar || 0) - poT;
@@ -505,7 +506,7 @@ const isIgnored = useCallback((id) => {
             {v.country && <span className="text-xs text-gray-500">{v.country}</span>}
             <span className="text-xs text-gray-400">LT:{v.lt}d</span>
             <span className="text-xs text-gray-400">Buf:{grp.cores[0]?.buf || 14}d</span>
-            <span className="text-xs text-gray-400">MOQ:{$(v.moqDollar)}</span>
+           <span className="text-xs text-gray-400">MOQ:{$(effectiveMoqD || v.moqDollar)}</span>
             <span className="text-xs text-gray-400">Tgt:{tg}d</span>
             <span className="text-xs text-gray-400">{v.payment}</span>
             {pf && pf.comment && <span className="text-xs text-amber-400">{pf.comment}</span>}
@@ -524,7 +525,8 @@ const isIgnored = useCallback((id) => {
               if (alerts.length === 0) return null;
               return <div className="w-full mt-1">{alerts.map(a => <div key={a.id} className="text-xs text-amber-400">⚠ {a.id}: ordering {R(a.qty)} but lowest {a.type} purchase was {R(a.min)}</div>)}</div>;
             })()}
-
+<span className="flex items-center gap-1 text-xs text-gray-400">C.MOQ:<NumInput value={gO('_cmoq_' + v.name).cMoq ?? 0} onChange={val => setF('_cmoq_' + v.name, 'cMoq', val)} placeholder="0" className="bg-gray-800 border border-gray-600 text-white rounded px-1 py-0.5 w-14 text-center text-xs" /></span>
+            <span className="flex items-center gap-1 text-xs text-gray-400">$MOQ:<NumInput value={gO('_dmoq_' + v.name).dMoq ?? 0} onChange={val => setF('_dmoq_' + v.name, 'dMoq', val)} placeholder="0" className="bg-gray-800 border border-gray-600 text-white rounded px-1 py-0.5 w-16 text-center text-xs" /></span>
             {(vendorSub === "bundles" || vendorSub === "mix") && <>
               <span className="flex items-center gap-1 text-xs text-gray-400">B.MOQ:<NumInput value={gBMoq('_bmoq_' + v.name)} onChange={val => setF('_bmoq_' + v.name, 'bMoq', val)} placeholder="0" className="bg-gray-800 border border-gray-600 text-white rounded px-1 py-0.5 w-14 text-center text-xs" /></span>
               <button onClick={() => setAglMap(p => ({ ...p, [v.name]: !p[v.name] }))} className={`text-xs px-2 py-0.5 rounded font-medium ${isAgl ? "bg-cyan-600 text-white" : "bg-gray-700 text-gray-400"}`} title="AGL: use 80d lead time for bundles">AGL{isAgl ? " ✓" : ""}</button>
@@ -533,7 +535,7 @@ const isIgnored = useCallback((id) => {
           </div>
           <div className="flex flex-wrap gap-2 items-center">
             <button onClick={() => fillR(grp.cores, grp.bundles, vendorSub, v.name)} className={`text-xs px-2.5 py-1 rounded ${data._coreInv?.length ? "bg-blue-600/80 text-white" : "bg-yellow-600 text-white animate-pulse"}`}>{data._coreInv?.length ? "Fill Rec" : "Fill Rec ⏳"}</button>
-            <button onClick={() => doFillMOQ(grp.cores, grp.bundles, v.moqDollar || 0)} disabled={!v.moqDollar || poT >= v.moqDollar || poI.length === 0} className={`text-xs px-2.5 py-1 rounded font-medium ${v.moqDollar && poT < v.moqDollar && poI.length > 0 ? "bg-orange-600 text-white" : "bg-gray-700 text-gray-500 cursor-not-allowed"}`}>Fill MOQ{moqGap > 0 && poI.length > 0 ? ` (+${$(moqGap)})` : ""}</button>
+            <button onClick={() => doFillMOQ(grp.cores, grp.bundles, v.moqDollar || (gO('_dmoq_' + v.name).dMoq ?? 0))} disabled={!v.moqDollar || poT >= v.moqDollar || poI.length === 0} className={`text-xs px-2.5 py-1 rounded font-medium ${v.moqDollar && poT < v.moqDollar && poI.length > 0 ? "bg-orange-600 text-white" : "bg-gray-700 text-gray-500 cursor-not-allowed"}`}>Fill MOQ{moqGap > 0 && poI.length > 0 ? ` (+${$(moqGap)})` : ""}</button>
             <button onClick={() => clrV(grp.cores, grp.bundles)} className="text-xs bg-gray-700 text-gray-300 px-2.5 py-1 rounded">Clear</button>
             <button onClick={() => setDismissed({})} className="text-xs bg-gray-700 text-gray-300 px-2 py-1 rounded">Show All</button>
             <div className="ml-auto flex gap-2">
@@ -548,7 +550,7 @@ const isIgnored = useCallback((id) => {
         <div className="overflow-auto max-h-[70vh] max-w-[calc(100vw-2rem)]"><table className="w-full text-xs"><thead><VTH isCol={anyCol} /></thead><tbody>
           {vendorSub === "bundles" ? <>{grp.bundles.map(b => <BundleRow key={b.j} b={b} />)}{grp.bundles.length === 0 && <tr><td colSpan={40} className="py-4 text-center text-gray-500">No bundles</td></tr>}</>
             : vendorSub === "mix" ? <>{grp.cores.map(c => {
-            const cBs = (data.bundles || []).filter(b => { if (b.core1 !== c.id) return false; if (bA === "yes" && b.active !== "Yes") return false; if (bA === "no" && b.active === "Yes") return false; if (bI === "blank" && !!b.ignoreUntil) return false; if (bI === "set" && !b.ignoreUntil) return false; return true }).map(b => ({ ...b, fee: feMap[b.j] })).sort((a, b) => (a.fibDoc || 0) - (b.fibDoc || 0));
+            const cBs = (data.bundles || []).filter(b => { if (b.core1 !== c.id && b.core2 !== c.id && b.core3 !== c.id) return false; if (bA === "yes" && b.active !== "Yes") return false; if (bA === "no" && b.active === "Yes") return false; if (bI === "blank" && !!b.ignoreUntil) return false; if (bI === "set" && !b.ignoreUntil) return false; return true }).map(b => ({ ...b, fee: feMap[b.j] })).sort((a, b) => (a.fibDoc || 0) - (b.fibDoc || 0));
             const orderedBs = nf === "need" ? cBs.filter(b => hasBundleOrd(b)) : cBs;
             if (nf === "need" && !hasCoreOrd(c) && orderedBs.length === 0) return null;
             return <Fragment key={c.id}><CoreRow c={c} />{!dismissed[c.id] && orderedBs.map(b => <BundleRow key={b.j} b={b} />)}</Fragment>;
