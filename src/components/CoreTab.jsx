@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useEffect } from "react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
 import { R, D1, $, $2, P, MN, YC, TTP, BL, TL, gS, cAI, cNQ, cOQ, cDA, gTD, dc, fE, fD, cMo, gY, cSeas } from "../lib/utils";
+import { batchProfiles, calcCoverageNeed, calcPurchaseFrequency, DEFAULT_PROFILE } from "../lib/seasonal";
 import { Dot, TH, SumCtx } from "./Shared";
 
 // Clickable cell for Quick Sum
@@ -83,6 +84,27 @@ export default function CoreTab({ data, stg, hist, daily, coreId, onBack, goBund
   const oq = core ? cOQ(nq, core.moq, core.casePack) : 0;
   const da = core ? cDA(core, oq) : 0;
   const seas = core ? cSeas(core.id, hist?.coreInv || []) : null;
+  const profile = useMemo(() => {
+    if (!core) return DEFAULT_PROFILE;
+    const p = batchProfiles([core], hist?.coreInv || [], daily?.coreDays || []);
+    return p[core.id] || DEFAULT_PROFILE;
+  }, [core, hist, daily]);
+  const pf = useMemo(() => core ? calcPurchaseFrequency(core.ven, data.receivingFull || []) : null, [core, data.receivingFull]);
+  const coverage = useMemo(() => core ? calcCoverageNeed(core, lt, tg, profile, pf) : null, [core, lt, tg, profile, pf]);
+  const sNeed = coverage?.need || 0;
+  const flatNeed = core ? Math.ceil(Math.max(0, tg * core.dsr - ai)) : 0;
+  const sOq = cOQ(sNeed, core?.moq, core?.casePack);
+  const sDa = core ? cDA(core, sOq) : 0;
+
+  const minPurchase = useMemo(() => {
+    if (!core || !data.receivingFull) return null;
+    const recs = (data.receivingFull || []).filter(r =>
+      (r.core || "").trim().toLowerCase() === core.id.toLowerCase() && r.pcs > 0 && r.vendor === core.ven
+    );
+    if (recs.length < 1) return null;
+    const min = Math.min(...recs.map(r => r.pcs));
+    return { min, count: recs.length };
+  }, [core, data.receivingFull]);
 
   const pipe = core ? [
     { l: "Raw", v: core.raw }, { l: "Inb", v: core.inb }, { l: "PP", v: core.pp },
@@ -458,16 +480,16 @@ export default function CoreTab({ data, stg, hist, daily, coreId, onBack, goBund
         ) : <p className="text-gray-500 text-sm">No bundles.</p>}
       </div>
 
-      {/* Purchase Rec */}
+     {/* Purchase Rec */}
       <div className="bg-gray-900 rounded-xl p-4 border border-gray-800">
         <h3 className="text-white font-semibold text-sm mb-3">Purchase Rec</h3>
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-4 mb-3">
           {[
             { l: "DOC", v: R(core.doc), c: dc(core.doc, lt, lt + (core.buf || 14)) },
-            { l: "Need " + tg + "d", v: R(nq) },
-            { l: "Order(MOQ:" + R(core.moq) + ")", v: R(oq) },
-            { l: "Cost", v: $(oq * core.cost), c: "text-amber-300" },
-            { l: "After DOC", v: oq > 0 ? R(da) : "—", c: "text-emerald-400" }
+            { l: "Seasonal Need " + tg + "d", v: R(sNeed), c: "text-white" },
+            { l: "Order(MOQ:" + R(core.moq) + ")", v: R(sOq) },
+            { l: "Cost", v: $(sOq * core.cost), c: "text-amber-300" },
+            { l: "After DOC", v: sOq > 0 ? R(sDa) : "—", c: "text-emerald-400" }
           ].map(k => (
             <div key={k.l}>
               <div className="text-gray-500 text-xs">{k.l}</div>
@@ -475,7 +497,11 @@ export default function CoreTab({ data, stg, hist, daily, coreId, onBack, goBund
             </div>
           ))}
         </div>
+        <div className="flex flex-wrap gap-4 text-xs border-t border-gray-700 pt-2">
+          <span className="text-gray-500">Flat need: <span className="text-gray-300 font-semibold">{R(flatNeed)}</span></span>
+          {sNeed !== flatNeed && <span className={sNeed > flatNeed ? "text-amber-400" : "text-emerald-400"}>{sNeed > flatNeed ? "+" : ""}{R(sNeed - flatNeed)} seasonal adjustment</span>}
+          {profile.hasHistory && <span className="text-purple-400">CV: {profile.cv?.toFixed(2)}</span>}
+          {pf && <span className="text-gray-500">Freq: {pf.ordersPerYear}/yr · ×{pf.safetyMultiplier}</span>}
+          {minPurchase && <span className="text-gray-500">Min purchase: <span className="text-amber-300 font-semibold">{R(minPurchase.min)} pcs</span> ({minPurchase.count} orders)</span>}
+        </div>
       </div>
-    </div>
-  );
-}
