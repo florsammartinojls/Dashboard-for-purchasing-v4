@@ -374,7 +374,7 @@ const isIgnored = useCallback((id) => {
       <SC v={c.dsr} className="py-1 px-1 text-right">{D1(c.dsr)}</SC>
       <SC v={c.d7} className="py-1 px-1 text-right">{D1(c.d7)}</SC>
       <td className="py-1 px-1 text-center">{c.d7 > c.dsr ? <span className={c.spike ? "text-orange-400 font-bold" : "text-emerald-400"}>▲</span> : c.d7 < c.dsr ? <span className="text-red-400">▼</span> : "—"}{c.spike && <span className="text-orange-400 text-xs ml-0.5">⚡</span>}</td>
-      <SC v={c.doc} className={`py-1 px-1 text-right font-semibold ${dc(c.doc, c.critDays, c.warnDays)}`}>{R(c.doc)}</SC>
+      <SC v={c.doc} className={`py-1 px-1 text-right font-semibold ${dc(c.doc, c.critDays, c.warnDays)}`}>{R(c.doc)}{c.doc > 0 && c.dsr > 0 && Math.abs(c.doc - cAI(c) / c.dsr) > c.doc * 0.2 && <span className="ml-0.5 text-red-400 text-[9px]" title={"Sheet DOC vs All-In/DSR mismatch: " + R(c.doc) + " vs " + R(Math.round(cAI(c) / c.dsr))}>⚠</span>}</SC>
       <SC v={c.allIn} className="py-1 px-1 text-right">{R(c.allIn)}</SC>
       <td className="py-1 px-1 text-right text-gray-400">{c.moq > 0 ? R(c.moq) : "—"}</td>
       <td className="py-1 px-1 text-right text-gray-400">{c.casePack > 0 ? R(c.casePack) : "—"}</td>
