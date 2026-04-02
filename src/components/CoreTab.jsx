@@ -140,7 +140,7 @@ export default function CoreTab({ data, stg, hist, daily, coreId, onBack, goBund
     </div>
   );
 
-  // === DETAIL VIEW ===
+// === DETAIL VIEW ===
   return (
     <div className="p-4 max-w-7xl mx-auto">
       <button onClick={() => setSel(null)} className="text-gray-400 hover:text-white text-sm mb-4">← Back</button>
@@ -190,17 +190,20 @@ export default function CoreTab({ data, stg, hist, daily, coreId, onBack, goBund
               <th className="py-1 px-2 text-right">Missing</th>
               <th className="py-1 px-2 text-right">ETA</th>
             </tr></thead>
-            <tbody>{inbS.map((s, i) => (
+            <tbody>{inbS.map((s, i) => {
+              const daysLeft = s.eta ? Math.ceil((new Date(s.eta) - new Date()) / 86400000) : null;
+              return (
               <tr key={i}>
                 <td className="py-1.5 px-2 text-gray-300">{s.orderNum}</td>
                 <td className="py-1.5 px-2 text-blue-400 font-mono">{s.core}</td>
                 <td className="py-1.5 px-2 text-gray-300 truncate max-w-[140px]">{s.shortTitle || "—"}</td>
-                <td className="py-1.5 px-2">{s.vendor}</td>
+                <td className="py-1.5 px-2 text-gray-400">{s.vendor}</td>
                 <td className="py-1.5 px-2 text-right text-white">{R(s.pieces)}</td>
                 <td className="py-1.5 px-2 text-right text-red-400">{s.piecesMissing > 0 ? R(s.piecesMissing) : "—"}</td>
-                <td className="py-1.5 px-2 text-right text-emerald-400">{s.eta ? fE(s.eta) : "—"}</td>
+                <td className="py-1.5 px-2 text-right text-emerald-400">{s.eta ? fE(s.eta) : "—"}{daysLeft != null && <span className="ml-1 text-gray-500 text-[10px]">({daysLeft}d)</span>}</td>
               </tr>
-            ))}</tbody>
+              );
+            })}</tbody>
           </table>
         </div>
       )}
@@ -226,29 +229,30 @@ export default function CoreTab({ data, stg, hist, daily, coreId, onBack, goBund
                 const p = cDays[i + 1];
                 const dC = p ? d.doc - p.doc : null;
                 const dP = p && p.doc > 0 ? ((d.doc - p.doc) / p.doc * 100) : null;
+                const bigChange = dP != null && Math.abs(dP) > 10;
                 return (
                   <tr key={d.date} className={i % 2 === 0 ? "bg-gray-800/30" : ""}>
                     <td className="py-1 px-1 text-gray-300 whitespace-nowrap">{fD(d.date)}</td>
                     <td className="py-1 px-1 text-right text-white font-semibold">{D1(d.dsr)}</td>
-                    <td className="py-1 px-1 text-right">{D1(d.d1)}</td>
-                    <td className="py-1 px-1 text-right">{D1(d.d3)}</td>
-                    <td className="py-1 px-1 text-right">{D1(d.d7)}</td>
+                    <td className="py-1 px-1 text-right text-gray-500">{D1(d.d1)}</td>
+                    <td className="py-1 px-1 text-right text-gray-500">{D1(d.d3)}</td>
+                    <td className="py-1 px-1 text-right text-gray-500">{D1(d.d7)}</td>
                     <td className={`py-1 px-1 text-right font-semibold ${dc(d.doc, lt, lt + (core.buf || 14))}`}>{R(d.doc)}</td>
-                    <td className={`py-1 px-1 text-right ${dC > 0 ? "text-emerald-400" : dC < 0 ? "text-red-400" : "text-gray-500"}`}>
+                    <td className={`py-1 px-1 text-right ${bigChange ? (dC > 0 ? "text-emerald-400 font-semibold" : "text-red-400 font-semibold") : "text-gray-500"}`}>
                       {dC != null ? (dC > 0 ? "+" : "") + Math.round(dC) : "—"}
                     </td>
-                    <td className={`py-1 px-1 text-right ${dP > 0 ? "text-emerald-400" : dP < 0 ? "text-red-400" : "text-gray-500"}`}>
+                    <td className={`py-1 px-1 text-right ${bigChange ? (dP > 0 ? "text-emerald-400 font-semibold" : "text-red-400 font-semibold") : "text-gray-500"}`}>
                       {dP != null ? (dP > 0 ? "+" : "") + dP.toFixed(1) + "%" : "—"}
                     </td>
-                    <td className="py-1 px-1 text-right">{$(d.cash)}</td>
-                    <td className="py-1 px-1 text-right">{R(d.own)}</td>
-                    <td className="py-1 px-1 text-right">{R(d.raw)}</td>
-                    <td className="py-1 px-1 text-right">{R(d.inb)}</td>
-                    <td className="py-1 px-1 text-right">{R(d.pp)}</td>
-                    <td className="py-1 px-1 text-right">{R(d.jfn)}</td>
-                    <td className="py-1 px-1 text-right">{R(d.pq)}</td>
-                    <td className="py-1 px-1 text-right">{R(d.ji)}</td>
-                    <td className="py-1 px-1 text-right">{R(d.fba)}</td>
+                    <td className="py-1 px-1 text-right text-gray-500">{$(d.cash)}</td>
+                    <td className="py-1 px-1 text-right text-gray-500">{R(d.own)}</td>
+                    <td className="py-1 px-1 text-right text-gray-500">{R(d.raw)}</td>
+                    <td className="py-1 px-1 text-right text-gray-500">{R(d.inb)}</td>
+                    <td className="py-1 px-1 text-right text-gray-500">{R(d.pp)}</td>
+                    <td className="py-1 px-1 text-right text-gray-500">{R(d.jfn)}</td>
+                    <td className="py-1 px-1 text-right text-gray-500">{R(d.pq)}</td>
+                    <td className="py-1 px-1 text-right text-gray-500">{R(d.ji)}</td>
+                    <td className="py-1 px-1 text-right text-gray-500">{R(d.fba)}</td>
                   </tr>
                 );
               })}</tbody>
@@ -268,7 +272,7 @@ export default function CoreTab({ data, stg, hist, daily, coreId, onBack, goBund
                   <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
                   <XAxis dataKey="month" tick={{ fill: "#9ca3af", fontSize: 11 }} axisLine={{ stroke: "#374151" }} tickLine={false} />
                   <YAxis tick={{ fill: "#9ca3af", fontSize: 11 }} axisLine={false} tickLine={false} domain={['auto', 'auto']} tickFormatter={v => v >= 1000 ? Math.round(v / 1000) + 'K' : v} />
-                  <Tooltip contentStyle={{ backgroundColor: "#111827", border: "1px solid #374151", borderRadius: "8px", fontSize: 12 }} />
+                  <Tooltip contentStyle={{ backgroundColor: "#111827", border: "1px solid #374151", borderRadius: "8px", fontSize: 12 }} formatter={(v) => v != null ? Math.round(v).toLocaleString('en-US') : '—'} />
                   <Legend wrapperStyle={{ fontSize: 11 }} />
                   {yrs.map(y => (
                     <Line key={y} dataKey={"d_" + y}
