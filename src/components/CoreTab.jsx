@@ -249,6 +249,19 @@ export default function CoreTab({ data, stg, hist, daily, coreId, onBack, goBund
         </div>
       )}
 
+      {/* DOC Alert */}
+      {cDays.length >= 2 && (() => {
+        const today = cDays[0];
+        const yesterday = cDays[1];
+        if (!today || !yesterday || yesterday.doc <= 0) return null;
+        const pctDrop = ((today.doc - yesterday.doc) / yesterday.doc) * 100;
+        if (pctDrop > -15) return null;
+        return <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-4 mb-4">
+          <div className="flex items-center gap-2 text-red-400 text-sm font-semibold mb-1">⚠ DOC dropped {Math.abs(pctDrop).toFixed(0)}% overnight ({R(yesterday.doc)} → {R(today.doc)})</div>
+          <p className="text-gray-400 text-xs">Large DOC changes usually indicate a data issue (inventory recount, misship, or sheet error). Recheck All-In inventory before ordering.</p>
+        </div>;
+      })()}
+      
       {/* Daily */}
       {cDays.length > 0 && (
         <div className="bg-gray-900 rounded-xl p-4 mb-4 border border-gray-800">
