@@ -7,6 +7,14 @@ export function Dot({ status }) { return <span className={`inline-block w-3 h-3 
 export function Loader({ text }) { return <div className="flex items-center justify-center py-20"><div className="text-center"><div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-3" /><p className="text-gray-400 text-sm">{text}</p></div></div> }
 export function Toast({ msg, onClose, persist }) { useEffect(() => { if (persist) return; const t = setTimeout(onClose, 2500); return () => clearTimeout(t) }, [onClose, persist]); return <div className="fixed bottom-4 right-4 bg-emerald-600 text-white px-4 py-3 rounded-lg shadow-xl z-50 flex items-center gap-3">{msg}<button onClick={onClose} className="text-white/70 hover:text-white text-lg ml-2">✕</button></div> }
 
+export function getEffectiveWfStatus(workflow, id) {
+  const wf = (workflow || []).find(w => w.id === id);
+  if (!wf || !wf.status) return "";
+  if (!wf.ignoreUntil) return wf.status;
+  const d = new Date(wf.ignoreUntil + 'T00:00:00');
+  if (!isNaN(d.getTime()) && d < new Date(new Date().toDateString())) return "";
+  return wf.status;
+}
 export function NumInput({ value, onChange, placeholder, className }) {
   const [local, setLocal] = useState(value || '');
   const [focused, setFocused] = useState(false);
