@@ -26,11 +26,16 @@ export default function DashboardSummary({ data, stg, goVendor, workflow, saveWo
   }, [workflow]);
 
   const getWf = (id) => wfMap[id] || null;
-  const getWfStatus = (id) => wfMap[id]?.status || null;
-  const hasAnyStatus = (id) => {
+  const getWfStatus = (id) => {
     const wf = wfMap[id];
-    return wf && wf.status && wf.status !== "";
+    if (!wf || !wf.status) return null;
+    if (wf.ignoreUntil) {
+      const d = new Date(wf.ignoreUntil + 'T00:00:00');
+      if (!isNaN(d.getTime()) && d < new Date(new Date().toDateString())) return null;
+    }
+    return wf.status;
   };
+  const hasAnyStatus = (id) => !!getWfStatus(id);
   const wfColor = { Buy: "bg-emerald-500/20 text-emerald-400", Reviewing: "bg-amber-500/20 text-amber-400", Ignore: "bg-red-500/20 text-red-400", Done: "bg-blue-500/20 text-blue-400" };
 
   // ── Seasonal engine (same as PurchTab) ──
