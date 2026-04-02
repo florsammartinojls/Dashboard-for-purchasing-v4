@@ -191,14 +191,15 @@ export default function App() {
     }).catch(e => { setError(e.message); setLoading(false) });
   }, []);
   useEffect(() => {
-  if (!loading && data.cores.length > 0 && !ordersLoaded) {
-    api('orders').then(d => {
-      setData(prev => ({ ...prev, receivingFull: d.receivingFull || [], priceCompFull: d.priceCompFull || [] }));
-      setOrdersLoaded(true);
-    }).catch(() => setOrdersLoaded(true));
-  }
-}, [loading, data.cores.length, ordersLoaded]);
+    if (!loading && data.cores.length > 0 && !ordersLoaded) {
+      api('orders').then(d => {
+        setData(prev => ({ ...prev, receivingFull: d.receivingFull || [], priceCompFull: d.priceCompFull || [] }));
+        setOrdersLoaded(true);
+      }).catch(() => setOrdersLoaded(true));
+    }
+  }, [loading, data.cores.length, ordersLoaded]);
 
+  useEffect(() => { load() }, []);
   const dataH = useMemo(() => ({ ...data, _coreInv: hist.coreInv, _coreDays: daily.coreDays, _bundleSales: hist.bundleSales }), [data, hist, daily]);
 
   // Cores that have at least one effectively-active bundle (shared between Dashboard + PurchTab)
