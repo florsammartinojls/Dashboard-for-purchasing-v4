@@ -249,16 +249,36 @@ export default function CoreTab({ data, stg, hist, daily, coreId, onBack, goBund
         </div>
       )}
 
-      {/* DOC Alert */}
-      {cDays.length >= 2 && (() => {
-        const today = cDays[0];
-        const yesterday = cDays[1];
-        if (!today || !yesterday || yesterday.doc <= 0) return null;
-        const pctDrop = ((today.doc - yesterday.doc) / yesterday.doc) * 100;
-        if (pctDrop > -15) return null;
+     {/* DOC Alert — check last 10 days for significant inventory changes */}
+      {cDays.length >= 3 && (() => {
+        const alerts = [];
+        for (let i = 0; i < Math.min(cDays.length - 1, 10); i++) {
+          const d = cDays[i];
+          const p = cDays[i + 1];
+          if (!d || !p || p.own <= 0) continue;
+          const ownDrop = p.own - d.own;
+          const expectedSales = d.dsr || core.dsr || 1;
+          // Flag if inventory drop is more than 3x daily sales
+          if (ownDrop > expectedSales * 3) {
+            const pctDrop = ((d.doc - p.doc) / p.doc * 100);
+            alerts.push({ date: d.date, from: p.own, to: d.own, drop: ownDrop, docFrom: p.doc, docTo: d.doc, pctDrop, dsr: expectedSales, ratio: Math.round(ownDrop / expectedSales) });
+          }
+        }
+        if (alerts.length === 0) return null;
         return <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-4 mb-4">
-          <div className="flex items-center gap-2 text-red-400 text-sm font-semibold mb-1">⚠ DOC dropped {Math.abs(pctDrop).toFixed(0)}% overnight ({R(yesterday.doc)} → {R(today.doc)})</div>
-          <p className="text-gray-400 text-xs">Large DOC changes usually indicate a data issue (inventory recount, misship, or sheet error). Recheck All-In inventory before ordering.</p>
+          <div className="text-red-400 text-sm font-semibold mb-2">⚠ Unusual inventory changes detected</div>
+          <div className="space-y-1">
+            {alerts.map((a, i) => (
+              <div key={i} className="flex items-center gap-3 text-xs">
+                <span className="text-gray-400">{fD(a.date)}</span>
+                <span className="text-white">Own: {R(a.from)} → {R(a.to)}</span>
+                <span className="text-red-400 font-semibold">{a.drop > 0 ? "−" : "+"}{R(Math.abs(a.drop))} pcs</span>
+                <span className="text-gray-500">({R(a.ratio)}× daily sales)</span>
+                <span className="text-gray-500">DOC: {R(a.docFrom)} → {R(a.docTo)}</span>
+              </div>
+            ))}
+          </div>
+          <p className="text-gray-500 text-[10px] mt-2">Changes larger than 3× daily sales usually indicate data issues. Recheck before ordering.</p>
         </div>;
       })()}
       
