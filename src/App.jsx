@@ -184,20 +184,20 @@ export default function App() {
   const load = useCallback(() => {
     setLoading(true); setError(null);
     api('live').then(d => {
-      setData({ cores: d.cores || [], bundles: d.bundles || [], vendors: d.vendors || [], sales: d.sales || [], fees: d.fees || [], inbound: d.inbound || [], abcA: d.abcA || [], abcT: d.abcT || [], abcSub: d.abcSub || '', restock: d.restock || [], priceComp: d.priceComp || [], agedInv: d.agedInv || [], killMgmt: d.killMgmt || [], workflow: d.workflow || [], receiving: d.receiving || [], replenRec: d.replenRec || [], receivingFull: d.receivingFull || [], vendorComments: d.vendorComments || [], priceCompFull: [] });
+      setData({ cores: d.cores || [], bundles: d.bundles || [], vendors: d.vendors || [], sales: d.sales || [], fees: d.fees || [], inbound: d.inbound || [], abcA: d.abcA || [], abcT: d.abcT || [], abcSub: d.abcSub || '', restock: d.restock || [], priceComp: d.priceComp || [], agedInv: d.agedInv || [], killMgmt: d.killMgmt || [], workflow: d.workflow || [], receiving: d.receiving || [], replenRec: d.replenRec || [], receivingFull: [], vendorComments: d.vendorComments || [], priceCompFull: [] });
       setTs(d.timestamp || ""); setLoading(false);
       api('history').then(h => { setHist(h); setRdy(r => ({ ...r, h: true })) }).catch(() => setRdy(r => ({ ...r, h: true })));
       api('daily').then(d => { setDaily(d); setRdy(r => ({ ...r, d: true })) }).catch(() => setRdy(r => ({ ...r, d: true })));
     }).catch(e => { setError(e.message); setLoading(false) });
   }, []);
   useEffect(() => {
-  if (tab === "orders" && !ordersLoaded) {
+  if (!loading && data.cores.length > 0 && !ordersLoaded) {
     api('orders').then(d => {
-      setData(prev => ({ ...prev, priceCompFull: d.priceCompFull || [] }));
+      setData(prev => ({ ...prev, receivingFull: d.receivingFull || [], priceCompFull: d.priceCompFull || [] }));
       setOrdersLoaded(true);
     }).catch(() => setOrdersLoaded(true));
   }
-}, [tab, ordersLoaded]);
+}, [loading, data.cores.length, ordersLoaded]);
 
   const dataH = useMemo(() => ({ ...data, _coreInv: hist.coreInv, _coreDays: daily.coreDays, _bundleSales: hist.bundleSales }), [data, hist, daily]);
 
@@ -296,15 +296,7 @@ export default function App() {
         {tab === "purchasing" && <PurchTab data={dataH} stg={stg} goCore={goCore} goBundle={goBundle} goVendor={goVendor} ov={ov} setOv={setOv} initV={initV} clearIV={clearIV} saveWorkflow={saveWorkflow} deleteWorkflow={deleteWorkflow} saveVendorComment={saveVendorComment} activeBundleCores={activeBundleCores} />}
         {tab === "core" && <CoreTab data={data} stg={stg} hist={hist} daily={daily} coreId={coreId} onBack={handleBackFromCore} goBundle={goBundle} />}
         {tab === "bundle" && <BundleTab data={data} stg={stg} hist={hist} daily={daily} bundleId={bundleId} onBack={handleBackFromBundle} goCore={goCore} />}
-        {tab === "orders" && (() => {
-          if (!ordersLoaded) {
-            api('orders').then(d => {
-              setData(prev => ({ ...prev, priceCompFull: d.priceCompFull || [] }));
-              setOrdersLoaded(true);
-            }).catch(() => setOrdersLoaded(true));
-          }
-          return <OrdersTab data={data} />;
-        })()}
+        {tab === "orders" && <OrdersTab data={data} />}
         {tab === "vendors" && <VendorsTab data={data} stg={stg} goVendor={goVendor} workflow={data.workflow} saveWorkflow={saveWorkflow} deleteWorkflow={deleteWorkflow} vendorComments={data.vendorComments} saveVendorComment={saveVendorComment} />}
         {tab === "glossary" && <GlossTab />}
       </main>
