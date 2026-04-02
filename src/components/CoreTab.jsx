@@ -505,3 +505,6 @@ export default function CoreTab({ data, stg, hist, daily, coreId, onBack, goBund
           {minPurchase && <span className="text-gray-500">Min purchase: <span className="text-amber-300 font-semibold">{R(minPurchase.min)} pcs</span> ({minPurchase.count} orders)</span>}
         </div>
       </div>
+    </div>
+  );
+}
