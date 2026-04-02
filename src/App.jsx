@@ -158,7 +158,8 @@ export default function App() {
   const initCore = urlParams.get('core');
   const initBundle = urlParams.get('bundle');
   const initVendorParam = urlParams.get('vendor');
-  const [tab, setTab] = useState(initCore ? "core" : initBundle ? "bundle" : initVendorParam ? "purchasing" : "dashboard");
+  const initTab = urlParams.get('tab');
+  const [tab, setTab] = useState(initCore ? "core" : initBundle ? "bundle" : initVendorParam ? "purchasing" : initTab || "dashboard");
   const [showS, setShowS] = useState(false);
   const [stg, setStg] = useState({ buyer: '', domesticDoc: 90, intlDoc: 180, fA: "yes", fI: "blank", fV: "yes" });
   const [coreId, setCoreId] = useState(initCore || null);
