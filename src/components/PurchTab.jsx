@@ -203,6 +203,7 @@ const fillR = (cores, bundles, mode, vendorName) => {
     const u = { ...ov };
     const bMoq = gBMoq('_bmoq_' + vendorName);
     const isAgl = aglMap[vendorName] || false;
+    const replenFloor = stg.replenFloorDoc || 80;
 
     if (mode === "bundles" || mode === "mix") {
       const coreMap = {}; cores.forEach(c => { coreMap[c.id] = c });
@@ -229,53 +230,87 @@ const fillR = (cores, bundles, mode, vendorName) => {
         const ltUsed = isAgl ? AGL_LT : (v.lt || 30);
         const cProfile = profiles[c.id] || DEFAULT_PROFILE;
         const pfV = purchFreqMap[c.ven];
+        const targetDoc = c.targetDoc;
 
-        // Per-bundle independent need, using CORE seasonal profile
-        let coreExtras = 0;
+        // Step 1: Calculate independent need per bundle (using CORE seasonal profile)
         const bData = cBundles.map(b => {
           const rp = replenMap[b.j];
           const inb7f = missingMap[b.j] || 0;
           const bundleDSR = b.cd || 0;
+          const currentInv = (b.fibInv || 0) + (rp?.pprcUnits || 0) + (rp?.batched || 0) + inb7f;
 
-          // Find this core's qty in this bundle (could be any slot 1-20)
+          // Find this core's qty in this bundle
           let coreQtyInBundle = 0;
           for (let i = 1; i <= 20; i++) {
             if (b['core' + i] === c.id) { coreQtyInBundle = b['qty' + i] || 0; break; }
           }
 
-          if (bundleDSR <= 0) return { j: b.j, need: 0, qpb: coreQtyInBundle };
+          if (bundleDSR <= 0) return { j: b.j, need: 0, qpb: coreQtyInBundle, currentInv, bundleDSR, currentDOC: 9999, rawAssigned: 0 };
 
-          // Apply CORE seasonal profile to bundle
           const fakeBundle = {
-            id: b.j,
-            dsr: bundleDSR,
-            d7: b.d7comp || bundleDSR,
-            raw: 0, inb: 0, pp: 0, jfn: 0, pq: 0, ji: 0,
-            fba: (b.fibInv || 0) + (rp?.pprcUnits || 0) + (rp?.batched || 0) + inb7f
+            id: b.j, dsr: bundleDSR, d7: b.d7comp || bundleDSR,
+            raw: 0, inb: 0, pp: 0, jfn: 0, pq: 0, ji: 0, fba: currentInv
           };
-          const coverage = calcCoverageNeed(fakeBundle, ltUsed, c.targetDoc, cProfile, pfV);
+          const coverage = calcCoverageNeed(fakeBundle, ltUsed, targetDoc, cProfile, pfV);
           const need = coverage.need || 0;
-
-          return { j: b.j, need, qpb: coreQtyInBundle };
+          const currentDOC = bundleDSR > 0 ? currentInv / bundleDSR : 9999;
+          return { j: b.j, need, qpb: coreQtyInBundle, currentInv, bundleDSR, currentDOC, rawAssigned: 0 };
         });
 
-        // Apply orders
+        // Step 2: WATERFALL — assign core raw to bundles
+        let rawPool = c.raw || 0;
+
+        // Phase 1: Floor — bring all bundles to replenFloor DOC, urgency-first
+        const needsFloor = bData.filter(bd => bd.bundleDSR > 0 && bd.currentDOC < replenFloor).sort((a, b) => a.currentDOC - b.currentDOC);
+        for (const bd of needsFloor) {
+          if (rawPool <= 0) break;
+          const targetInv = Math.ceil(replenFloor * bd.bundleDSR);
+          const gapBU = Math.max(0, targetInv - bd.currentInv);
+          const gapCore = gapBU * bd.qpb;
+          const give = Math.min(gapCore, rawPool);
+          const giveBU = bd.qpb > 0 ? Math.floor(give / bd.qpb) : 0;
+          const actualGiveCore = giveBU * bd.qpb;
+          bd.rawAssigned += giveBU;
+          rawPool -= actualGiveCore;
+        }
+
+        // Phase 2: Stretch — incrementally raise all bundles in 10d steps until targetDoc
+        for (let level = replenFloor + 10; level <= targetDoc && rawPool > 0; level += 10) {
+          const sorted = [...bData].filter(bd => bd.bundleDSR > 0).sort((a, b) => a.currentDOC - b.currentDOC);
+          for (const bd of sorted) {
+            if (rawPool <= 0) break;
+            const currentEffectiveInv = bd.currentInv + (bd.rawAssigned * bd.qpb);
+            const currentEffectiveDOC = bd.bundleDSR > 0 ? currentEffectiveInv / bd.bundleDSR : 9999;
+            if (currentEffectiveDOC >= level) continue;
+            const targetInv = Math.ceil(level * bd.bundleDSR);
+            const gapBU = Math.max(0, targetInv - currentEffectiveInv);
+            const gapCore = gapBU * bd.qpb;
+            const give = Math.min(gapCore, rawPool);
+            const giveBU = bd.qpb > 0 ? Math.floor(give / bd.qpb) : 0;
+            const actualGiveCore = giveBU * bd.qpb;
+            bd.rawAssigned += giveBU;
+            rawPool -= actualGiveCore;
+          }
+        }
+
+        // Step 3: Compute final bundle need = original need − raw assigned
+        let coreExtras = 0;
         bData.forEach(bd => {
-          if (bd.need <= 0) return;
-          if (bMoq > 0 && bd.need < bMoq) {
+          const finalNeed = Math.max(0, bd.need - bd.rawAssigned);
+          if (finalNeed <= 0) return;
+          if (bMoq > 0 && finalNeed < bMoq) {
             // Below B.MOQ → convert to core pieces
-            coreExtras += bd.need * bd.qpb;
+            coreExtras += finalNeed * bd.qpb;
           } else {
-            let ord = bd.need;
+            let ord = finalNeed;
             const bcp = casePackFromRec[bd.j] || 0;
             if (bcp > 0) ord = Math.ceil(ord / bcp) * bcp;
             u[bd.j] = { ...(u[bd.j] || {}), pcs: ord };
           }
         });
 
-        // Core order: extras from B.MOQ conversion, minus raw already available
-        const coreRawAvail = c.raw || 0;
-        const finalCoreNeed = Math.max(0, coreExtras - coreRawAvail);
+        // Step 4: Core order — extras from B.MOQ conversion, minus any leftover raw
+        const finalCoreNeed = Math.max(0, coreExtras - rawPool);
         if (finalCoreNeed > 0) {
           u[c.id] = { ...(u[c.id] || {}), pcs: cOQ(finalCoreNeed, c.moq, c.casePack) };
         }
