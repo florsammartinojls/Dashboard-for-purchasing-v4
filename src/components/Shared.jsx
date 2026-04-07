@@ -65,9 +65,10 @@ export function Stg({ s, setS, onClose }) {
       <h2 className="text-lg font-semibold text-white mb-4">Settings</h2>
       <div className="space-y-4">
         <div><label className="text-sm text-gray-400 block mb-1">Buyer Initials</label><input type="text" value={l.buyer || ''} onChange={e => setL({ ...l, buyer: e.target.value })} placeholder="e.g. FS" className="bg-gray-800 border border-gray-600 text-white rounded px-3 py-2 w-full" /></div>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-3 gap-3">
           <div><label className="text-sm text-gray-400 block mb-1">Domestic DOC</label><input type="number" value={l.domesticDoc} onChange={e => setL({ ...l, domesticDoc: +e.target.value })} className="bg-gray-800 border border-gray-600 text-white rounded px-3 py-2 w-full" /></div>
           <div><label className="text-sm text-gray-400 block mb-1">Intl DOC</label><input type="number" value={l.intlDoc} onChange={e => setL({ ...l, intlDoc: +e.target.value })} className="bg-gray-800 border border-gray-600 text-white rounded px-3 py-2 w-full" /></div>
+          <div><label className="text-sm text-gray-400 block mb-1" title="Floor DOC for replen waterfall (Phase 1 minimum)">Replen Floor</label><input type="number" value={l.replenFloorDoc || 80} onChange={e => setL({ ...l, replenFloorDoc: +e.target.value })} className="bg-gray-800 border border-gray-600 text-white rounded px-3 py-2 w-full" /></div>
         </div>
         <div className="border-t border-gray-700 pt-4"><h3 className="text-sm font-semibold text-blue-400 mb-3">Core Filters</h3><div className="space-y-3">
           {[["Active", "fA"], ["Visible", "fV"]].map(([lb, k]) => <div key={k} className="flex items-center justify-between"><span className="text-sm text-gray-300">{lb}</span><select value={l[k]} onChange={e => setL({ ...l, [k]: e.target.value })} className="bg-gray-800 border border-gray-600 text-white rounded px-2 py-1 text-sm w-28"><option value="yes">Yes</option><option value="no">No</option><option value="all">All</option></select></div>)}
