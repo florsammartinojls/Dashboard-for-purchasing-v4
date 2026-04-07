@@ -122,6 +122,8 @@ const DEFAULT_GL = [
   { term: "💬 Vendor Notes", desc: "Click to view/add notes about a vendor. Categories: Communication, Lead Time, Pricing, Discount, Quality, Other." },
   { term: "Orders Tab", desc: "PO History from 7f Receiving. View by PO, by Vendor, or by Core/JLS." },
   { term: "Quick Sum", desc: "Click numeric cells to select them. Sum & Avg appear in the bottom bar. Click ✕ to clear." },
+  { term: "Replen Floor DOC", desc: "Minimum DOC target for the replen waterfall (Phase 1). When distributing core raw to bundles, all bundles get raw until they reach this floor first. Then Phase 2 stretches the rest evenly. Default 80d. Configure in ⚙️ Settings." },
+  { term: "Raw Waterfall v2", desc: "Two-phase raw allocation: Phase 1 fills all bundles to Replen Floor DOC (urgency-based). Phase 2 stretches remaining raw evenly in 10d steps until target DOC or raw runs out." },
 ];
 
 function GlossTab() {
@@ -161,7 +163,7 @@ export default function App() {
   const initTab = urlParams.get('tab');
   const [tab, setTab] = useState(initCore ? "core" : initBundle ? "bundle" : initVendorParam ? "purchasing" : initTab || "dashboard");
   const [showS, setShowS] = useState(false);
-  const [stg, setStg] = useState({ buyer: '', domesticDoc: 90, intlDoc: 180, fA: "yes", fI: "blank", fV: "yes" });
+  const [stg, setStg] = useState({ buyer: '', domesticDoc: 90, intlDoc: 180, replenFloorDoc: 80, fA: "yes", fI: "blank", fV: "yes" });
   const [coreId, setCoreId] = useState(initCore || null);
   const [bundleId, setBundleId] = useState(initBundle || null);
   const [data, setData] = useState({ cores: [], bundles: [], vendors: [], sales: [], fees: [], inbound: [], abcA: [], abcT: [], abcSub: '', restock: [], priceComp: [], agedInv: [], killMgmt: [], workflow: [], receiving: [], replenRec: [], receivingFull: [], vendorComments: [], priceCompFull: [] });
