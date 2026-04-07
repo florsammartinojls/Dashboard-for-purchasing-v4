@@ -337,14 +337,30 @@ const fillR = (cores, bundles, mode, vendorName) => {
   // === FILL TO MOQ ===
   const doFillMOQ = (grpCores, grpBundles, vendorMOQDollar) => {
     let currentTotal = 0;
-    grpCores.forEach(c => { currentTotal += coreEffQ(c) * c.cost });
-    if (vendorSub !== "cores") (grpBundles || []).filter(b => hasBundleOrd(b)).forEach(b => { const f = feMap[b.j]; currentTotal += bundleEffQ(b) * (f?.aicogs || 0) });
+    grpCores.forEach(c => {
+      const cogpOv = gCogP(c.id);
+      currentTotal += coreEffQ(c) * (cogpOv > 0 ? cogpOv : c.cost);
+    });
+    if (vendorSub !== "cores") (grpBundles || []).filter(b => hasBundleOrd(b)).forEach(b => {
+      const f = feMap[b.j];
+      const cogpOv = gCogP(b.j);
+      const baseCost = f?.aicogs || 0;
+      currentTotal += bundleEffQ(b) * (cogpOv > 0 ? cogpOv : baseCost);
+    });
     if (currentTotal >= vendorMOQDollar) { setToast("Already at/above MOQ"); return }
     const lt = grpCores[0]?.lt || 30; const tg = grpCores[0]?.targetDoc || 90;
     const extra = fillToMOQCalc(grpCores, vendorMOQDollar, currentTotal, profiles, lt, tg);
     if (Object.keys(extra).length === 0) { setToast("Could not reach MOQ"); return }
     const u = { ...ov }; let addedTotal = 0;
-    Object.entries(extra).forEach(([id, extraPcs]) => { const existing = gPcs(id) || 0; u[id] = { ...(u[id] || {}), pcs: existing + extraPcs }; const c = grpCores.find(x => x.id === id); if (c) addedTotal += extraPcs * c.cost });
+    Object.entries(extra).forEach(([id, extraPcs]) => {
+      const existing = gPcs(id) || 0;
+      u[id] = { ...(u[id] || {}), pcs: existing + extraPcs };
+      const c = grpCores.find(x => x.id === id);
+      if (c) {
+        const cogpOv = gCogP(c.id);
+        addedTotal += extraPcs * (cogpOv > 0 ? cogpOv : c.cost);
+      }
+    });
     setOv(u); setToast("MOQ filled: +" + $(addedTotal));
   };
 
