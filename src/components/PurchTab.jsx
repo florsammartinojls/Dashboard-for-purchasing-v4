@@ -189,10 +189,18 @@ return { ...c, status: st, allIn: ai, doc: effectiveDoc, needQty: sNeed, orderQt
     return Object.values(g).filter(grp => vf || showIgnored || !isIgnored(grp.v.name)).sort((a, b) => b.cores.filter(c => c.status === "critical").length - a.cores.filter(c => c.status === "critical").length);
   }, [enr, vm, vMap, venBundles, isIgnored, showIgnored]);
 
-  const getPOI = (cores, bundles) => {
+ const getPOI = (cores, bundles) => {
     const items = [];
-    cores.filter(c => hasCoreOrd(c)).forEach(c => items.push({ id: c.id, ti: c.ti, vsku: c.vsku, qty: coreEffQ(c), cost: c.cost, cp: c.casePack || 1, inbS: gInbS(c.id), isCoreItem: true }));
-    (bundles || []).filter(b => hasBundleOrd(b)).forEach(b => { const f = feMap[b.j]; items.push({ id: b.j, ti: b.t, vsku: b.asin || b.bundleCode, qty: bundleEffQ(b), cost: f?.aicogs || b.aicogs || 0, cp: 1, inbS: gInbS(b.j), isCoreItem: false }) });
+    cores.filter(c => hasCoreOrd(c)).forEach(c => {
+      const cogpOv = gCogP(c.id);
+      items.push({ id: c.id, ti: c.ti, vsku: c.vsku, qty: coreEffQ(c), cost: cogpOv > 0 ? cogpOv : c.cost, cp: c.casePack || 1, inbS: gInbS(c.id), isCoreItem: true });
+    });
+    (bundles || []).filter(b => hasBundleOrd(b)).forEach(b => {
+      const f = feMap[b.j];
+      const cogpOv = gCogP(b.j);
+      const baseCost = f?.aicogs || b.aicogs || 0;
+      items.push({ id: b.j, ti: b.t, vsku: b.asin || b.bundleCode, qty: bundleEffQ(b), cost: cogpOv > 0 ? cogpOv : baseCost, cp: 1, inbS: gInbS(b.j), isCoreItem: false });
+    });
     return items;
   };
 
