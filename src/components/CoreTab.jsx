@@ -22,6 +22,124 @@ const getDsr = (h) => {
   return null;
 };
 
+function BundlesTable({ cB, core, stg, ven, replenMap, missingMap, agedMap, killMap, goBundle, bT }) {
+  const [editVals, setEditVals] = React.useState({});
+  const restockTarget = ven && (ven.country || "").toLowerCase().trim().match(/^(us|usa|united states)?$/) ? (stg.domesticDoc || 90) : (stg.intlDoc || 180);
+  const replenByJ = React.useMemo(() => { const m = {}; (replenMap || []).forEach(r => { m[r.j] = r }); return m }, [replenMap]);
+
+  // Total core pieces consumed by all V inputs (each bundle's V × its qty per bundle)
+  const totalConsumed = React.useMemo(() => {
+    return cB.reduce((sum, b) => {
+      const v = editVals[b.j] || 0;
+      const qpb = b.qty1 || 1;
+      return sum + (v * qpb);
+    }, 0);
+  }, [editVals, cB]);
+
+  const rawAvailable = (core?.raw || 0) - totalConsumed;
+
+  return (
+    <div className="bg-gray-900 rounded-xl p-4 mb-4 border border-gray-800 overflow-x-auto">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-white font-semibold text-sm">
+          Bundles ({cB.length})
+        </h3>
+        <div className="text-xs text-gray-400">
+          Core Raw: <span className="text-white font-semibold">{R(core?.raw || 0)}</span> · 
+          Available: <span className={`font-semibold ${rawAvailable < 0 ? "text-red-400" : "text-emerald-400"}`}>{R(rawAvailable)}</span>
+        </div>
+      </div>
+      {cB.length > 0 ? (
+        <table className="w-full text-xs">
+          <thead><tr className="text-gray-500 uppercase">
+            <th className="py-2 px-1 text-left">JLS#</th>
+            <th className="py-2 px-1 text-left">Name</th>
+            <TH tip="FIB DOC" className="py-2 px-1 text-right">FIB DOC</TH>
+            <TH tip="Complete DSR" className="py-2 px-1 text-right">C.DSR</TH>
+            <TH tip="Gross Profit" className="py-2 px-1 text-right">GP</TH>
+            <TH tip="All-In COGS" className="py-2 px-1 text-right">AICOGS</TH>
+            <TH tip="Margin %" className="py-2 px-1 text-right">Margin</TH>
+            <TH tip="Raw Units (from replen)" className="py-2 px-1 text-right">Raw</TH>
+            <TH tip="Batched" className="py-2 px-1 text-right">Batch</TH>
+            <TH tip="SC Inventory" className="py-2 px-1 text-right">SC Inv</TH>
+            <TH tip="PPRCD Units" className="py-2 px-1 text-right">PPRCD</TH>
+            <TH tip="7f Inbound (pieces missing for this JLS)" className="py-2 px-1 text-right">7f Inb</TH>
+            <TH tip={"Restock Target (" + restockTarget + "d)"} className="py-2 px-1 text-right">Restock</TH>
+            <TH tip="Editable allocation (consumes core raw)" className="py-2 px-1 text-center">Edit</TH>
+            <TH tip="Potential bundle units = available core raw ÷ qty per bundle" className="py-2 px-1 text-right">Potential</TH>
+            <th className="py-2 px-1 w-8" />
+          </tr></thead>
+          <tbody>
+            {cB.map(b => {
+              const f = b.fee;
+              const margin = f && f.aicogs > 0 ? ((f.gp / f.aicogs) * 100) : 0;
+              const aged = agedMap[b.j]; const kill = killMap[b.j];
+              const rp = replenByJ[b.j];
+              const inb7f = missingMap[b.j] || 0;
+              const qpb = b.qty1 || 1;
+              const editVal = editVals[b.j] || 0;
+              // Potential = (raw available + what THIS bundle already consumed) ÷ qpb
+              const myConsumed = editVal * qpb;
+              const potentialPool = rawAvailable + myConsumed;
+              const potential = qpb > 0 ? Math.max(0, Math.floor(potentialPool / qpb)) : 0;
+
+              return (
+                <tr key={b.j} className="border-t border-gray-800/50 hover:bg-gray-800/20">
+                  <td className="py-1.5 px-1 text-blue-400 font-mono">{b.j}</td>
+                  <td className="py-1.5 px-1 text-gray-200 truncate max-w-[130px]">
+                    {b.t}
+                    {aged && aged.fbaHealth !== "Healthy" && (
+                      <span className={`ml-1 ${aged.fbaHealth === "At Risk" ? "text-amber-400" : "text-red-400"}`}>{aged.fbaHealth}</span>
+                    )}
+                    {aged && aged.storageLtsf > 0 && <span className="ml-1 text-red-300">${aged.storageLtsf.toFixed(0)}</span>}
+                    {kill && kill.forKill === "Yes" && <span className="ml-1 text-red-400 font-bold">KILL</span>}
+                    {kill && kill.sellEval && kill.sellEval.toLowerCase().includes('sell') && <span className="ml-1 text-amber-400 font-bold">ST</span>}
+                  </td>
+                  <td className="py-1.5 px-1 text-right">{R(b.fibDoc)}</td>
+                  <td className="py-1.5 px-1 text-right">{D1(b.cd)}</td>
+                  <td className="py-1.5 px-1 text-right text-emerald-400">{f ? $2(f.gp) : "—"}</td>
+                  <td className="py-1.5 px-1 text-right">{f ? $2(f.aicogs) : "—"}</td>
+                  <td className="py-1.5 px-1 text-right">{margin > 0 ? P(margin) : "—"}</td>
+                  <td className="py-1.5 px-1 text-right">{R(rp?.rawUnits || 0)}</td>
+                  <td className="py-1.5 px-1 text-right">{R(rp?.batched || 0)}</td>
+                  <td className="py-1.5 px-1 text-right">{R(b.scInv)}</td>
+                  <td className="py-1.5 px-1 text-right">{R(rp?.pprcUnits || 0)}</td>
+                  <td className={`py-1.5 px-1 text-right ${inb7f > 0 ? "text-red-400" : "text-gray-600"}`}>{inb7f > 0 ? R(inb7f) : "—"}</td>
+                  <td className="py-1.5 px-1 text-right text-purple-300">{restockTarget}d</td>
+                  <td className="py-1 px-1 text-center">
+                    <input
+                      type="number"
+                      min="0"
+                      value={editVal || ""}
+                      onChange={e => {
+                        const v = parseInt(e.target.value) || 0;
+                        setEditVals(p => ({ ...p, [b.j]: v }));
+                      }}
+                      className="bg-gray-800 border border-gray-700 text-white text-xs rounded px-1 py-0.5 w-16 text-center"
+                      placeholder="0"
+                    />
+                  </td>
+                  <td className={`py-1.5 px-1 text-right font-semibold ${potential > 0 ? "text-cyan-300" : "text-gray-600"}`}>{R(potential)}</td>
+                  <td className="py-1.5 px-1">
+                    <button onClick={() => goBundle(b.j)} className="text-blue-400 px-0.5 bg-blue-400/10 rounded">V</button>
+                  </td>
+                </tr>
+              );
+            })}
+            <tr className="bg-gray-900/60 border-t-2 border-gray-700 font-semibold">
+              <td colSpan={3} className="py-2 px-1 text-gray-300">Tot</td>
+              <td className="py-2 px-1 text-right text-white">{D1(bT.d)}</td>
+              <td colSpan={9} />
+              <td className="py-2 px-1 text-right text-amber-300">{R(totalConsumed)}</td>
+              <td colSpan={2} />
+            </tr>
+          </tbody>
+        </table>
+      ) : <p className="text-gray-500 text-sm">No bundles.</p>}
+    </div>
+  );
+}
+
 export default function CoreTab({ data, stg, hist, daily, coreId, onBack, goBundle }) {
   const [s, setS] = useState("");
   const [sel, setSel] = useState(coreId || null);
@@ -467,85 +585,7 @@ export default function CoreTab({ data, stg, hist, daily, coreId, onBack, goBund
       </div>
 
       {/* Bundles */}
-      <div className="bg-gray-900 rounded-xl p-4 mb-4 border border-gray-800 overflow-x-auto">
-        <h3 className="text-white font-semibold text-sm mb-3">
-          Bundles ({cB.length}) <span className="text-gray-500 text-xs font-normal">%28d = L28d unit weight</span>
-        </h3>
-        {cB.length > 0 ? (
-          <table className="w-full text-xs">
-            <thead><tr className="text-gray-500 uppercase">
-              <th className="py-2 px-1 text-left">JLS</th>
-              <th className="py-2 px-1 text-left">Title</th>
-              <TH tip="% of L28d units from this core" className="py-2 px-1 text-right">%28d</TH>
-              <TH tip="FIB DOC" className="py-2 px-1 text-right">FIB DOC</TH>
-              <TH tip="FBA DOC (Complete DOC)" className="py-2 px-1 text-right">FBA DOC</TH>
-              <TH tip="Complete DSR" className="py-2 px-1 text-right">C.DSR</TH>
-              <th className="py-2 px-1 border-l border-gray-700" />
-              <TH tip="Gross Profit" className="py-2 px-1 text-right">GP</TH>
-              <TH tip="All-In COGS" className="py-2 px-1 text-right">AICOGS</TH>
-              <TH tip="Margin %" className="py-2 px-1 text-right">Margin</TH>
-              <th className="py-2 px-1 border-l border-gray-700" />
-              <TH tip="SC Inventory" className="py-2 px-1 text-right">SC</TH>
-              <TH tip="Replen Target" className="py-2 px-1 text-right">Replen</TH>
-              <th className="py-2 px-1 border-l border-gray-700" />
-              <TH tip="Lifetime Revenue" className="py-2 px-1 text-right">LT Rev</TH>
-              <TH tip="Lifetime Profit" className="py-2 px-1 text-right">LT Prof</TH>
-              <th className="py-2 px-1 w-8" />
-            </tr></thead>
-            <tbody>
-              {cB.map(b => {
-                const f = b.fee; const sa = b.sale;
-                const margin = f && f.aicogs > 0 ? ((f.gp / f.aicogs) * 100) : 0;
-                const aged = agedMap[b.j]; const kill = killMap[b.j];
-                return (
-                  <tr key={b.j} className="border-t border-gray-800/50 hover:bg-gray-800/20">
-                    <td className="py-1.5 px-1 text-blue-400 font-mono">{b.j}</td>
-                    <td className="py-1.5 px-1 text-gray-200 truncate max-w-[130px]">
-                      {b.t}
-                      {aged && aged.fbaHealth !== "Healthy" && (
-                        <span className={`ml-1 ${aged.fbaHealth === "At Risk" ? "text-amber-400" : "text-red-400"}`}>{aged.fbaHealth}</span>
-                      )}
-                      {aged && aged.storageLtsf > 0 && <span className="ml-1 text-red-300">${aged.storageLtsf.toFixed(0)}</span>}
-                      {kill && kill.forKill === "Yes" && <span className="ml-1 text-red-400 font-bold">KILL</span>}
-                      {kill && kill.sellEval && kill.sellEval.toLowerCase().includes('sell') && <span className="ml-1 text-amber-400 font-bold">ST</span>}
-                    </td>
-                    <td className="py-1.5 px-1 text-right text-teal-400">{b.l28pct}%</td>
-                    <td className="py-1.5 px-1 text-right">{R(b.fibDoc)}</td>
-                    <td className="py-1.5 px-1 text-right">{R(b.doc)}</td>
-                    <td className="py-1.5 px-1 text-right">{D1(b.cd)}</td>
-                    <td className="py-1.5 px-1 border-l border-gray-700" />
-                    <td className="py-1.5 px-1 text-right text-emerald-400">{f ? $2(f.gp) : "—"}</td>
-                    <td className="py-1.5 px-1 text-right">{f ? $2(f.aicogs) : "—"}</td>
-                    <td className="py-1.5 px-1 text-right">{margin > 0 ? P(margin) : "—"}</td>
-                    <td className="py-1.5 px-1 border-l border-gray-700" />
-                    <td className="py-1.5 px-1 text-right">{R(b.scInv)}</td>
-                    <td className="py-1.5 px-1 text-right">{b.replenTag || "—"}</td>
-                    <td className="py-1.5 px-1 border-l border-gray-700" />
-                    <td className="py-1.5 px-1 text-right">{sa ? $(sa.ltR) : "—"}</td>
-                    <td className="py-1.5 px-1 text-right text-emerald-400">{sa ? $(sa.ltP) : "—"}</td>
-                    <td className="py-1.5 px-1">
-                      <button onClick={() => goBundle(b.j)} className="text-blue-400 px-0.5 bg-blue-400/10 rounded">V</button>
-                    </td>
-                  </tr>
-                );
-              })}
-              <tr className="bg-gray-900/60 border-t-2 border-gray-700 font-semibold">
-                <td colSpan={2} className="py-2 px-1 text-gray-300">Tot</td>
-                <td /><td /><td />
-                <td className="py-2 px-1 text-right text-white">{D1(bT.d)}</td>
-                <td />
-                <td colSpan={3} />
-                <td />
-                <td colSpan={2} />
-                <td />
-                <td className="py-2 px-1 text-right text-white">{$(bT.lr)}</td>
-                <td className="py-2 px-1 text-right text-emerald-400">{$(bT.lp)}</td>
-                <td />
-              </tr>
-            </tbody>
-          </table>
-        ) : <p className="text-gray-500 text-sm">No bundles.</p>}
-      </div>
+      <BundlesTable cB={cB} core={core} stg={stg} ven={ven} replenMap={data.replenRec || []} missingMap={(() => { const m = {}; (data.receiving || []).forEach(r => { if (r.piecesMissing > 0) { const k = (r.core || "").trim(); m[k] = (m[k] || 0) + r.piecesMissing } }); return m })()} agedMap={agedMap} killMap={killMap} goBundle={goBundle} bT={bT} />
 
      {/* Purchase Rec */}
       <div className="bg-gray-900 rounded-xl p-4 border border-gray-800">
