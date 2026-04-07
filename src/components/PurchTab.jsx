@@ -199,6 +199,7 @@ return { ...c, status: st, allIn: ai, doc: effectiveDoc, needQty: sNeed, orderQt
   const autoPO = (vendorCode) => { if (poN) return poN; const d = new Date(); const serial = Math.floor((d - new Date(1899, 11, 30)) / 86400000); return 'PO-' + serial + '-' + (vendorCode || 'XXX') };
 
   // === FILL REC (v2 — core need as reference, distribute to bundles by weight, respect PPRC) ===
+
   const fillR = (cores, bundles, mode, vendorName) => {
     const u = { ...ov };
     const bMoq = gBMoq('_bmoq_' + vendorName);
@@ -208,123 +209,88 @@ return { ...c, status: st, allIn: ai, doc: effectiveDoc, needQty: sNeed, orderQt
     if (mode === "bundles" || mode === "mix") {
       const coreMap = {}; cores.forEach(c => { coreMap[c.id] = c });
 
-      // Group bundles by core
+      // Group bundles by core (ALL slots 1-20)
       const bundlesByCore = {};
       (bundles || []).forEach(b => {
-        // Associate bundle with ALL its cores, not just core1
-        [b.core1, b.core2, b.core3].filter(Boolean).forEach(cid => {
-          if (!coreMap[cid]) return;
+        for (let i = 1; i <= 20; i++) {
+          const cid = b['core' + i];
+          if (!cid || !coreMap[cid]) continue;
           if (!bundlesByCore[cid]) bundlesByCore[cid] = [];
           if (!bundlesByCore[cid].some(x => x.j === b.j)) bundlesByCore[cid].push(b);
-        });
+        }
       });
+
+      // Build seasonal profiles for ALL relevant bundles
+      const allRelevantBundles = (bundles || []).filter(b => {
+        for (let i = 1; i <= 20; i++) { if (coreMap[b['core' + i]]) return true; }
+        return false;
+      });
+      const bProfiles = batchBundleProfiles(allRelevantBundles, data._bundleSales || []);
 
       cores.forEach(c => {
         const cBundles = bundlesByCore[c.id] || [];
         if (cBundles.length === 0) {
-          // No bundles → order as core if needed
           if (c.needQty > 0) u[c.id] = { ...(u[c.id] || {}), pcs: cOQ(c.needQty, c.moq, c.casePack) };
           return;
         }
 
-        // 1. Core need = total NEW pieces to order (already net of all inventory)
-        const coreNeed = c.needQty || 0;
+        const v = vMap[c.ven] || {};
+        const lt = isAgl ? AGL_LT : (v.lt || 30);
+        const pfV = purchFreqMap[c.ven];
 
-        // 2. Split by %28d weight IN BUNDLE UNITS, then shift using PPRC
-        const totL28 = cBundles.reduce((s, b) => { const sa = saMap[b.j]; return s + (sa?.l28U || 0) }, 0);
+        // 1. Calculate independent seasonal need per bundle
+        let totalCoreNeedFromBundles = 0;
         const bData = cBundles.map(b => {
-          const sa = saMap[b.j];
-          const l28 = sa?.l28U || 0;
-          const weight = totL28 > 0 ? l28 / totL28 : 1 / cBundles.length;
           const rp = replenMap[b.j];
-          const qpb = b.qty1 || 1;
-          const normalShareBU = Math.ceil((coreNeed * weight) / qpb);
-          const pprcCommitted = (rp?.pprcUnits || 0) + (rp?.batched || 0);
-          const pprcWillCover = Math.min(pprcCommitted, normalShareBU);
-          let gap = Math.max(0, normalShareBU - pprcWillCover);
-          // CAP: don't let any bundle exceed targetDOC after order
+          const inb7f = missingMap[b.j] || 0;
           const bundleDSR = b.cd || 0;
-          const bundleCurrentInv = (b.fibInv || 0) + (rp?.pprcUnits || 0) + (rp?.batched || 0);
-          const maxOrderBU = bundleDSR > 0 ? Math.max(0, Math.ceil(c.targetDoc * bundleDSR) - bundleCurrentInv) : 0;
-          const capped = gap > maxOrderBU && maxOrderBU >= 0;
-          const excess = capped ? (gap - maxOrderBU) * qpb : 0; // excess in core pcs
-          if (capped) gap = maxOrderBU;
-          return { j: b.j, weight: r2w(weight), propDemand: normalShareBU, covered: pprcWillCover, gap, qpb, core1: b.core1, excess, bundleDSR, capped };
+          const qpb = b.qty1 || 1;
+
+          // Find this core's qty in this bundle (could be core1, core2, etc.)
+          let coreQtyInBundle = 0;
+          for (let i = 1; i <= 20; i++) {
+            if (b['core' + i] === c.id) { coreQtyInBundle = b['qty' + i] || 0; break; }
+          }
+
+          if (bundleDSR <= 0) return { j: b.j, need: 0, qpb: coreQtyInBundle, bundleDSR };
+
+          // Apply seasonal to bundle
+          const bProfile = bProfiles[b.j] || DEFAULT_PROFILE;
+          const fakeBundle = { id: b.j, dsr: bundleDSR, d7: b.d7comp || bundleDSR, raw: 0, inb: 0, pp: 0, jfn: 0, pq: 0, ji: 0, fba: (b.fibInv || 0) + (rp?.pprcUnits || 0) + (rp?.batched || 0) + inb7f };
+          const coverage = calcCoverageNeed(fakeBundle, lt, c.targetDoc, bProfile, pfV);
+          const need = coverage.need || 0;
+
+          totalCoreNeedFromBundles += need * coreQtyInBundle;
+          return { j: b.j, need, qpb: coreQtyInBundle, bundleDSR };
         });
 
-        // Redistribute excess from capped bundles to uncapped ones (by weight)
-        const totalExcessCorePcs = bData.reduce((s, bd) => s + bd.excess, 0);
-        if (totalExcessCorePcs > 0) {
-          const uncapped = bData.filter(bd => !bd.capped && bd.bundleDSR > 0);
-          const uncappedWeight = uncapped.reduce((s, bd) => s + bd.weight, 0);
-          uncapped.forEach(bd => {
-            const extraBU = uncappedWeight > 0 ? Math.ceil((totalExcessCorePcs * (bd.weight / uncappedWeight)) / bd.qpb) : 0;
-            // Re-check cap after redistribution
-            const rp = replenMap[bd.j];
-            const bundleCurrentInv = ((data.bundles || []).find(b => b.j === bd.j)?.fibInv || 0) + (rp?.pprcUnits || 0) + (rp?.batched || 0);
-            const maxAfterRedist = bd.bundleDSR > 0 ? Math.max(0, Math.ceil(c.targetDoc * bd.bundleDSR) - bundleCurrentInv) : 0;
-            bd.gap = Math.min(bd.gap + extraBU, maxAfterRedist);
-          });
-        }
-
-        // 3. Calculate bundle orders from gaps (already in bundle units)
-        let totalBundleOrderCorePcs = 0;
-        const coreExtrasFromBundles = { pieces: 0 };
-
+        // 2. Apply orders: if need < B.MOQ → convert to core pieces, else order as bundle
+        let coreExtras = 0;
         bData.forEach(bd => {
-          if (bd.gap <= 0) return;
-          const effectiveMoq = bMoq > 0 ? bMoq : 0;
-
-          if (mode === "mix" && effectiveMoq > 0 && bd.gap < effectiveMoq) {
-            // Below B.MOQ → convert back to core pieces
-            coreExtrasFromBundles.pieces += bd.gap * bd.qpb;
+          if (bd.need <= 0) return;
+          if (bMoq > 0 && bd.need < bMoq) {
+            // Below B.MOQ → convert to core pieces
+            coreExtras += bd.need * bd.qpb;
           } else {
-            let ord = effectiveMoq > 0 ? Math.max(bd.gap, effectiveMoq) : bd.gap;
+            let ord = bd.need;
             const bcp = casePackFromRec[bd.j] || 0;
             if (bcp > 0) ord = Math.ceil(ord / bcp) * bcp;
             u[bd.j] = { ...(u[bd.j] || {}), pcs: ord };
-            totalBundleOrderCorePcs += ord * bd.qpb; // convert back to core pcs for overallocation check
           }
         });
-    // 4. Core raw: smart check — do bundles actually cover the demand?
-        let coreRawNeed = 0;
-        if (coreExtrasFromBundles.pieces > 0) {
-          // B.MOQ converted extras → order as core
-          coreRawNeed = coreExtrasFromBundles.pieces;
-        } else if (cBundles.length === 0 && coreNeed > 0) {
-          // No bundles at all → order as core
-          coreRawNeed = coreNeed;
-        } else if (coreNeed > 0 && totalBundleOrderCorePcs === 0 && cBundles.length > 0) {
-          // Bundles exist but none needed ordering — check if they actually have inventory
-          const bundleTotalInv = cBundles.reduce((s, b) => {
-            const rp = replenMap[b.j];
-            return s + (b.fibInv || 0) + (rp?.pprcUnits || 0) + (rp?.batched || 0);
-          }, 0);
-          const bundleTotalDsr = cBundles.reduce((s, b) => s + (b.cd || 0), 0);
-          const bundleCoverDays = bundleTotalDsr > 0 ? bundleTotalInv / bundleTotalDsr : 9999;
-          // If bundles have less than half the target DOC → they're NOT covering demand → order core
-          if (bundleCoverDays < c.targetDoc * 0.5) {
-            coreRawNeed = coreNeed;
-          }
-          // Otherwise bundles are well stocked (high PPRC/FIB) → no core order needed
-        }
-       
 
-        // 5. Check overallocation: if total orders > core need + 15 DOC → warn
-        // 5a. Place core order if needed
-        if (coreRawNeed > 0) {
-          u[c.id] = { ...(u[c.id] || {}), pcs: cOQ(coreRawNeed, c.moq, c.casePack) };
-        }        
-        const totalOrderCorePcs = totalBundleOrderCorePcs + (coreRawNeed > 0 ? cOQ(coreRawNeed, c.moq, c.casePack) : 0);
-        const overDOC = c.dsr > 0 ? Math.round((totalOrderCorePcs - coreNeed) / c.dsr) : 0;
-        if (overDOC > 15 && coreNeed > 0) {
-          warnings.push(`${c.id}: +${overDOC} DOC over need (PPRC imbalance) — review unbundle`);
+        // 3. Core order: extras from B.MOQ conversion + raw waterfall consideration
+        // Subtract core raw already available — that's why MixView "uses" raw pieces
+        const coreRawAvail = c.raw || 0;
+        const finalCoreNeed = Math.max(0, coreExtras - coreRawAvail);
+        if (finalCoreNeed > 0) {
+          u[c.id] = { ...(u[c.id] || {}), pcs: cOQ(finalCoreNeed, c.moq, c.casePack) };
         }
       });
-} else {
-        // Cores mode — seasonal needQty already computed
-        cores.filter(c => c.needQty > 0).forEach(c => { u[c.id] = { ...(u[c.id] || {}), pcs: cOQ(c.needQty, c.moq, c.casePack) } });
-      }
+    } else {
+      // Cores mode — unchanged
+      cores.filter(c => c.needQty > 0).forEach(c => { u[c.id] = { ...(u[c.id] || {}), pcs: cOQ(c.needQty, c.moq, c.casePack) } });
+    }
 
     setOv(u);
     if (warnings.length > 0) { setToast("⚠ " + warnings.join(" | ")); setToastPersist(true); }
