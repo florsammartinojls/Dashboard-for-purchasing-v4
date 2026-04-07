@@ -34,6 +34,7 @@ export default function BundleTab({ data, stg, hist, daily, bundleId, onBack, go
   const bAged = sel ? agedMap[sel] : null;
   const bKill = sel ? killMap[sel] : null;
   const bStatus = b ? gS(b.doc, 60, 30, { critDays: 30, warnDays: 60 }) : "healthy";
+  const sale = b ? (data.sales || []).find(s => s.j === b.j) : null;
 
   // === INBOUND 7f (match by JLS# and core IDs, same logic as CoreTab) ===
   const bundleInbound = useMemo(() => {
