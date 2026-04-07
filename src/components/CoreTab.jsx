@@ -62,10 +62,9 @@ function BundlesTable({ cB, core, stg, ven, replenMap, missingMap, agedMap, kill
   const rawAvailable = coreRemaining[core?.id] != null ? coreRemaining[core.id] : (core?.raw || 0);
 
  // === RESTOCK RECOMMENDATION (per-bundle, seasonal) ===
+  // === RESTOCK RECOMMENDATION (per-bundle, using CORE seasonal profile) ===
   const restockRecs = React.useMemo(() => {
     if (!core) return {};
-    // Build seasonal profiles for all bundles in this view
-    const bProfiles = batchBundleProfiles(cB, hist?.bundleSales || []);
     const recs = {};
     cB.forEach(b => {
       const rp = replenByJ[b.j];
@@ -73,15 +72,19 @@ function BundlesTable({ cB, core, stg, ven, replenMap, missingMap, agedMap, kill
       const bundleDSR = b.cd || 0;
       if (bundleDSR <= 0) { recs[b.j] = 0; return; }
 
-      // Apply seasonal adjustment to bundle DSR
-      const bProfile = bProfiles[b.j] || DEFAULT_PROFILE;
-      const fakeBundle = { id: b.j, dsr: bundleDSR, d7: b.d7comp || bundleDSR, raw: 0, inb: 0, pp: 0, jfn: 0, pq: 0, ji: 0, fba: (b.fibInv || 0) + (rp?.pprcUnits || 0) + (rp?.batched || 0) + inb7f };
-      const coverage = calcCoverageNeed(fakeBundle, lt, restockTarget, bProfile, pf);
+      // Apply CORE seasonal profile to this bundle (bundle inherits core seasonality)
+      const fakeBundle = {
+        id: b.j,
+        dsr: bundleDSR,
+        d7: b.d7comp || bundleDSR,
+        raw: 0, inb: 0, pp: 0, jfn: 0, pq: 0, ji: 0,
+        fba: (b.fibInv || 0) + (rp?.pprcUnits || 0) + (rp?.batched || 0) + inb7f
+      };
+      const coverage = calcCoverageNeed(fakeBundle, lt, restockTarget, profile, pf);
       recs[b.j] = coverage.need || 0;
     });
     return recs;
-  }, [cB, core, restockTarget, replenByJ, missingMap, hist, lt, pf]);
-
+  }, [cB, core, restockTarget, replenByJ, missingMap, profile, lt, pf]);
   
   return (
     <div className="bg-gray-900 rounded-xl p-4 mb-4 border border-gray-800 overflow-x-auto">
