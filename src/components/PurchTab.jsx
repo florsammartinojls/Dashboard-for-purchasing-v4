@@ -358,7 +358,7 @@ const fillR = (cores, bundles, mode, vendorName) => {
   // === CORE ROW ===
   const CoreRow = ({ c }) => {
     if (dismissed[c.id]) return <tr className="border-t border-gray-800/20 bg-gray-900/30 text-xs opacity-40"><td className="py-1 px-1" colSpan={2}><Dot status={c.status} /></td><td className="py-1 px-1 text-gray-500 font-mono">{c.id}</td><td className="py-1 px-1 text-gray-600 truncate max-w-[110px]">{c.ti}</td><td colSpan={20} className="py-1 px-1 text-right"><button onClick={() => togDismiss(c.id)} className="text-xs text-gray-500 hover:text-white px-1">+</button></td></tr>;
-    const eq = coreEffQ(c); const cost = eq * c.cost;
+    const eq = coreEffQ(c); const cogpOverride = gCogP(c.id); const cost = eq * (cogpOverride > 0 ? cogpOverride : c.cost);
     const activeBundlesForCore = (data.bundles || []).filter(b => b.core1 === c.id && b.active === "Yes");
     const bundleOrderPieces = activeBundlesForCore.reduce((s, b) => s + (bundleEffQ(b) * (b.qty1 || 1)), 0);
     let ad = null;
@@ -408,7 +408,7 @@ const fillR = (cores, bundles, mode, vendorName) => {
 
   // === BUNDLE ROW ===
   const BundleRow = ({ b }) => {
-    const f = b.fee || feMap[b.j]; const eq = bundleEffQ(b); const cost = f ? (eq * (f.aicogs || 0)) : 0;
+    const f = b.fee || feMap[b.j]; const eq = bundleEffQ(b); const cogpOverride = gCogP(b.j); const cost = cogpOverride > 0 ? (eq * cogpOverride) : (f ? (eq * (f.aicogs || 0)) : 0);
     const aged = agedMap[b.j]; const kill = killMap[b.j]; const inb7f = missingMap[b.j] || 0; const rp = replenMap[b.j];
     const margin = f && f.aicogs > 0 ? ((f.gp / f.aicogs) * 100) : 0;
     const bCasePack = casePackFromRec[b.j] || 0;
