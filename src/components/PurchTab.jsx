@@ -199,12 +199,10 @@ return { ...c, status: st, allIn: ai, doc: effectiveDoc, needQty: sNeed, orderQt
   const autoPO = (vendorCode) => { if (poN) return poN; const d = new Date(); const serial = Math.floor((d - new Date(1899, 11, 30)) / 86400000); return 'PO-' + serial + '-' + (vendorCode || 'XXX') };
 
   // === FILL REC (v2 — core need as reference, distribute to bundles by weight, respect PPRC) ===
-
-  const fillR = (cores, bundles, mode, vendorName) => {
+const fillR = (cores, bundles, mode, vendorName) => {
     const u = { ...ov };
     const bMoq = gBMoq('_bmoq_' + vendorName);
     const isAgl = aglMap[vendorName] || false;
-    const warnings = [];
 
     if (mode === "bundles" || mode === "mix") {
       const coreMap = {}; cores.forEach(c => { coreMap[c.id] = c });
@@ -220,13 +218,6 @@ return { ...c, status: st, allIn: ai, doc: effectiveDoc, needQty: sNeed, orderQt
         }
       });
 
-      // Build seasonal profiles for ALL relevant bundles
-      const allRelevantBundles = (bundles || []).filter(b => {
-        for (let i = 1; i <= 20; i++) { if (coreMap[b['core' + i]]) return true; }
-        return false;
-      });
-      const bProfiles = batchBundleProfiles(allRelevantBundles, data._bundleSales || []);
-
       cores.forEach(c => {
         const cBundles = bundlesByCore[c.id] || [];
         if (cBundles.length === 0) {
@@ -235,37 +226,40 @@ return { ...c, status: st, allIn: ai, doc: effectiveDoc, needQty: sNeed, orderQt
         }
 
         const v = vMap[c.ven] || {};
-        const lt = isAgl ? AGL_LT : (v.lt || 30);
+        const ltUsed = isAgl ? AGL_LT : (v.lt || 30);
+        const cProfile = profiles[c.id] || DEFAULT_PROFILE;
         const pfV = purchFreqMap[c.ven];
 
-        // 1. Calculate independent seasonal need per bundle
-        let totalCoreNeedFromBundles = 0;
+        // Per-bundle independent need, using CORE seasonal profile
+        let coreExtras = 0;
         const bData = cBundles.map(b => {
           const rp = replenMap[b.j];
           const inb7f = missingMap[b.j] || 0;
           const bundleDSR = b.cd || 0;
-          const qpb = b.qty1 || 1;
 
-          // Find this core's qty in this bundle (could be core1, core2, etc.)
+          // Find this core's qty in this bundle (could be any slot 1-20)
           let coreQtyInBundle = 0;
           for (let i = 1; i <= 20; i++) {
             if (b['core' + i] === c.id) { coreQtyInBundle = b['qty' + i] || 0; break; }
           }
 
-          if (bundleDSR <= 0) return { j: b.j, need: 0, qpb: coreQtyInBundle, bundleDSR };
+          if (bundleDSR <= 0) return { j: b.j, need: 0, qpb: coreQtyInBundle };
 
-          // Apply seasonal to bundle
-          const bProfile = bProfiles[b.j] || DEFAULT_PROFILE;
-          const fakeBundle = { id: b.j, dsr: bundleDSR, d7: b.d7comp || bundleDSR, raw: 0, inb: 0, pp: 0, jfn: 0, pq: 0, ji: 0, fba: (b.fibInv || 0) + (rp?.pprcUnits || 0) + (rp?.batched || 0) + inb7f };
-          const coverage = calcCoverageNeed(fakeBundle, lt, c.targetDoc, bProfile, pfV);
+          // Apply CORE seasonal profile to bundle
+          const fakeBundle = {
+            id: b.j,
+            dsr: bundleDSR,
+            d7: b.d7comp || bundleDSR,
+            raw: 0, inb: 0, pp: 0, jfn: 0, pq: 0, ji: 0,
+            fba: (b.fibInv || 0) + (rp?.pprcUnits || 0) + (rp?.batched || 0) + inb7f
+          };
+          const coverage = calcCoverageNeed(fakeBundle, ltUsed, c.targetDoc, cProfile, pfV);
           const need = coverage.need || 0;
 
-          totalCoreNeedFromBundles += need * coreQtyInBundle;
-          return { j: b.j, need, qpb: coreQtyInBundle, bundleDSR };
+          return { j: b.j, need, qpb: coreQtyInBundle };
         });
 
-        // 2. Apply orders: if need < B.MOQ → convert to core pieces, else order as bundle
-        let coreExtras = 0;
+        // Apply orders
         bData.forEach(bd => {
           if (bd.need <= 0) return;
           if (bMoq > 0 && bd.need < bMoq) {
@@ -279,8 +273,7 @@ return { ...c, status: st, allIn: ai, doc: effectiveDoc, needQty: sNeed, orderQt
           }
         });
 
-        // 3. Core order: extras from B.MOQ conversion + raw waterfall consideration
-        // Subtract core raw already available — that's why MixView "uses" raw pieces
+        // Core order: extras from B.MOQ conversion, minus raw already available
         const coreRawAvail = c.raw || 0;
         const finalCoreNeed = Math.max(0, coreExtras - coreRawAvail);
         if (finalCoreNeed > 0) {
@@ -293,8 +286,8 @@ return { ...c, status: st, allIn: ai, doc: effectiveDoc, needQty: sNeed, orderQt
     }
 
     setOv(u);
-    if (warnings.length > 0) { setToast("⚠ " + warnings.join(" | ")); setToastPersist(true); }
   };
+
 
   const r2w = n => Math.round(n * 100) / 100;
 
