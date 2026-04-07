@@ -22,12 +22,12 @@ const getDsr = (h) => {
   return null;
 };
 
-function BundlesTable({ cB, core, stg, ven, replenMap, missingMap, agedMap, killMap, goBundle, bT }) {
+function BundlesTable({ cB, core, stg, ven, replenMap, missingMap, agedMap, killMap, goBundle, bT, saM, profile, pf, lt, tg }) {
   const [editVals, setEditVals] = React.useState({});
   const restockTarget = ven && (ven.country || "").toLowerCase().trim().match(/^(us|usa|united states)?$/) ? (stg.domesticDoc || 90) : (stg.intlDoc || 180);
   const replenByJ = React.useMemo(() => { const m = {}; (replenMap || []).forEach(r => { m[r.j] = r }); return m }, [replenMap]);
 
-  // Total core pieces consumed by all V inputs (each bundle's V × its qty per bundle)
+  // Total core pieces consumed by all V inputs
   const totalConsumed = React.useMemo(() => {
     return cB.reduce((sum, b) => {
       const v = editVals[b.j] || 0;
@@ -37,6 +37,37 @@ function BundlesTable({ cB, core, stg, ven, replenMap, missingMap, agedMap, kill
   }, [editVals, cB]);
 
   const rawAvailable = (core?.raw || 0) - totalConsumed;
+
+  // === RESTOCK RECOMMENDATION (same logic as PurchTab fillR, but always in bundle units) ===
+  const restockRecs = React.useMemo(() => {
+    if (!core) return {};
+    // 1. Calc core seasonal need (same as PurchTab)
+    const coverage = calcCoverageNeed(core, lt, tg, profile, pf);
+    const coreNeed = coverage.need || 0;
+    if (coreNeed <= 0) return {};
+
+    // 2. Distribute by L28d weight
+    const totL28 = cB.reduce((s, b) => { const sa = saM[b.j]; return s + (sa?.l28U || 0) }, 0);
+    const recs = {};
+    cB.forEach(b => {
+      const sa = saM[b.j];
+      const l28 = sa?.l28U || 0;
+      const weight = totL28 > 0 ? l28 / totL28 : 1 / cB.length;
+      const rp = replenByJ[b.j];
+      const qpb = b.qty1 || 1;
+      const normalShareBU = Math.ceil((coreNeed * weight) / qpb);
+      const pprcCommitted = (rp?.pprcUnits || 0) + (rp?.batched || 0);
+      const pprcWillCover = Math.min(pprcCommitted, normalShareBU);
+      let gap = Math.max(0, normalShareBU - pprcWillCover);
+      // Cap at restockTarget DOC
+      const bundleDSR = b.cd || 0;
+      const bundleCurrentInv = (b.fibInv || 0) + (rp?.pprcUnits || 0) + (rp?.batched || 0);
+      const maxOrderBU = bundleDSR > 0 ? Math.max(0, Math.ceil(restockTarget * bundleDSR) - bundleCurrentInv) : 0;
+      if (gap > maxOrderBU && maxOrderBU >= 0) gap = maxOrderBU;
+      recs[b.j] = gap;
+    });
+    return recs;
+  }, [cB, core, lt, tg, profile, pf, saM, replenByJ, restockTarget]);
 
   return (
     <div className="bg-gray-900 rounded-xl p-4 mb-4 border border-gray-800 overflow-x-auto">
@@ -59,12 +90,12 @@ function BundlesTable({ cB, core, stg, ven, replenMap, missingMap, agedMap, kill
             <TH tip="Gross Profit" className="py-2 px-1 text-right">GP</TH>
             <TH tip="All-In COGS" className="py-2 px-1 text-right">AICOGS</TH>
             <TH tip="Margin %" className="py-2 px-1 text-right">Margin</TH>
-            <TH tip="Raw Units (from replen)" className="py-2 px-1 text-right">Raw</TH>
+            <TH tip="Raw Units" className="py-2 px-1 text-right">Raw</TH>
             <TH tip="Batched" className="py-2 px-1 text-right">Batch</TH>
             <TH tip="SC Inventory" className="py-2 px-1 text-right">SC Inv</TH>
             <TH tip="PPRCD Units" className="py-2 px-1 text-right">PPRCD</TH>
-            <TH tip="7f Inbound (pieces missing for this JLS)" className="py-2 px-1 text-right">7f Inb</TH>
-            <TH tip={"Restock Target (" + restockTarget + "d)"} className="py-2 px-1 text-right">Restock</TH>
+            <TH tip="7f Inbound" className="py-2 px-1 text-right">7f Inb</TH>
+            <TH tip={"Recommended bundle units to reach " + restockTarget + "d target"} className="py-2 px-1 text-right">Restock</TH>
             <TH tip="Editable allocation (consumes core raw)" className="py-2 px-1 text-center">Edit</TH>
             <TH tip="Potential bundle units = available core raw ÷ qty per bundle" className="py-2 px-1 text-right">Potential</TH>
             <th className="py-2 px-1 w-8" />
@@ -78,10 +109,9 @@ function BundlesTable({ cB, core, stg, ven, replenMap, missingMap, agedMap, kill
               const inb7f = missingMap[b.j] || 0;
               const qpb = b.qty1 || 1;
               const editVal = editVals[b.j] || 0;
-              // Potential = (raw available + what THIS bundle already consumed) ÷ qpb
-              const myConsumed = editVal * qpb;
-              const potentialPool = rawAvailable + myConsumed;
-              const potential = qpb > 0 ? Math.max(0, Math.floor(potentialPool / qpb)) : 0;
+              // Potential = available raw ÷ qpb (does NOT include what this bundle already consumed)
+              const potential = qpb > 0 ? Math.max(0, Math.floor(rawAvailable / qpb)) : 0;
+              const restockRec = restockRecs[b.j] || 0;
 
               return (
                 <tr key={b.j} className="border-t border-gray-800/50 hover:bg-gray-800/20">
@@ -105,7 +135,7 @@ function BundlesTable({ cB, core, stg, ven, replenMap, missingMap, agedMap, kill
                   <td className="py-1.5 px-1 text-right">{R(b.scInv)}</td>
                   <td className="py-1.5 px-1 text-right">{R(rp?.pprcUnits || 0)}</td>
                   <td className={`py-1.5 px-1 text-right ${inb7f > 0 ? "text-red-400" : "text-gray-600"}`}>{inb7f > 0 ? R(inb7f) : "—"}</td>
-                  <td className="py-1.5 px-1 text-right text-purple-300">{restockTarget}d</td>
+                  <td className={`py-1.5 px-1 text-right font-semibold ${restockRec > 0 ? "text-amber-300" : "text-gray-600"}`}>{restockRec > 0 ? R(restockRec) : "—"}</td>
                   <td className="py-1 px-1 text-center">
                     <input
                       type="number"
@@ -585,7 +615,7 @@ export default function CoreTab({ data, stg, hist, daily, coreId, onBack, goBund
       </div>
 
       {/* Bundles */}
-      <BundlesTable cB={cB} core={core} stg={stg} ven={ven} replenMap={data.replenRec || []} missingMap={(() => { const m = {}; (data.receiving || []).forEach(r => { if (r.piecesMissing > 0) { const k = (r.core || "").trim(); m[k] = (m[k] || 0) + r.piecesMissing } }); return m })()} agedMap={agedMap} killMap={killMap} goBundle={goBundle} bT={bT} />
+      <BundlesTable cB={cB} core={core} stg={stg} ven={ven} replenMap={data.replenRec || []} missingMap={(() => { const m = {}; (data.receiving || []).forEach(r => { if (r.piecesMissing > 0) { const k = (r.core || "").trim(); m[k] = (m[k] || 0) + r.piecesMissing } }); return m })()} agedMap={agedMap} killMap={killMap} goBundle={goBundle} bT={bT} saM={saM} profile={profile} pf={pf} lt={lt} tg={tg} />
 
      {/* Purchase Rec */}
       <div className="bg-gray-900 rounded-xl p-4 border border-gray-800">
