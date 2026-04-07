@@ -22,31 +22,52 @@ const getDsr = (h) => {
   return null;
 };
 
-function BundlesTable({ cB, core, stg, ven, replenMap, missingMap, agedMap, killMap, goBundle, bT, saM, profile, pf, lt, tg }) {
+function BundlesTable({ cB, core, stg, ven, replenMap, missingMap, agedMap, killMap, goBundle, bT, saM, profile, pf, lt, tg, allCores }) {
   const [editVals, setEditVals] = React.useState({});
   const restockTarget = ven && (ven.country || "").toLowerCase().trim().match(/^(us|usa|united states)?$/) ? (stg.domesticDoc || 90) : (stg.intlDoc || 180);
   const replenByJ = React.useMemo(() => { const m = {}; (replenMap || []).forEach(r => { m[r.j] = r }); return m }, [replenMap]);
 
-  // Total core pieces consumed by all V inputs
-  const totalConsumed = React.useMemo(() => {
-    return cB.reduce((sum, b) => {
+  // Map of core ID → raw available (from full data.cores)
+  const coreRawMap = React.useMemo(() => {
+    const m = {};
+    (allCores || []).forEach(c => { m[c.id] = c.raw || 0 });
+    return m;
+  }, [allCores]);
+
+  // Get all cores used by a bundle (1-20)
+  const getBundleCores = (b) => {
+    const cores = [];
+    for (let i = 1; i <= 20; i++) {
+      const cid = b['core' + i];
+      const qty = b['qty' + i];
+      if (cid && qty > 0) cores.push({ id: cid, qty });
+    }
+    return cores;
+  };
+
+  // Calculate remaining qty for each core after all V allocations
+  const coreRemaining = React.useMemo(() => {
+    const remaining = { ...coreRawMap };
+    cB.forEach(b => {
       const v = editVals[b.j] || 0;
-      const qpb = b.qty1 || 1;
-      return sum + (v * qpb);
-    }, 0);
-  }, [editVals, cB]);
+      if (v <= 0) return;
+      getBundleCores(b).forEach(({ id, qty }) => {
+        if (remaining[id] != null) remaining[id] -= v * qty;
+      });
+    });
+    return remaining;
+  }, [editVals, cB, coreRawMap]);
 
-  const rawAvailable = (core?.raw || 0) - totalConsumed;
+  // Available for the current core (header display)
+  const rawAvailable = coreRemaining[core?.id] != null ? coreRemaining[core.id] : (core?.raw || 0);
 
-  // === RESTOCK RECOMMENDATION (same logic as PurchTab fillR, but always in bundle units) ===
+  // === RESTOCK RECOMMENDATION ===
   const restockRecs = React.useMemo(() => {
     if (!core) return {};
-    // 1. Calc core seasonal need (same as PurchTab)
     const coverage = calcCoverageNeed(core, lt, tg, profile, pf);
     const coreNeed = coverage.need || 0;
     if (coreNeed <= 0) return {};
 
-    // 2. Distribute by L28d weight
     const totL28 = cB.reduce((s, b) => { const sa = saM[b.j]; return s + (sa?.l28U || 0) }, 0);
     const recs = {};
     cB.forEach(b => {
@@ -59,7 +80,6 @@ function BundlesTable({ cB, core, stg, ven, replenMap, missingMap, agedMap, kill
       const pprcCommitted = (rp?.pprcUnits || 0) + (rp?.batched || 0);
       const pprcWillCover = Math.min(pprcCommitted, normalShareBU);
       let gap = Math.max(0, normalShareBU - pprcWillCover);
-      // Cap at restockTarget DOC
       const bundleDSR = b.cd || 0;
       const bundleCurrentInv = (b.fibInv || 0) + (rp?.pprcUnits || 0) + (rp?.batched || 0);
       const maxOrderBU = bundleDSR > 0 ? Math.max(0, Math.ceil(restockTarget * bundleDSR) - bundleCurrentInv) : 0;
@@ -96,8 +116,8 @@ function BundlesTable({ cB, core, stg, ven, replenMap, missingMap, agedMap, kill
             <TH tip="PPRCD Units" className="py-2 px-1 text-right">PPRCD</TH>
             <TH tip="7f Inbound" className="py-2 px-1 text-right">7f Inb</TH>
             <TH tip={"Recommended bundle units to reach " + restockTarget + "d target"} className="py-2 px-1 text-right">Restock</TH>
-            <TH tip="Editable allocation (consumes core raw)" className="py-2 px-1 text-center">Edit</TH>
-            <TH tip="Potential bundle units = available core raw ÷ qty per bundle" className="py-2 px-1 text-right">Potential</TH>
+            <TH tip="Editable allocation (consumes raw from all cores used)" className="py-2 px-1 text-center">Edit</TH>
+            <TH tip="Potential = min(remaining of each core ÷ qty per bundle)" className="py-2 px-1 text-right">Potential</TH>
             <th className="py-2 px-1 w-8" />
           </tr></thead>
           <tbody>
@@ -107,11 +127,27 @@ function BundlesTable({ cB, core, stg, ven, replenMap, missingMap, agedMap, kill
               const aged = agedMap[b.j]; const kill = killMap[b.j];
               const rp = replenByJ[b.j];
               const inb7f = missingMap[b.j] || 0;
-              const qpb = b.qty1 || 1;
               const editVal = editVals[b.j] || 0;
-              // Potential = available raw ÷ qpb (does NOT include what this bundle already consumed)
-              const potential = qpb > 0 ? Math.max(0, Math.floor(rawAvailable / qpb)) : 0;
               const restockRec = restockRecs[b.j] || 0;
+
+              // Potential = min over all cores of (remaining[core] ÷ qty for that core)
+              // Note: we add back what THIS bundle already consumed for that core
+              const bCores = getBundleCores(b);
+              let potential = 0;
+              let constraintCore = null;
+              if (bCores.length > 0) {
+                potential = Infinity;
+                bCores.forEach(({ id, qty }) => {
+                  const rem = (coreRemaining[id] != null ? coreRemaining[id] : (coreRawMap[id] || 0)) + (editVal * qty);
+                  const possible = qty > 0 ? Math.floor(rem / qty) : 0;
+                  if (possible < potential) {
+                    potential = possible;
+                    constraintCore = id;
+                  }
+                });
+                if (potential === Infinity) potential = 0;
+                if (potential < 0) potential = 0;
+              }
 
               return (
                 <tr key={b.j} className="border-t border-gray-800/50 hover:bg-gray-800/20">
@@ -149,20 +185,13 @@ function BundlesTable({ cB, core, stg, ven, replenMap, missingMap, agedMap, kill
                       placeholder="0"
                     />
                   </td>
-                  <td className={`py-1.5 px-1 text-right font-semibold ${potential > 0 ? "text-cyan-300" : "text-gray-600"}`}>{R(potential)}</td>
+                  <td className={`py-1.5 px-1 text-right font-semibold ${potential > 0 ? "text-cyan-300" : "text-gray-600"}`} title={constraintCore ? "Limited by " + constraintCore : ""}>{R(potential)}</td>
                   <td className="py-1.5 px-1">
                     <button onClick={() => goBundle(b.j)} className="text-blue-400 px-0.5 bg-blue-400/10 rounded">V</button>
                   </td>
                 </tr>
               );
             })}
-            <tr className="bg-gray-900/60 border-t-2 border-gray-700 font-semibold">
-              <td colSpan={3} className="py-2 px-1 text-gray-300">Tot</td>
-              <td className="py-2 px-1 text-right text-white">{D1(bT.d)}</td>
-              <td colSpan={9} />
-              <td className="py-2 px-1 text-right text-amber-300">{R(totalConsumed)}</td>
-              <td colSpan={2} />
-            </tr>
           </tbody>
         </table>
       ) : <p className="text-gray-500 text-sm">No bundles.</p>}
