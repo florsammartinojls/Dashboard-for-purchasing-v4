@@ -644,7 +644,7 @@ export default function CoreTab({ data, stg, hist, daily, coreId, onBack, goBund
       </div>
 
       {/* Bundles */}
-      <BundlesTable cB={cB} core={core} stg={stg} ven={ven} replenMap={data.replenRec || []} missingMap={(() => { const m = {}; (data.receiving || []).forEach(r => { if (r.piecesMissing > 0) { const k = (r.core || "").trim(); m[k] = (m[k] || 0) + r.piecesMissing } }); return m })()} agedMap={agedMap} killMap={killMap} goBundle={goBundle} bT={bT} saM={saM} profile={profile} pf={pf} lt={lt} tg={tg} />
+      <BundlesTable cB={cB} core={core} stg={stg} ven={ven} replenMap={data.replenRec || []} missingMap={(() => { const m = {}; (data.receiving || []).forEach(r => { if (r.piecesMissing > 0) { const k = (r.core || "").trim(); m[k] = (m[k] || 0) + r.piecesMissing } }); return m })()} agedMap={agedMap} killMap={killMap} goBundle={goBundle} bT={bT} saM={saM} profile={profile} pf={pf} lt={lt} tg={tg} allCores={data.cores || []} />
 
      {/* Purchase Rec */}
       <div className="bg-gray-900 rounded-xl p-4 border border-gray-800">
