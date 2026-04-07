@@ -1,8 +1,8 @@
 import React, { useState, useMemo, useEffect } from "react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
 import { R, D1, $, $2, P, MN, YC, TTP, BL, TL, gS, cAI, cNQ, cOQ, cDA, gTD, dc, fE, fD, cMo, gY, cSeas } from "../lib/utils";
-import { batchProfiles, calcCoverageNeed, calcPurchaseFrequency, DEFAULT_PROFILE } from "../lib/seasonal";
 import { Dot, TH, SumCtx } from "./Shared";
+import { batchProfiles, batchBundleProfiles, calcCoverageNeed, calcPurchaseFrequency, DEFAULT_PROFILE } from "../lib/seasonal";
 
 // Clickable cell for Quick Sum
 function SC({ v, children, className }) {
@@ -61,34 +61,28 @@ function BundlesTable({ cB, core, stg, ven, replenMap, missingMap, agedMap, kill
   // Available for the current core (header display)
   const rawAvailable = coreRemaining[core?.id] != null ? coreRemaining[core.id] : (core?.raw || 0);
 
-  // === RESTOCK RECOMMENDATION ===
+ // === RESTOCK RECOMMENDATION (per-bundle, seasonal) ===
   const restockRecs = React.useMemo(() => {
     if (!core) return {};
-    const coverage = calcCoverageNeed(core, lt, tg, profile, pf);
-    const coreNeed = coverage.need || 0;
-    if (coreNeed <= 0) return {};
-
-    const totL28 = cB.reduce((s, b) => { const sa = saM[b.j]; return s + (sa?.l28U || 0) }, 0);
+    // Build seasonal profiles for all bundles in this view
+    const bProfiles = batchBundleProfiles(cB, hist?.bundleSales || []);
     const recs = {};
     cB.forEach(b => {
-      const sa = saM[b.j];
-      const l28 = sa?.l28U || 0;
-      const weight = totL28 > 0 ? l28 / totL28 : 1 / cB.length;
       const rp = replenByJ[b.j];
-      const qpb = b.qty1 || 1;
-      const normalShareBU = Math.ceil((coreNeed * weight) / qpb);
-      const pprcCommitted = (rp?.pprcUnits || 0) + (rp?.batched || 0);
-      const pprcWillCover = Math.min(pprcCommitted, normalShareBU);
-      let gap = Math.max(0, normalShareBU - pprcWillCover);
+      const inb7f = missingMap[b.j] || 0;
       const bundleDSR = b.cd || 0;
-      const bundleCurrentInv = (b.fibInv || 0) + (rp?.pprcUnits || 0) + (rp?.batched || 0);
-      const maxOrderBU = bundleDSR > 0 ? Math.max(0, Math.ceil(restockTarget * bundleDSR) - bundleCurrentInv) : 0;
-      if (gap > maxOrderBU && maxOrderBU >= 0) gap = maxOrderBU;
-      recs[b.j] = gap;
+      if (bundleDSR <= 0) { recs[b.j] = 0; return; }
+
+      // Apply seasonal adjustment to bundle DSR
+      const bProfile = bProfiles[b.j] || DEFAULT_PROFILE;
+      const fakeBundle = { id: b.j, dsr: bundleDSR, d7: b.d7comp || bundleDSR, raw: 0, inb: 0, pp: 0, jfn: 0, pq: 0, ji: 0, fba: (b.fibInv || 0) + (rp?.pprcUnits || 0) + (rp?.batched || 0) + inb7f };
+      const coverage = calcCoverageNeed(fakeBundle, lt, restockTarget, bProfile, pf);
+      recs[b.j] = coverage.need || 0;
     });
     return recs;
-  }, [cB, core, lt, tg, profile, pf, saM, replenByJ, restockTarget]);
+  }, [cB, core, restockTarget, replenByJ, missingMap, hist, lt, pf]);
 
+  
   return (
     <div className="bg-gray-900 rounded-xl p-4 mb-4 border border-gray-800 overflow-x-auto">
       <div className="flex items-center justify-between mb-3">
