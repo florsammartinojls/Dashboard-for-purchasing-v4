@@ -138,7 +138,7 @@ function BundlesTable({ cB, core, stg, ven, replenMap, missingMap, agedMap, kill
               if (bCores.length > 0) {
                 potential = Infinity;
                 bCores.forEach(({ id, qty }) => {
-                  const rem = (coreRemaining[id] != null ? coreRemaining[id] : (coreRawMap[id] || 0)) + (editVal * qty);
+                  const rem = coreRemaining[id] != null ? coreRemaining[id] : (coreRawMap[id] || 0);
                   const possible = qty > 0 ? Math.floor(rem / qty) : 0;
                   if (possible < potential) {
                     potential = possible;
@@ -243,19 +243,17 @@ export default function CoreTab({ data, stg, hist, daily, coreId, onBack, goBund
   };
   const cBA = useMemo(() => {
     if (!core) return [];
-    // Parse Attached JLS #s — handle commas, semicolons, newlines, spaces
-    const raw = (core.jlsList || "").split(/[,;|\n\r]+/).map(j => j.trim()).filter(Boolean);
-    if (raw.length > 0) {
-      const jlsSet = new Set(raw.map(j => j.toLowerCase()));
-      const matched = (data.bundles || []).filter(b =>
-        jlsSet.has(b.j.trim().toLowerCase()) && bundleFilter(b)
-      );
-      if (matched.length > 0) return matched;
-    }
-    // Fallback: match by core1
-    return (data.bundles || []).filter(b => b.core1 === sel && bundleFilter(b));
+    // Find ALL bundles that use this core in ANY core slot (1-20)
+    const matched = (data.bundles || []).filter(b => {
+      if (!bundleFilter(b)) return false;
+      for (let i = 1; i <= 20; i++) {
+        if (b['core' + i] === sel) return true;
+      }
+      return false;
+    });
+    return matched;
   }, [core, sel, data.bundles, stg]);
-
+  
   const bIds = useMemo(() => cBA.map(b => b.j), [cBA]);
   const inbS = useMemo(() => {
     if (!sel || !data.inbound) return [];
