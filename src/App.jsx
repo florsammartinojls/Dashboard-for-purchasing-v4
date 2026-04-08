@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useCallback, useEffect } from "react";
-import { api, apiPost } from "./lib/api";
+import { fetchLive, fetchHistory, refreshHistoryOnServer, fetchInfo, apiPost } from "./lib/api";
 import { R, D1, gS, fTs, gTD, isD, cAI, cNQ } from "./lib/utils";
 import { Loader, Stg, QuickSum, SumCtx, SlidePanel, Dot, WorkflowChip, VendorNotes } from "./components/Shared";
 import DashboardSummary from "./components/DashboardSummary";
@@ -67,63 +67,9 @@ function VendorsTab({ data, stg, goVendor, workflow, saveWorkflow, deleteWorkflo
 const DEFAULT_GL = [
   { term: "C.DSR", desc: "Composite Daily Sales Rate (1 decimal)." },
   { term: "DOC", desc: "Days of Coverage — how many days current inventory will last at current sales rate." },
-  { term: "Critical", desc: "DOC ≤ Lead Time. Needs immediate action — you may run out before new stock arrives." },
-  { term: "Warning", desc: "DOC ≤ Lead Time + Buffer Days. Monitor closely — tight but not yet critical." },
+  { term: "Critical", desc: "DOC ≤ Lead Time. Needs immediate action." },
+  { term: "Warning", desc: "DOC ≤ Lead Time + Buffer Days. Monitor closely." },
   { term: "Healthy", desc: "DOC > Lead Time + Buffer. Sufficient inventory." },
-  { term: "Buffer Days", desc: "Extra safety margin days per core (set in source sheet). Default ~14 days." },
-  { term: "⚡ Spike", desc: "7D DSR is 25%+ above composite DSR. Need calculation uses 7D DSR instead to cover the demand spike." },
-  { term: "📊 Seasonal Breakdown", desc: "Click the 📊 button on any core row to see the full 5-step seasonal forecast: 1) Consumption during lead time, 2) Inventory at arrival, 3) Coverage window need, 4) Last-year shape × sustained growth, 5) Purchase frequency safety. Shows plain English summary + month-by-month projection tables." },
-  { term: "Inv at Arrival (Step 1)", desc: "Projects how much inventory you'll have left when the order actually arrives. = Current inventory − Σ(projected consumption during lead time). If negative → ⚠ STOCKOUT before arrival." },
-  { term: "Coverage Window (Step 2)", desc: "After arrival: how much demand must your order cover? Projected demand from arrival date → arrival + target DOC, month by month using seasonal shape." },
-  { term: "Last-Year Shape (Step 4)", desc: "The 'curve' of last year's sales, normalized. Formula: projectedDSR(month) = currentDSR × shape[month] ÷ shape[now] × safety." },
-  { term: "Shape Normalization", desc: "projectedDSR = currentDSR × dampedNorm × safety. dampedNorm = 1 + (shape[M]/shape[now] − 1) × 50%." },
-  { term: "CV (Coefficient of Variation)", desc: "Measures how seasonal a product is. CV < 0.15 = flat. CV 0.15–0.35 = mild. CV > 0.35 = strong." },
-  { term: "Purchase Frequency (Step 5)", desc: "Inferred from PO history: how many times/year do you order from this vendor? ≤2 orders/yr → Low frequency → safety ×1.10. 3-6/yr → Normal → ×1.05. >6/yr → High → ×1.0." },
-  { term: "Fill Rec v3", desc: "Cores: projectedDSR = currentDSR × shape[month] ÷ shape[now] × safety. Need = Σ(projected demand over targetDOC) − current inventory." },
-  { term: "Fill to MOQ", desc: "When Fill Rec total < vendor MOQ$, distributes extra intelligently by priority scoring." },
-  { term: "AGL Toggle", desc: "Per-vendor toggle in Bundles/Mix mode. When ON, bundles use 80-day lead time instead of vendor's standard LT." },
-  { term: "⚠ Unbundle Warning", desc: "When Fill Rec allocates bundles and total order exceeds core need by +15 DOC or more." },
-  { term: "Fill Rec: Distribution", desc: "In Mix/Bundles mode, Fill Rec uses core seasonal need as the TOTAL reference. Distributes proportionally by %28d weight." },
-  { term: "Fill Rec: Bundles", desc: "Need = (Target DOC × bundle DSR) − FIB Inventory. Order = Need (no MOQ on bundles)." },
-  { term: "Fill Rec: Mix", desc: "1) Effective DOC calc 2) Need calc 3) B.MOQ check 4) Core order with converted pieces." },
-  { term: "FIBDOC", desc: "FBA Inbound Days of Coverage." },
-  { term: "PFIBDOC", desc: "Projected FIB DOC after restock." },
-  { term: "+RS", desc: "Toggle Bundle detail columns: FIB Pcs, SC Inv, Reserved, Inbound, 7f Missing." },
-  { term: "+$", desc: "Toggle cost columns: InbS, CogP, CogC." },
-  { term: "FBA Pcs", desc: "Total FBA & Inbound Pieces for the core." },
-  { term: "7f", desc: "Receiving Ledger (clipboard copy for spreadsheet)." },
-  { term: "7g", desc: "COGS Ledger (clipboard copy for spreadsheet)." },
-  { term: "7f Miss", desc: "Pieces Missing from 7f Receiving — inbound shipments not fully received." },
-  { term: "B.FIB", desc: "Bundle FIB Inventory (sum of all active bundles for a core)." },
-  { term: "B.SC", desc: "Bundle SC Inventory (sum of all active bundles for a core)." },
-  { term: "B.Res", desc: "Bundle Reserved units (sum of all active bundles for a core)." },
-  { term: "B.Inb", desc: "Bundle Inbound units (sum of all active bundles for a core)." },
-  { term: "RFQ", desc: "Request for Quote — like PO but without pricing columns." },
-  { term: "AICOGS", desc: "All-In Cost of Goods Sold." },
-  { term: "InbS", desc: "Inbound Shipping cost." },
-  { term: "CogP", desc: "Cost per Piece." },
-  { term: "CogC", desc: "Cost per Case." },
-  { term: "$", desc: "Toggle purchase history (last 4 orders) + receiving (7f) for a core." },
-  { term: "%28d", desc: "Bundle % weight = units sold L28d for this bundle / total L28d units for all bundles of the same core." },
-  { term: "FBA Health", desc: "From Aged Inventory sheet — Healthy, At Risk, or Unhealthy." },
-  { term: "LTSF", desc: "Long-Term Storage Fee — charges for aged inventory at FBA." },
-  { term: "KILL", desc: "ASIN flagged for discontinuation in Kill Management sheet." },
-  { term: "ST", desc: "Sell-Through — ASIN in sell-through evaluation mode." },
-  { term: "+/−", desc: "Expand or collapse detail columns per core row." },
-  { term: "✕", desc: "Dismiss a core row (hide it temporarily while reviewing). 'Show All' brings them back." },
-  { term: "7f Inbound", desc: "Pieces still in transit from 7f Receiving." },
-  { term: "B.CasePack", desc: "Bundle case pack derived from 7f Receiving (pieces ÷ cases from most recent receiving entry)." },
-  { term: "B.MOQ", desc: "Bundle MOQ per vendor (editable, only in Bundles/Mix view)." },
-  { term: "After DOC (Bundle)", desc: "Base = (FIB Inv + 7f Inbound + PPRC) ÷ DSR + raw waterfall allocation + order qty." },
-  { term: "After DOC (Core)", desc: "Core inventory after orders. = (All-In + Core Order + Mix Adj - Bundle Orders × qty_per_bundle) ÷ DSR." },
-  { term: "Raw 20d Min", desc: "Minimum order covers 20 days of DSR as raw material = DSR × 20." },
-  { term: "Raw Waterfall", desc: "Core raw units allocated across bundles by priority: lowest effective DOC gets raw first." },
-  { term: "PO#", desc: "Auto-generated: PO-ExcelSerial-VendorCode. Override with manual entry." },
-  { term: "💬 Vendor Notes", desc: "Click to view/add notes about a vendor. Categories: Communication, Lead Time, Pricing, Discount, Quality, Other." },
-  { term: "Orders Tab", desc: "PO History from 7f Receiving. View by PO, by Vendor, or by Core/JLS." },
-  { term: "Quick Sum", desc: "Click numeric cells to select them. Sum & Avg appear in the bottom bar. Click ✕ to clear." },
-  { term: "Replen Floor DOC", desc: "Minimum DOC target for the replen waterfall (Phase 1). When distributing core raw to bundles, all bundles get raw until they reach this floor first. Then Phase 2 stretches the rest evenly. Default 80d. Configure in ⚙️ Settings." },
-  { term: "Raw Waterfall v2", desc: "Two-phase raw allocation: Phase 1 fills all bundles to Replen Floor DOC (urgency-based). Phase 2 stretches remaining raw evenly in 10d steps until target DOC or raw runs out." },
 ];
 
 function GlossTab() {
@@ -155,27 +101,38 @@ const TABS = [
   { id: "glossary", l: "Glossary" }
 ];
 
+// Empty data shape — used as initial state and as fallback if a load fails
+const EMPTY_DATA = {
+  cores: [], bundles: [], vendors: [], sales: [], fees: [], inbound: [],
+  abcA: [], abcT: [], abcSub: '', restock: [], priceComp: [], agedInv: [],
+  killMgmt: [], workflow: [], receiving: [], replenRec: [], receivingFull: [],
+  vendorComments: [], priceCompFull: [], coreInv: [], bundleInv: [],
+  bundleSales: [], priceHist: [], coreDays: [], bundleDays: []
+};
+
 export default function App() {
   const urlParams = useMemo(() => new URLSearchParams(window.location.search), []);
   const initCore = urlParams.get('core');
   const initBundle = urlParams.get('bundle');
   const initVendorParam = urlParams.get('vendor');
   const initTab = urlParams.get('tab');
+
   const [tab, setTab] = useState(initCore ? "core" : initBundle ? "bundle" : initVendorParam ? "purchasing" : initTab || "dashboard");
   const [showS, setShowS] = useState(false);
   const [stg, setStg] = useState({ buyer: '', domesticDoc: 90, intlDoc: 180, replenFloorDoc: 80, fA: "yes", fI: "blank", fV: "yes" });
   const [coreId, setCoreId] = useState(initCore || null);
   const [bundleId, setBundleId] = useState(initBundle || null);
-  const [data, setData] = useState({ cores: [], bundles: [], vendors: [], sales: [], fees: [], inbound: [], abcA: [], abcT: [], abcSub: '', restock: [], priceComp: [], agedInv: [], killMgmt: [], workflow: [], receiving: [], replenRec: [], receivingFull: [], vendorComments: [], priceCompFull: [] });
-  const [ordersLoaded, setOrdersLoaded] = useState(false);
-  const [hist, setHist] = useState({ bundleSales: [], coreInv: [], bundleInv: [], priceHist: [] });
-  const [daily, setDaily] = useState({ coreDays: [], bundleDays: [] });
+
+  // Data state — combined from live + history
+  const [data, setData] = useState(EMPTY_DATA);
+
+  // Load status — separate flags so we can show partial UI
+  const [liveStatus, setLiveStatus] = useState({ loading: true, error: null, version: null });
+  const [historyStatus, setHistoryStatus] = useState({ loading: true, error: null, version: null, fromCache: false });
+  const [refreshingHistory, setRefreshingHistory] = useState(false);
+
   const [ov, setOv] = useState({});
   const [initV, setInitV] = useState(initVendorParam || null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [ts, setTs] = useState("");
-  const [rdy, setRdy] = useState({ h: false, d: false });
   const [prevTab, setPrevTab] = useState(null);
   const [panelCoreId, setPanelCoreId] = useState(null);
   const [panelBundleId, setPanelBundleId] = useState(null);
@@ -183,28 +140,96 @@ export default function App() {
   const addCell = useCallback((v, remove) => { if (remove) setSumCells(p => p.filter(x => x !== v)); else setSumCells(p => [...p, v]) }, []);
   const clearSum = useCallback(() => setSumCells([]), []);
 
-  const load = useCallback(() => {
-    setLoading(true); setError(null);
-    api('live').then(d => {
-      setData({ cores: d.cores || [], bundles: d.bundles || [], vendors: d.vendors || [], sales: d.sales || [], fees: d.fees || [], inbound: d.inbound || [], abcA: d.abcA || [], abcT: d.abcT || [], abcSub: d.abcSub || '', restock: d.restock || [], priceComp: d.priceComp || [], agedInv: d.agedInv || [], killMgmt: d.killMgmt || [], workflow: d.workflow || [], receiving: d.receiving || [], replenRec: d.replenRec || [], receivingFull: [], vendorComments: d.vendorComments || [], priceCompFull: [] });
-      setTs(d.timestamp || ""); setLoading(false);
-      api('history').then(h => { setHist(h); setRdy(r => ({ ...r, h: true })) }).catch(() => setRdy(r => ({ ...r, h: true })));
-      api('daily').then(d => { setDaily(d); setRdy(r => ({ ...r, d: true })) }).catch(() => setRdy(r => ({ ...r, d: true })));
-    }).catch(e => { setError(e.message); setLoading(false) });
-  }, []);
-  useEffect(() => {
-    if (!loading && data.cores.length > 0 && !ordersLoaded) {
-      api('orders').then(d => {
-        setData(prev => ({ ...prev, receivingFull: d.receivingFull || [], priceCompFull: d.priceCompFull || [] }));
-        setOrdersLoaded(true);
-      }).catch(() => setOrdersLoaded(true));
+  // ─── LOAD LIVE DATA ───
+  const loadLive = useCallback(async () => {
+    setLiveStatus({ loading: true, error: null, version: null });
+    try {
+      const live = await fetchLive();
+      setData(prev => ({
+        ...prev,
+        cores: live.cores || [],
+        bundles: live.bundles || [],
+        vendors: live.vendors || [],
+        sales: live.sales || [],
+        fees: live.fees || [],
+        inbound: live.inbound || [],
+        abcA: live.abcA || [],
+        abcT: live.abcT || [],
+        abcSub: live.abcSub || '',
+        restock: live.restock || [],
+        priceComp: live.priceComp || [],
+        agedInv: live.agedInv || [],
+        killMgmt: live.killMgmt || [],
+        workflow: live.workflow || [],
+        receiving: live.receiving || [],
+        replenRec: live.replenRec || [],
+        vendorComments: live.vendorComments || [],
+        coreDays: live.coreDays || [],
+        bundleDays: live.bundleDays || []
+      }));
+      setLiveStatus({ loading: false, error: null, version: live.version || null, partial: live.partial || false });
+    } catch (e) {
+      console.error('Live load failed:', e);
+      setLiveStatus({ loading: false, error: e.message, version: null });
     }
-  }, [loading, data.cores.length, ordersLoaded]);
+  }, []);
 
-  useEffect(() => { load() }, []);
-  const dataH = useMemo(() => ({ ...data, _coreInv: hist.coreInv, _coreDays: daily.coreDays, _bundleSales: hist.bundleSales }), [data, hist, daily]);
+  // ─── LOAD HISTORY DATA ───
+  const loadHistory = useCallback(async ({ forceRefresh = false } = {}) => {
+    setHistoryStatus(prev => ({ ...prev, loading: true, error: null }));
+    try {
+      const history = await fetchHistory({ forceRefresh });
+      setData(prev => ({
+        ...prev,
+        receivingFull: history.receivingFull || [],
+        priceCompFull: history.priceCompFull || [],
+        bundleSales: history.bundleSales || [],
+        priceHist: history.priceHist || [],
+        coreInv: history.coreInv || [],
+        bundleInv: history.bundleInv || []
+      }));
+      setHistoryStatus({
+        loading: false,
+        error: null,
+        version: history.version || null,
+        fromCache: !!history._cachedAt && !forceRefresh
+      });
+    } catch (e) {
+      console.error('History load failed:', e);
+      setHistoryStatus({ loading: false, error: e.message, version: null, fromCache: false });
+    }
+  }, []);
 
-  // Cores that have at least one effectively-active bundle (shared between Dashboard + PurchTab)
+  // Force refresh history on the SERVER (slow ~3 min) then re-download
+  const forceServerHistoryRefresh = useCallback(async () => {
+    if (refreshingHistory) return;
+    setRefreshingHistory(true);
+    try {
+      await refreshHistoryOnServer();
+      // Clear local cache and re-download
+      await loadHistory({ forceRefresh: true });
+    } catch (e) {
+      alert('History server refresh failed: ' + e.message);
+    } finally {
+      setRefreshingHistory(false);
+    }
+  }, [refreshingHistory, loadHistory]);
+
+  // Initial load: fire both in parallel
+  useEffect(() => {
+    loadLive();
+    loadHistory();
+  }, [loadLive, loadHistory]);
+
+  // Build the data object exactly like the old code expected (for back-compat with existing components)
+  const dataH = useMemo(() => ({
+    ...data,
+    _coreInv: data.coreInv,
+    _coreDays: data.coreDays,
+    _bundleSales: data.bundleSales
+  }), [data]);
+
+  // Active bundle cores
   const activeBundleCores = useMemo(() => {
     const set = new Set();
     const activeBundleJLS = new Set();
@@ -253,21 +278,47 @@ export default function App() {
     try {
       await apiPost({ action: 'saveNote', ...note });
       setData(prev => { const wf = [...(prev.workflow || [])]; const idx = wf.findIndex(w => w.id === note.id); const entry = { id: note.id, type: note.type, status: note.status, note: note.note, ignoreUntil: note.ignoreUntil, lastOrder: note.lastOrder || '', updatedBy: note.updatedBy, updatedAt: new Date().toISOString() }; if (idx >= 0) wf[idx] = entry; else wf.push(entry); return { ...prev, workflow: wf } });
-    } catch (e) { console.error('Workflow save error:', e) }
+    } catch (e) { console.error('Workflow save error:', e); alert('Failed to save workflow note: ' + e.message); }
   }, []);
+
   const deleteWorkflow = useCallback(async ({ id }) => {
-    try { await apiPost({ action: 'deleteNote', id }); setData(prev => ({ ...prev, workflow: (prev.workflow || []).filter(w => w.id !== id) })) } catch (e) { console.error('Workflow delete error:', e) }
+    try { await apiPost({ action: 'deleteNote', id }); setData(prev => ({ ...prev, workflow: (prev.workflow || []).filter(w => w.id !== id) })) } catch (e) { console.error('Workflow delete error:', e); alert('Failed to delete workflow note: ' + e.message); }
   }, []);
+
   const saveVendorComment = useCallback(async (comment) => {
     try {
       await apiPost({ action: 'saveVendorComment', ...comment });
       setData(prev => ({ ...prev, vendorComments: [...(prev.vendorComments || []), { vendor: comment.vendor, date: new Date().toISOString().split('T')[0], author: comment.author, category: comment.category, comment: comment.comment }] }));
-    } catch (e) { console.error('Vendor comment save error:', e) }
+    } catch (e) { console.error('Vendor comment save error:', e); alert('Failed to save vendor comment: ' + e.message); }
   }, []);
 
-  if (loading) return <div className="min-h-screen bg-gray-950"><Loader text="Loading live data..." /></div>;
-  if (error) return <div className="min-h-screen bg-gray-950 flex items-center justify-center"><div className="text-center"><p className="text-red-400 mb-4">{error}</p><button onClick={load} className="bg-blue-600 text-white px-6 py-2 rounded-lg">Retry</button></div></div>;
-  
+  // ─── LOADING / ERROR SCREENS ───
+  if (liveStatus.loading && !data.cores.length) {
+    return <div className="min-h-screen bg-gray-950"><Loader text="Loading live data..." /></div>;
+  }
+
+  if (liveStatus.error && !data.cores.length) {
+    return <div className="min-h-screen bg-gray-950 flex items-center justify-center p-4">
+      <div className="text-center max-w-md">
+        <p className="text-red-400 mb-2 font-semibold">Failed to load live data</p>
+        <p className="text-gray-400 text-sm mb-4">{liveStatus.error}</p>
+        <button onClick={loadLive} className="bg-blue-600 text-white px-6 py-2 rounded-lg">Retry</button>
+      </div>
+    </div>;
+  }
+
+  // ─── FRESHNESS BADGE ───
+  const fmtVersion = (v) => {
+    if (!v) return '—';
+    try {
+      const d = new Date(v);
+      return d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    } catch { return v; }
+  };
+
+  const liveAgeMin = liveStatus.version ? Math.round((Date.now() - new Date(liveStatus.version).getTime()) / 60000) : null;
+  const liveColor = liveStatus.error ? "text-red-400" : liveAgeMin == null ? "text-gray-500" : liveAgeMin > 30 ? "text-amber-400" : "text-emerald-400";
+  const histColor = historyStatus.error ? "text-red-400" : historyStatus.loading ? "text-gray-500" : "text-emerald-400";
 
   return <SumCtx.Provider value={{ addCell }}>
     <div className="min-h-screen bg-gray-950 text-gray-200">
@@ -277,8 +328,21 @@ export default function App() {
             <h1 className="text-white font-bold text-lg">FBA Dashboard <span className="text-xs text-blue-400">V3</span></h1>
             <span className="text-xs text-emerald-400 bg-emerald-400/10 px-2 py-0.5 rounded font-medium">LIVE — {data.cores.length}</span>
             {stg.buyer && <span className="text-xs text-gray-400 bg-gray-800 px-2 py-0.5 rounded">{stg.buyer}</span>}
-            {fTs(ts) && <span className="text-xs text-gray-500">{fTs(ts)}</span>}
-           
+
+            {/* Freshness badge */}
+            <div className="flex items-center gap-2 text-xs">
+              <span className={liveColor} title={`Live data version: ${fmtVersion(liveStatus.version)}`}>
+                ● Live {liveAgeMin != null ? `${liveAgeMin}m` : '—'}
+              </span>
+              <span className={histColor} title={`History version: ${fmtVersion(historyStatus.version)}${historyStatus.fromCache ? ' (from browser cache)' : ''}`}>
+                ● Hist {historyStatus.loading ? '…' : historyStatus.fromCache ? 'cache' : 'fresh'}
+              </span>
+              {(liveStatus.error || historyStatus.error) && (
+                <span className="text-red-400 font-semibold" title={(liveStatus.error || '') + ' ' + (historyStatus.error || '')}>
+                  ⚠ ERROR
+                </span>
+              )}
+            </div>
           </div>
           <div className="flex items-center gap-3">
             <div className="flex gap-2 text-xs">
@@ -286,27 +350,45 @@ export default function App() {
               <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-500" />{sc.warning}</span>
               <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500" />{sc.healthy}</span>
             </div>
-            <button onClick={load} className="text-gray-400 hover:text-white text-sm px-2 py-1 rounded hover:bg-gray-800">↻</button>
+            <button onClick={loadLive} className="text-gray-400 hover:text-white text-sm px-2 py-1 rounded hover:bg-gray-800" title="Refresh live data">↻</button>
+            <button onClick={forceServerHistoryRefresh} disabled={refreshingHistory} className={`text-xs px-2 py-1 rounded ${refreshingHistory ? 'bg-amber-600/30 text-amber-300' : 'text-gray-400 hover:text-white hover:bg-gray-800'}`} title="Force history rebuild on server (~3 min)">
+              {refreshingHistory ? '⏳ Hist…' : '↻ Hist'}
+            </button>
             <button onClick={() => setShowS(true)} className="text-gray-400 hover:text-white text-lg px-2 py-1 rounded hover:bg-gray-800">⚙️</button>
           </div>
         </div>
+
+        {/* History error banner — non-blocking, just informative */}
+        {historyStatus.error && !historyStatus.loading && (
+          <div className="max-w-7xl mx-auto mt-2 px-3 py-1.5 bg-red-500/10 border border-red-500/30 rounded text-xs text-red-300">
+            ⚠ History data failed to load: {historyStatus.error}. Some charts and seasonal calculations may be empty. <button onClick={() => loadHistory({ forceRefresh: true })} className="underline ml-1">Retry</button>
+          </div>
+        )}
+        {historyStatus.loading && !data.coreInv?.length && (
+          <div className="max-w-7xl mx-auto mt-2 px-3 py-1.5 bg-blue-500/10 border border-blue-500/30 rounded text-xs text-blue-300">
+            ⏳ Loading history data in background... Seasonal calculations will be available shortly.
+          </div>
+        )}
       </header>
+
       <nav className="bg-gray-900/50 border-b border-gray-800 px-4 sticky top-[53px] z-30">
         <div className="flex gap-0 max-w-7xl mx-auto overflow-x-auto">{TABS.map(t => <button key={t.id} onClick={(e) => { if (e.ctrlKey || e.metaKey) { window.open(window.location.pathname + '?tab=' + t.id, '_blank'); return; } setPrevTab(tab); setTab(t.id); if (t.id !== "core") setCoreId(null); if (t.id !== "bundle") setBundleId(null); clearSum() }} className={`px-4 py-2.5 text-sm font-medium border-b-2 whitespace-nowrap ${tab === t.id ? "border-blue-500 text-blue-400" : "border-transparent text-gray-500 hover:text-gray-300"}`}>{t.l}</button>)}</div>
       </nav>
+
       <main className="max-w-7xl mx-auto">
         {tab === "dashboard" && <DashboardSummary data={dataH} stg={stg} goVendor={goVendor} workflow={data.workflow} saveWorkflow={saveWorkflow} deleteWorkflow={deleteWorkflow} vendorComments={data.vendorComments} saveVendorComment={saveVendorComment} onEnterPurchasing={() => setTab("purchasing")} activeBundleCores={activeBundleCores} />}
         {tab === "purchasing" && <PurchTab data={dataH} stg={stg} goCore={goCore} goBundle={goBundle} goVendor={goVendor} ov={ov} setOv={setOv} initV={initV} clearIV={clearIV} saveWorkflow={saveWorkflow} deleteWorkflow={deleteWorkflow} saveVendorComment={saveVendorComment} activeBundleCores={activeBundleCores} />}
-        {tab === "core" && <CoreTab data={data} stg={stg} hist={hist} daily={daily} coreId={coreId} onBack={handleBackFromCore} goBundle={goBundle} />}
-        {tab === "bundle" && <BundleTab data={data} stg={stg} hist={hist} daily={daily} bundleId={bundleId} onBack={handleBackFromBundle} goCore={goCore} />}
+        {tab === "core" && <CoreTab data={data} stg={stg} hist={{ coreInv: data.coreInv, bundleSales: data.bundleSales, priceHist: data.priceHist }} daily={{ coreDays: data.coreDays, bundleDays: data.bundleDays }} coreId={coreId} onBack={handleBackFromCore} goBundle={goBundle} />}
+        {tab === "bundle" && <BundleTab data={data} stg={stg} hist={{ coreInv: data.coreInv, bundleSales: data.bundleSales, bundleInv: data.bundleInv, priceHist: data.priceHist }} daily={{ coreDays: data.coreDays, bundleDays: data.bundleDays }} bundleId={bundleId} onBack={handleBackFromBundle} goCore={goCore} />}
         {tab === "orders" && <OrdersTab data={data} />}
         {tab === "vendors" && <VendorsTab data={data} stg={stg} goVendor={goVendor} workflow={data.workflow} saveWorkflow={saveWorkflow} deleteWorkflow={deleteWorkflow} vendorComments={data.vendorComments} saveVendorComment={saveVendorComment} />}
         {tab === "glossary" && <GlossTab />}
       </main>
+
       {showS && <Stg s={stg} setS={setStg} onClose={() => setShowS(false)} />}
       <SlidePanel open={!!(panelCoreId || panelBundleId)} onClose={() => { setPanelCoreId(null); setPanelBundleId(null); clearSum() }}>
-        {panelBundleId ? <BundleTab data={data} stg={stg} hist={hist} daily={daily} bundleId={panelBundleId} onBack={() => { setPanelBundleId(null); if (!panelCoreId) setPanelCoreId(null) }} goCore={id => { setPanelBundleId(null); setPanelCoreId(id) }} />
-        : panelCoreId ? <CoreTab data={data} stg={stg} hist={hist} daily={daily} coreId={panelCoreId} onBack={() => setPanelCoreId(null)} goBundle={id => setPanelBundleId(id)} />
+        {panelBundleId ? <BundleTab data={data} stg={stg} hist={{ coreInv: data.coreInv, bundleSales: data.bundleSales, bundleInv: data.bundleInv, priceHist: data.priceHist }} daily={{ coreDays: data.coreDays, bundleDays: data.bundleDays }} bundleId={panelBundleId} onBack={() => { setPanelBundleId(null); if (!panelCoreId) setPanelCoreId(null) }} goCore={id => { setPanelBundleId(null); setPanelCoreId(id) }} />
+        : panelCoreId ? <CoreTab data={data} stg={stg} hist={{ coreInv: data.coreInv, bundleSales: data.bundleSales, priceHist: data.priceHist }} daily={{ coreDays: data.coreDays, bundleDays: data.bundleDays }} coreId={panelCoreId} onBack={() => setPanelCoreId(null)} goBundle={id => setPanelBundleId(id)} />
         : null}
       </SlidePanel>
       <QuickSum cells={sumCells} onClear={clearSum} />
