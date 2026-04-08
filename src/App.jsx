@@ -141,10 +141,10 @@ export default function App() {
   const clearSum = useCallback(() => setSumCells([]), []);
 
   // ─── LOAD LIVE DATA ───
-  const loadLive = useCallback(async () => {
-    setLiveStatus({ loading: true, error: null, version: null });
-    try {
-      const live = await fetchLive();
+const loadLive = useCallback(async ({ forceRefresh = false } = {}) => {
+  setLiveStatus({ loading: true, error: null, version: null });
+  try {
+    const live = await fetchLive(null, { forceRefresh });
       setData(prev => ({
         ...prev,
         cores: live.cores || [],
