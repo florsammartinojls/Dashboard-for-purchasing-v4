@@ -7,7 +7,7 @@ const HISTORY_CACHE_KEY = 'fba_history_cache_v3';
 const META_CACHE_KEY = 'fba_meta_cache_v1';
 const META_CACHE_TTL_MS = 5 * 60 * 1000;
 const LIVE_CACHE_KEY = 'fba_live_cache_v1';
-const LIVE_CACHE_TTL_MS = 30 * 60 * 1000; // 30 min
+const LIVE_CACHE_TTL_MS = 240 * 60 * 1000; // 4 hrs
 
 // ─── Generic Apps Script call ───
 async function appsScriptCall(action, extraParams = '') {
