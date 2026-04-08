@@ -74,7 +74,7 @@ async function fetchFileInChunks(file, totalChunks, onProgress) {
 export async function fetchLive(onProgress, { forceRefresh = false } = {}) {
   if (!forceRefresh) {
     try {
-      const cached = sessionStorage.getItem(LIVE_CACHE_KEY);
+      const cached = localStorage.getItem(LIVE_CACHE_KEY);
       if (cached) {
         const parsed = JSON.parse(cached);
         if (Date.now() - parsed._cachedAt < LIVE_CACHE_TTL_MS) {
@@ -87,7 +87,7 @@ export async function fetchLive(onProgress, { forceRefresh = false } = {}) {
   if (!meta.live || !meta.live.chunks) throw new Error('No live metadata');
   const data = await fetchFileInChunks('live', meta.live.chunks, onProgress);
   try {
-    sessionStorage.setItem(LIVE_CACHE_KEY, JSON.stringify({ data, _cachedAt: Date.now() }));
+    localStorage.setItem(LIVE_CACHE_KEY, JSON.stringify({ data, _cachedAt: Date.now() }));
   } catch (e) {
     // sessionStorage might be full for 16 MB — not fatal, just no caching
     console.warn('Live cache write failed (probably too big):', e.message);
@@ -144,5 +144,5 @@ export async function apiPost(body) {
 export function clearHistoryCache() {
   try { localStorage.removeItem(HISTORY_CACHE_KEY); } catch (e) {}
   try { sessionStorage.removeItem(META_CACHE_KEY); } catch (e) {}
-  try { sessionStorage.removeItem(LIVE_CACHE_KEY); } catch (e) {}
+  try { localStorage.removeItem(LIVE_CACHE_KEY); } catch (e) {}
 }
