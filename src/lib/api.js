@@ -6,6 +6,8 @@ const API = 'https://script.google.com/macros/s/AKfycbyxFvNQjWvF6Ckajd_H-OZ8WsXi
 const HISTORY_CACHE_KEY = 'fba_history_cache_v3';
 const META_CACHE_KEY = 'fba_meta_cache_v1';
 const META_CACHE_TTL_MS = 5 * 60 * 1000;
+const LIVE_CACHE_KEY = 'fba_live_cache_v1';
+const LIVE_CACHE_TTL_MS = 30 * 60 * 1000; // 30 min
 
 // ─── Generic Apps Script call ───
 async function appsScriptCall(action, extraParams = '') {
@@ -68,11 +70,29 @@ async function fetchFileInChunks(file, totalChunks, onProgress) {
   }
 }
 
-// ─── Public API: Live ───
-export async function fetchLive(onProgress) {
+// ─── Public API: Live (cached 30 min in sessionStorage) ───
+export async function fetchLive(onProgress, { forceRefresh = false } = {}) {
+  if (!forceRefresh) {
+    try {
+      const cached = sessionStorage.getItem(LIVE_CACHE_KEY);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Date.now() - parsed._cachedAt < LIVE_CACHE_TTL_MS) {
+          return parsed.data;
+        }
+      }
+    } catch (e) {}
+  }
   const meta = await getMeta();
   if (!meta.live || !meta.live.chunks) throw new Error('No live metadata');
-  return fetchFileInChunks('live', meta.live.chunks, onProgress);
+  const data = await fetchFileInChunks('live', meta.live.chunks, onProgress);
+  try {
+    sessionStorage.setItem(LIVE_CACHE_KEY, JSON.stringify({ data, _cachedAt: Date.now() }));
+  } catch (e) {
+    // sessionStorage might be full for 16 MB — not fatal, just no caching
+    console.warn('Live cache write failed (probably too big):', e.message);
+  }
+  return data;
 }
 
 // ─── Public API: History (cached by lastUpdated) ───
@@ -124,4 +144,5 @@ export async function apiPost(body) {
 export function clearHistoryCache() {
   try { localStorage.removeItem(HISTORY_CACHE_KEY); } catch (e) {}
   try { sessionStorage.removeItem(META_CACHE_KEY); } catch (e) {}
+  try { sessionStorage.removeItem(LIVE_CACHE_KEY); } catch (e) {}
 }
