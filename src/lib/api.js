@@ -1,130 +1,116 @@
-// API client — talks to Apps Script for URLs, then fetches JSON files directly from Drive.
-// This avoids Apps Script's content size limits and is much faster (Drive has CDN).
+// API client — fetches data via Apps Script in chunks (1 MB each).
+// Bypasses Apps Script's content size limit by paginating large files.
 
 const API = 'https://script.google.com/macros/s/AKfycbyxFvNQjWvF6Ckajd_H-OZ8WsXixoCWtjSxtChs8SmpL5CvidjT5P161tn0RXgYawd3sg/exec';
 
-const HISTORY_CACHE_KEY = 'fba_history_cache_v2';
-const URLS_CACHE_KEY = 'fba_urls_cache_v1';
-const URLS_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const HISTORY_CACHE_KEY = 'fba_history_cache_v3';
+const META_CACHE_KEY = 'fba_meta_cache_v1';
+const META_CACHE_TTL_MS = 5 * 60 * 1000;
 
-// ─── Apps Script call (small responses only: URLs, refresh triggers) ───
-async function appsScriptCall(action) {
-  const url = API + '?action=' + action + '&_t=' + Date.now();
+// ─── Generic Apps Script call ───
+async function appsScriptCall(action, extraParams = '') {
+  const url = API + '?action=' + action + extraParams + '&_t=' + Date.now();
   const ctrl = new AbortController();
-  const timeoutId = setTimeout(() => ctrl.abort(), 60000);
+  const timeoutId = setTimeout(() => ctrl.abort(), 90000);
   try {
     const res = await fetch(url, { signal: ctrl.signal });
     clearTimeout(timeoutId);
-    if (!res.ok) throw new Error(`Apps Script error: ${res.status} on ${action}`);
+    if (!res.ok) throw new Error(`Apps Script error ${res.status} on ${action}`);
     const data = await res.json();
-    if (data && data.error) throw new Error(`Apps Script returned error: ${data.error}`);
+    if (data && data.error) throw new Error(`Apps Script error: ${data.error}`);
     return data;
   } catch (e) {
     clearTimeout(timeoutId);
-    if (e.name === 'AbortError') throw new Error(`Timeout calling Apps Script ${action} (60s)`);
+    if (e.name === 'AbortError') throw new Error(`Timeout calling ${action}`);
     throw e;
   }
 }
 
-// ─── Fetch a JSON file directly from Drive ───
-// Drive download URLs return the file content as-is, no Apps Script involved.
-async function fetchDriveJson(downloadUrl, label) {
-  const ctrl = new AbortController();
-  const timeoutId = setTimeout(() => ctrl.abort(), 180000); // 3 min for large files
-  try {
-    const res = await fetch(downloadUrl, { signal: ctrl.signal, redirect: 'follow' });
-    clearTimeout(timeoutId);
-    if (!res.ok) throw new Error(`Drive fetch error: ${res.status} on ${label}`);
-    const text = await res.text();
-    // Drive sometimes returns an HTML "virus scan warning" page for very large files
-    // instead of the actual content. Detect that.
-    if (text.startsWith('<!DOCTYPE') || text.startsWith('<html')) {
-      throw new Error(`Drive returned HTML instead of JSON for ${label} (file may need re-sharing)`);
-    }
-    try {
-      return JSON.parse(text);
-    } catch (e) {
-      throw new Error(`Failed to parse ${label} JSON: ${e.message} (length: ${text.length})`);
-    }
-  } catch (e) {
-    clearTimeout(timeoutId);
-    if (e.name === 'AbortError') throw new Error(`Timeout fetching ${label} from Drive (3 min)`);
-    throw e;
-  }
+// ─── Fetch a single chunk ───
+async function fetchChunk(file, idx) {
+  const data = await appsScriptCall('chunk', '&file=' + file + '&i=' + idx);
+  if (typeof data.chunk !== 'string') throw new Error(`Bad chunk ${idx} for ${file}`);
+  return data.chunk;
 }
 
-// ─── Get URLs (cached for 5 min so we don't hit Apps Script every time) ───
-async function getUrls() {
+// ─── Get metadata (cached 5 min) ───
+async function getMeta() {
   try {
-    const cached = sessionStorage.getItem(URLS_CACHE_KEY);
+    const cached = sessionStorage.getItem(META_CACHE_KEY);
     if (cached) {
       const parsed = JSON.parse(cached);
-      if (Date.now() - parsed._cachedAt < URLS_CACHE_TTL_MS) {
-        return parsed.urls;
-      }
+      if (Date.now() - parsed._cachedAt < META_CACHE_TTL_MS) return parsed.meta;
     }
-  } catch (e) { /* ignore cache errors */ }
+  } catch (e) {}
+  const meta = await appsScriptCall('meta');
+  try { sessionStorage.setItem(META_CACHE_KEY, JSON.stringify({ meta, _cachedAt: Date.now() })); } catch (e) {}
+  return meta;
+}
 
-  const urls = await appsScriptCall('urls');
+// ─── Fetch all chunks of a file in parallel, concatenate, parse JSON ───
+async function fetchFileInChunks(file, totalChunks, onProgress) {
+  // Fetch chunks in batches of 4 to avoid hammering Apps Script
+  const BATCH = 4;
+  const chunks = new Array(totalChunks);
+  let done = 0;
+  for (let i = 0; i < totalChunks; i += BATCH) {
+    const batch = [];
+    for (let j = i; j < Math.min(i + BATCH, totalChunks); j++) {
+      batch.push(fetchChunk(file, j).then(c => { chunks[j] = c; done++; if (onProgress) onProgress(done, totalChunks); }));
+    }
+    await Promise.all(batch);
+  }
+  const fullText = chunks.join('');
   try {
-    sessionStorage.setItem(URLS_CACHE_KEY, JSON.stringify({ urls, _cachedAt: Date.now() }));
-  } catch (e) { /* ignore */ }
-  return urls;
+    return JSON.parse(fullText);
+  } catch (e) {
+    throw new Error(`Failed to parse ${file} JSON after assembling chunks: ${e.message}`);
+  }
 }
 
-// ─── Public API: Live data — always fresh from Drive ───
-export async function fetchLive() {
-  const urls = await getUrls();
-  if (!urls.live || !urls.live.url) throw new Error('No live URL returned from Apps Script');
-  const data = await fetchDriveJson(urls.live.url, 'live');
-  return data;
+// ─── Public API: Live ───
+export async function fetchLive(onProgress) {
+  const meta = await getMeta();
+  if (!meta.live || !meta.live.chunks) throw new Error('No live metadata');
+  return fetchFileInChunks('live', meta.live.chunks, onProgress);
 }
 
-// ─── Public API: History data — cached in localStorage by file lastUpdated timestamp ───
-export async function fetchHistory({ forceRefresh = false } = {}) {
-  const urls = await getUrls();
-  if (!urls.history || !urls.history.url) throw new Error('No history URL returned from Apps Script');
-  const remoteVersion = urls.history.lastUpdated;
+// ─── Public API: History (cached by lastUpdated) ───
+export async function fetchHistory({ forceRefresh = false, onProgress } = {}) {
+  const meta = await getMeta();
+  if (!meta.history || !meta.history.chunks) throw new Error('No history metadata');
+  const remoteVersion = meta.history.lastUpdated;
 
   if (!forceRefresh) {
     try {
       const cached = localStorage.getItem(HISTORY_CACHE_KEY);
       if (cached) {
         const parsed = JSON.parse(cached);
-        // Use cached if the remote file hasn't been updated since
-        if (parsed._remoteLastUpdated === remoteVersion) {
-          return parsed;
-        }
+        if (parsed._remoteLastUpdated === remoteVersion) return parsed;
       }
-    } catch (e) {
-      console.warn('History cache read failed, fetching fresh:', e.message);
-    }
+    } catch (e) {}
   }
 
-  const fresh = await fetchDriveJson(urls.history.url, 'history');
+  const fresh = await fetchFileInChunks('history', meta.history.chunks, onProgress);
   fresh._remoteLastUpdated = remoteVersion;
   fresh._cachedAt = new Date().toISOString();
-  try {
-    localStorage.setItem(HISTORY_CACHE_KEY, JSON.stringify(fresh));
-  } catch (e) {
-    console.warn('History cache write failed:', e.message);
-  }
+  try { localStorage.setItem(HISTORY_CACHE_KEY, JSON.stringify(fresh)); }
+  catch (e) { console.warn('History cache write failed:', e.message); }
   return fresh;
 }
 
-// ─── Force a server-side rebuild of history (slow ~3 min) ───
+// ─── Force server rebuild of history ───
 export async function refreshHistoryOnServer() {
-  // Clear URL cache so next fetchHistory gets fresh URL/timestamp
-  try { sessionStorage.removeItem(URLS_CACHE_KEY); } catch (e) {}
+  try { sessionStorage.removeItem(META_CACHE_KEY); } catch (e) {}
   return appsScriptCall('refreshHistory');
 }
 
-// ─── Get metadata about both files ───
+// ─── Metadata for badge ───
 export async function fetchInfo() {
-  return appsScriptCall('info');
+  return getMeta();
 }
 
-// ─── POST endpoint — unchanged for workflow + vendor comments ───
+// ─── POST (workflow + comments) ───
 export async function apiPost(body) {
   const res = await fetch(API, {
     method: 'POST',
@@ -134,8 +120,8 @@ export async function apiPost(body) {
   return res.json();
 }
 
-// ─── Cache helpers (debug) ───
+// ─── Cache helpers ───
 export function clearHistoryCache() {
   try { localStorage.removeItem(HISTORY_CACHE_KEY); } catch (e) {}
-  try { sessionStorage.removeItem(URLS_CACHE_KEY); } catch (e) {}
+  try { sessionStorage.removeItem(META_CACHE_KEY); } catch (e) {}
 }
