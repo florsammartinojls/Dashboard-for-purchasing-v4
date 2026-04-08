@@ -1,12 +1,14 @@
 // API client — fetches data via Apps Script in chunks (1 MB each).
-// Bypasses Apps Script's content size limit by paginating large files.
+// Cache uses IndexedDB (via idb-keyval) because data is too large for localStorage.
+
+import { get as idbGet, set as idbSet, del as idbDel } from 'https://cdn.jsdelivr.net/npm/idb-keyval@6/+esm';
 
 const API = 'https://script.google.com/macros/s/AKfycbyxFvNQjWvF6Ckajd_H-OZ8WsXixoCWtjSxtChs8SmpL5CvidjT5P161tn0RXgYawd3sg/exec';
 
-const HISTORY_CACHE_KEY = 'fba_history_cache_v3';
+const HISTORY_CACHE_KEY = 'fba_history_cache_v4';
+const LIVE_CACHE_KEY = 'fba_live_cache_v2';
 const META_CACHE_KEY = 'fba_meta_cache_v1';
 const META_CACHE_TTL_MS = 5 * 60 * 1000;
-const LIVE_CACHE_KEY = 'fba_live_cache_v1';
 const LIVE_CACHE_TTL_MS = 240 * 60 * 1000; // 4 hrs
 
 // ─── Generic Apps Script call ───
@@ -35,7 +37,7 @@ async function fetchChunk(file, idx) {
   return data.chunk;
 }
 
-// ─── Get metadata (cached 5 min) ───
+// ─── Get metadata (cached 5 min in sessionStorage — small, fits fine) ───
 async function getMeta() {
   try {
     const cached = sessionStorage.getItem(META_CACHE_KEY);
@@ -51,7 +53,6 @@ async function getMeta() {
 
 // ─── Fetch all chunks of a file in parallel, concatenate, parse JSON ───
 async function fetchFileInChunks(file, totalChunks, onProgress) {
-  // Fetch chunks in batches of 4 to avoid hammering Apps Script
   const BATCH = 4;
   const chunks = new Array(totalChunks);
   let done = 0;
@@ -70,32 +71,28 @@ async function fetchFileInChunks(file, totalChunks, onProgress) {
   }
 }
 
-// ─── Public API: Live (cached 30 min in sessionStorage) ───
+// ─── Public API: Live (cached 4h in IndexedDB) ───
 export async function fetchLive(onProgress, { forceRefresh = false } = {}) {
   if (!forceRefresh) {
     try {
-      const cached = localStorage.getItem(LIVE_CACHE_KEY);
-      if (cached) {
-        const parsed = JSON.parse(cached);
-        if (Date.now() - parsed._cachedAt < LIVE_CACHE_TTL_MS) {
-          return parsed.data;
-        }
+      const cached = await idbGet(LIVE_CACHE_KEY);
+      if (cached && cached._cachedAt && Date.now() - cached._cachedAt < LIVE_CACHE_TTL_MS) {
+        return cached.data;
       }
-    } catch (e) {}
+    } catch (e) { console.warn('Live cache read failed:', e.message); }
   }
   const meta = await getMeta();
   if (!meta.live || !meta.live.chunks) throw new Error('No live metadata');
   const data = await fetchFileInChunks('live', meta.live.chunks, onProgress);
   try {
-    localStorage.setItem(LIVE_CACHE_KEY, JSON.stringify({ data, _cachedAt: Date.now() }));
+    await idbSet(LIVE_CACHE_KEY, { data, _cachedAt: Date.now() });
   } catch (e) {
-    // sessionStorage might be full for 16 MB — not fatal, just no caching
-    console.warn('Live cache write failed (probably too big):', e.message);
+    console.warn('Live cache write failed:', e.message);
   }
   return data;
 }
 
-// ─── Public API: History (cached by lastUpdated) ───
+// ─── Public API: History (cached by lastUpdated in IndexedDB) ───
 export async function fetchHistory({ forceRefresh = false, onProgress } = {}) {
   const meta = await getMeta();
   if (!meta.history || !meta.history.chunks) throw new Error('No history metadata');
@@ -103,19 +100,21 @@ export async function fetchHistory({ forceRefresh = false, onProgress } = {}) {
 
   if (!forceRefresh) {
     try {
-      const cached = localStorage.getItem(HISTORY_CACHE_KEY);
-      if (cached) {
-        const parsed = JSON.parse(cached);
-        if (parsed._remoteLastUpdated === remoteVersion) return parsed;
+      const cached = await idbGet(HISTORY_CACHE_KEY);
+      if (cached && cached._remoteLastUpdated === remoteVersion) {
+        return cached;
       }
-    } catch (e) {}
+    } catch (e) { console.warn('History cache read failed:', e.message); }
   }
 
   const fresh = await fetchFileInChunks('history', meta.history.chunks, onProgress);
   fresh._remoteLastUpdated = remoteVersion;
   fresh._cachedAt = new Date().toISOString();
-  try { localStorage.setItem(HISTORY_CACHE_KEY, JSON.stringify(fresh)); }
-  catch (e) { console.warn('History cache write failed:', e.message); }
+  try {
+    await idbSet(HISTORY_CACHE_KEY, fresh);
+  } catch (e) {
+    console.warn('History cache write failed:', e.message);
+  }
   return fresh;
 }
 
@@ -141,8 +140,8 @@ export async function apiPost(body) {
 }
 
 // ─── Cache helpers ───
-export function clearHistoryCache() {
-  try { localStorage.removeItem(HISTORY_CACHE_KEY); } catch (e) {}
+export async function clearHistoryCache() {
+  try { await idbDel(HISTORY_CACHE_KEY); } catch (e) {}
+  try { await idbDel(LIVE_CACHE_KEY); } catch (e) {}
   try { sessionStorage.removeItem(META_CACHE_KEY); } catch (e) {}
-  try { localStorage.removeItem(LIVE_CACHE_KEY); } catch (e) {}
 }
