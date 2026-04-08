@@ -10,7 +10,7 @@ const HISTORY_CACHE_KEY = 'fba_history_cache_v1';
 async function apiFetch(action) {
   const url = API + '?action=' + action + '&_t=' + Date.now();
   const ctrl = new AbortController();
-  const timeoutId = setTimeout(() => ctrl.abort(), 60000); // 60s timeout
+  const timeoutId = setTimeout(() => ctrl.abort(), 180000); // 180s timeout — history is ~20 MB
   try {
     const res = await fetch(url, { signal: ctrl.signal });
     clearTimeout(timeoutId);
