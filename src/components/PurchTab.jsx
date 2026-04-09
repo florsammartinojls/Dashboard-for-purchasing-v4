@@ -1,7 +1,8 @@
 import React, { useState, useMemo, useCallback, useEffect, useContext, Fragment } from "react";
 import { R, D1, $, $2, $4, P, gS, cAI, cNQ, cOQ, cDA, bNQ, isD, gTD, dc, cSeas, fSl, fMY, fE, fDateUS, effectiveDSR, roundToCasePack, genPO, genRFQ, cp7f, cp7g } from "../lib/utils";
 import { Dot, Toast, TH, SS, WorkflowChip, NumInput, SumCtx, VendorNotes, CalcBreakdown } from "./Shared";
-import { batchProfiles, batchBundleProfiles, calcCoverageNeed, calcPurchaseFrequency, fillToMOQ as fillToMOQCalc, getCalcBreakdown, DEFAULT_PROFILE } from "../lib/seasonal";
+import { batchProfiles, batchBundleProfiles, calcCoverageNeed, calcPurchaseFrequency, getCalcBreakdown, DEFAULT_PROFILE } from "../lib/seasonal";
+import { batchVendorRecommendations, calcVendorRecommendation } from "../lib/recommender";
 
 function SC({ v, children, className }) {
   const { addCell } = useContext(SumCtx);
@@ -12,22 +13,19 @@ function SC({ v, children, className }) {
   return <td className={`${className || ''} ${sel ? "bg-blue-500/20 ring-1 ring-blue-500" : ""} ${ok ? "cursor-pointer select-none" : ""}`} onClick={tog}>{children}</td>;
 }
 
-const AGL_LT = 80;
-
-
 export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, setOv, initV, clearIV, saveWorkflow, deleteWorkflow, saveVendorComment, activeBundleCores }) {
   const initVendorFromURL = new URLSearchParams(window.location.search).get('vendor');
   const [vm, setVm] = useState(initV || initVendorFromURL ? "vendor" : "core");
   const [vf, setVf] = useState(initV || initVendorFromURL || "");
   useEffect(() => {
-  if (initVendorFromURL && !initV) {
-    const decoded = decodeURIComponent(initVendorFromURL);
-    const match = (data.vendors || []).find(v => v.name === decoded || v.name.toLowerCase() === decoded.toLowerCase());
-    if (match) setVf(match.name);
-  }
-}, [data.vendors]);
+    if (initVendorFromURL && !initV) {
+      const decoded = decodeURIComponent(initVendorFromURL);
+      const match = (data.vendors || []).find(v => v.name === decoded || v.name.toLowerCase() === decoded.toLowerCase());
+      if (match) setVf(match.name);
+    }
+  }, [data.vendors]);
   const [sort, setSort] = useState("status");
-    const [sf, setSf] = useState("");
+  const [sf, setSf] = useState("");
   const [nf, setNf] = useState("all");
   const [minD, setMinD] = useState(0);
   const [locF, setLocF] = useState("all");
@@ -35,7 +33,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
   const [toastPersist, setToastPersist] = useState(false);
   const [poN, setPoN] = useState("");
   const [poD, setPoD] = useState("");
-  const [vendorSub, setVendorSub] = useState("cores");
+  const [vendorSub, setVendorSub] = useState("mix");
   const [showRS, setShowRS] = useState(false);
   const [showCosts, setShowCosts] = useState(false);
   const [showPH, setShowPH] = useState({});
@@ -44,11 +42,10 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
   const [showIgnored, setShowIgnored] = useState(false);
   const [showNoBundleCores, setShowNoBundleCores] = useState(false);
   const [breakdown, setBreakdown] = useState(null);
-  const [aglMap, setAglMap] = useState({}); // vendor → true/false
 
   useEffect(() => { if (initV) { setVm("vendor"); setVf(initV); clearIV() } }, [initV, clearIV]);
 
-const isIgnored = useCallback((id) => {
+  const isIgnored = useCallback((id) => {
     const wf = (data.workflow || []).find(w => w.id === id);
     if (!wf || wf.status !== "Ignore") return false;
     if (!wf.ignoreUntil) return true;
@@ -72,14 +69,12 @@ const isIgnored = useCallback((id) => {
   const killMap = useMemo(() => { const m = {}; (data.killMgmt || []).forEach(r => m[r.j] = r); return m }, [data.killMgmt]);
   const recMap = useMemo(() => { const m = {}; (data.receiving || []).forEach(r => { if (!m[r.core]) m[r.core] = []; m[r.core].push(r) }); return m }, [data.receiving]);
   const bA = stg.bA || "yes"; const bI = stg.bI || "blank";
-  const rsBundleMap = useMemo(() => { const m = {}; (data.restock || []).forEach(r => { const bk = (r.bundle || "").trim(); if (bk) m[bk] = r }); return m }, [data.restock]);
   const replenMap = useMemo(() => { const m = {}; (data.replenRec || []).forEach(r => { m[r.j] = r }); return m }, [data.replenRec]);
   const missingMap = useMemo(() => { const m = {}; (data.receiving || []).forEach(r => { if (r.piecesMissing > 0) { const k = (r.core || "").trim(); m[k] = (m[k] || 0) + r.piecesMissing } }); return m }, [data.receiving]);
   const casePackFromRec = useMemo(() => { const m = {}; (data.receiving || []).forEach(r => { const k = (r.core || "").trim(); if (k && r.pcs > 0 && r.cases > 0 && !m[k]) m[k] = Math.round(r.pcs / r.cases) }); return m }, [data.receiving]);
 
-  // === SEASONAL PROFILES ===
+  // === SEASONAL PROFILES (core-level — kept for the Calc Breakdown modal only) ===
   const profiles = useMemo(() => batchProfiles(data.cores || [], data._coreInv || [], data._coreDays || []), [data.cores, data._coreInv, data._coreDays]);
-  const bundleProfiles = useMemo(() => batchBundleProfiles(data.bundles || [], data._bundleSales || []), [data.bundles, data._bundleSales]);
 
   // === PURCHASE FREQUENCY per vendor ===
   const purchFreqMap = useMemo(() => {
@@ -88,7 +83,37 @@ const isIgnored = useCallback((id) => {
     return m;
   }, [data.vendors, data.receivingFull]);
 
-  // === ENRICHED CORES ===
+  // === V2 RECOMMENDER — one pass for all vendors ===
+  const vendorRecs = useMemo(() => {
+    if (!data.vendors?.length) return {};
+    return batchVendorRecommendations({
+      vendors: data.vendors,
+      cores: data.cores || [],
+      bundles: data.bundles || [],
+      bundleSales: data._bundleSales || [],
+      receivingFull: data.receivingFull || [],
+      replenMap,
+      missingMap,
+      settings: stg,
+      purchFreqMap,
+    });
+  }, [data.vendors, data.cores, data.bundles, data._bundleSales, data.receivingFull, replenMap, missingMap, stg, purchFreqMap]);
+
+  // Flat map: bundleId -> bundleDetails from whichever vendor rec contains it.
+  // Used by CoreRow and BundleRow to show consistent effective DOC after waterfall.
+  const bundleEffMap = useMemo(() => {
+    const m = {};
+    for (const vRec of Object.values(vendorRecs)) {
+      if (!vRec?.bundleDetails) continue;
+      for (const bd of vRec.bundleDetails) {
+        m[bd.bundleId] = bd;
+      }
+    }
+    return m;
+  }, [vendorRecs]);
+
+  // === ENRICHED CORES — status/DOC from physical data, need/order/cost from recommender ===
+  const spikeThr = stg.spikeThreshold || 1.25;
   const enr = useMemo(() => (data.cores || [])
     .filter(c => c.id && !/^JLS/i.test(c.id))
     .filter(c => {
@@ -105,35 +130,62 @@ const isIgnored = useCallback((id) => {
       const effectiveDoc = c.dsr > 0 ? Math.round(cAI(c) / c.dsr) : c.doc;
       const st = gS(effectiveDoc, lt, c.buf, { critDays: cd, warnDays: wd });
       const ai = cAI(c);
-      const profile = profiles[c.id] || DEFAULT_PROFILE;
-      const pf = purchFreqMap[c.ven];
-      const coverage = calcCoverageNeed(c, lt, tg, profile, pf);
-      const sNeed = coverage.need;
-      const oq = cOQ(sNeed, c.moq, c.casePack);
       const seas = cSeas(c.id, (data._coreInv || []));
-     const invAnomaly = ai > 0 && c.dsr > 0 && Math.abs(effectiveDoc - ai / c.dsr) > effectiveDoc * 0.2;
+      const invAnomaly = ai > 0 && c.dsr > 0 && Math.abs(effectiveDoc - ai / c.dsr) > effectiveDoc * 0.2;
 
-// Check if this core has raw available and bundles with low DOC (processing pending)
-let rawPendingBundles = false;
-if ((c.raw || 0) > 0 && activeBundleCores && activeBundleCores.has(c.id)) {
-  const cBundles = (data.bundles || []).filter(b => {
-    if (b.active !== "Yes" || b.ignoreUntil) return false;
-    for (let i = 1; i <= 20; i++) {
-      if (b['core' + i] === c.id) return true;
-    }
-    return false;
-  });
-  const lowDocBundles = cBundles.filter(b => (b.fibDoc || 0) < 60);
-  if (lowDocBundles.length > 0) rawPendingBundles = true;
-}
+      // === v2 recommender lookup (authoritative for need/order/cost) ===
+      const vRec = vendorRecs[c.ven];
+      const cDet = vRec?.coreDetails?.find(x => x.coreId === c.id);
+      const sNeed = cDet?.needPieces || 0;
+      const oq = cDet?.finalQty || 0;
+      const moqInflated = cDet?.moqInflated || false;
+      const moqInflationRatio = cDet?.moqInflationRatio || 1;
+      const excessFromMoq = cDet?.excessFromMoq || 0;
+      const excessCostFromMoq = cDet?.excessCostFromMoq || 0;
+      const recUrgent = cDet?.urgent || false;
+      const bundlesAffected = cDet?.bundlesAffected || 0;
 
-// MOQ inflation: when seasonal need is much smaller than MOQ forces
-const moqInflationRatio = sNeed > 0 && oq > sNeed ? (oq / sNeed) : 1;
-const moqInflated = sNeed > 0 && moqInflationRatio >= 1.5; // MOQ forces 50%+ more than needed
-const excessFromMoq = moqInflated ? (oq - sNeed) : 0;
-const excessCostFromMoq = excessFromMoq * (c.cost || 0);
+      // ⚙PROC indicator — has raw + bundles with DOC < 60
+      let rawPendingBundles = false;
+      if ((c.raw || 0) > 0 && activeBundleCores && activeBundleCores.has(c.id)) {
+        const cBundles = (data.bundles || []).filter(b => {
+          if (b.active !== "Yes" || b.ignoreUntil) return false;
+          for (let i = 1; i <= 20; i++) if (b['core' + i] === c.id) return true;
+          return false;
+        });
+        if (cBundles.some(b => (b.fibDoc || 0) < 60)) rawPendingBundles = true;
+      }
 
-return { ...c, status: st, allIn: ai, doc: effectiveDoc, needQty: sNeed, orderQty: oq, needDollar: +(oq * c.cost).toFixed(2), docAfter: cDA(c, oq), lt, critDays: cd, warnDays: wd, targetDoc: tg, vc: v.country || "", seas, isDom: isD(v.country), spike: c.d7 > 0 && c.dsr > 0 && c.d7 >= c.dsr * 1.25, sProfile: profile, sCoverage: coverage, invAnomaly, rawPendingBundles, moqInflated, moqInflationRatio, excessFromMoq, excessCostFromMoq };
+      // Keep core-level profile available for the Calc Breakdown modal (legacy view)
+      const profile = profiles[c.id] || DEFAULT_PROFILE;
+
+      return {
+        ...c,
+        status: st,
+        allIn: ai,
+        doc: effectiveDoc,
+        needQty: sNeed,
+        orderQty: oq,
+        needDollar: +(oq * c.cost).toFixed(2),
+        docAfter: cDA(c, oq),
+        lt,
+        critDays: cd,
+        warnDays: wd,
+        targetDoc: tg,
+        vc: v.country || "",
+        seas,
+        isDom: isD(v.country),
+        spike: c.d7 > 0 && c.dsr > 0 && c.d7 >= c.dsr * spikeThr,
+        sProfile: profile,
+        sCoverage: { urgent: recUrgent },
+        invAnomaly,
+        rawPendingBundles,
+        moqInflated,
+        moqInflationRatio,
+        excessFromMoq,
+        excessCostFromMoq,
+        bundlesAffected,
+      };
     }).filter(c => {
       if (vf && c.ven !== vf) return false;
       if (sf && c.status !== sf) return false;
@@ -150,7 +202,7 @@ return { ...c, status: st, allIn: ai, doc: effectiveDoc, needQty: sNeed, orderQt
       if (sort === "dsr") return b.dsr - a.dsr;
       if (sort === "need$") return b.needDollar - a.needDollar;
       return 0;
-    }), [data, stg, vf, sf, sort, vMap, nf, minD, locF, profiles, purchFreqMap, showNoBundleCores, activeBundleCores]);
+    }), [data, stg, vf, sf, sort, vMap, nf, minD, locF, profiles, vendorRecs, showNoBundleCores, activeBundleCores, spikeThr]);
 
   const venBundles = useMemo(() => (data.bundles || []).filter(b => {
     if (bA === "yes" && b.active !== "Yes") return false;
@@ -163,31 +215,6 @@ return { ...c, status: st, allIn: ai, doc: effectiveDoc, needQty: sNeed, orderQt
 
   const sc = useMemo(() => { const c = { critical: 0, warning: 0, healthy: 0 }; enr.forEach(x => c[x.status]++); return c }, [enr]);
 
-  // Raw waterfall
-  const rawAllocMap = useMemo(() => {
-    const map = {};
-    const activeBundles = (data.bundles || []).filter(b => { if (bA === "yes" && b.active !== "Yes") return false; if (bA === "no" && b.active === "Yes") return false; return true });
-    const coreGroups = {};
-    activeBundles.forEach(b => { if (!b.core1) return; if (!coreGroups[b.core1]) coreGroups[b.core1] = []; coreGroups[b.core1].push(b) });
-    enr.forEach(c => {
-      const bundles = coreGroups[c.id] || []; if (bundles.length === 0) return;
-      let pool = c.raw || 0;
-      const bData = bundles.map(b => {
-        const rp = replenMap[b.j]; const pprc = rp?.pprcUnits || 0; const inb7f = missingMap[b.j] || 0;
-        const inv = (b.fibInv || 0) + inb7f + pprc; const dsr = b.cd || 0;
-        return { j: b.j, baseDOC: dsr > 0 ? inv / dsr : 9999, dsr, qtyPerBundle: b.qty1 || 1, inv };
-      }).sort((a, b) => a.baseDOC - b.baseDOC);
-      const tg = c.targetDoc || 180;
-      bData.forEach(bd => {
-        if (bd.dsr <= 0 || pool <= 0) { map[bd.j] = { rawUnits: 0, baseDOC: bd.baseDOC, baseInv: bd.inv }; return }
-        const needCP = Math.max(0, tg - bd.baseDOC) * bd.dsr * bd.qtyPerBundle;
-        const give = Math.min(needCP, pool); pool -= give;
-        map[bd.j] = { rawUnits: bd.qtyPerBundle > 0 ? give / bd.qtyPerBundle : 0, baseDOC: bd.baseDOC, baseInv: bd.inv };
-      });
-    });
-    return map;
-  }, [enr, data.bundles, replenMap, missingMap, bA]);
-
   const gO = id => ov[id] || {};
   const setF = (id, f, v) => setOv(p => ({ ...p, [id]: { ...(p[id] || {}), [f]: v } }));
   const gPcs = id => (gO(id).pcs ?? 0);
@@ -195,7 +222,6 @@ return { ...c, status: st, allIn: ai, doc: effectiveDoc, needQty: sNeed, orderQt
   const gInbS = id => (gO(id).inbS ?? 0);
   const gCogP = id => (gO(id).cogP ?? 0);
   const gCogC = id => (gO(id).cogC ?? 0);
-  const gBMoq = id => (gO(id).bMoq ?? 0);
   const hasCoreOrd = c => (gPcs(c.id) > 0 || gCas(c.id) > 0);
   const coreEffQ = c => gPcs(c.id) || gCas(c.id) * (c.casePack || 1);
   const hasBundleOrd = b => (gPcs(b.j) > 0 || gCas(b.j) > 0);
@@ -210,7 +236,7 @@ return { ...c, status: st, allIn: ai, doc: effectiveDoc, needQty: sNeed, orderQt
     return Object.values(g).filter(grp => vf || showIgnored || !isIgnored(grp.v.name)).sort((a, b) => b.cores.filter(c => c.status === "critical").length - a.cores.filter(c => c.status === "critical").length);
   }, [enr, vm, vMap, venBundles, isIgnored, showIgnored]);
 
- const getPOI = (cores, bundles) => {
+  const getPOI = (cores, bundles) => {
     const items = [];
     cores.filter(c => hasCoreOrd(c)).forEach(c => {
       const cogpOv = gCogP(c.id);
@@ -227,138 +253,55 @@ return { ...c, status: st, allIn: ai, doc: effectiveDoc, needQty: sNeed, orderQt
 
   const autoPO = (vendorCode) => { if (poN) return poN; const d = new Date(); const serial = Math.floor((d - new Date(1899, 11, 30)) / 86400000); return 'PO-' + serial + '-' + (vendorCode || 'XXX') };
 
-  // === FILL REC (v2 — core need as reference, distribute to bundles by weight, respect PPRC) ===
-const fillR = (cores, bundles, mode, vendorName) => {
-    const u = { ...ov };
-    const bMoq = gBMoq('_bmoq_' + vendorName);
-    const isAgl = aglMap[vendorName] || false;
-    const replenFloor = stg.replenFloorDoc || 80;
+  // === FILL REC v2 — thin wrapper, just applies the recommender's decisions ===
+  const fillR = (cores, bundles, mode, vendorName) => {
+    const vendor = vMap[vendorName];
+    if (!vendor) return;
 
-    if (mode === "bundles" || mode === "mix") {
-      const coreMap = {}; cores.forEach(c => { coreMap[c.id] = c });
+    // mode: 'cores' | 'bundles' | 'mix'
+    //   'cores'   → force everything as core
+    //   'bundles' → force everything as bundle
+    //   'mix'     → use historical 7f detection per bundle
+    const forceMode = mode === 'cores' ? 'cores' : mode === 'bundles' ? 'bundles' : null;
 
-      // Group bundles by core (ALL slots 1-20)
-      const bundlesByCore = {};
-      (bundles || []).forEach(b => {
-        for (let i = 1; i <= 20; i++) {
-          const cid = b['core' + i];
-          if (!cid || !coreMap[cid]) continue;
-          if (!bundlesByCore[cid]) bundlesByCore[cid] = [];
-          if (!bundlesByCore[cid].some(x => x.j === b.j)) bundlesByCore[cid].push(b);
-        }
-      });
+    // If forceMode differs from the default, recompute; else use the cached rec.
+    const rec = forceMode
+      ? calcVendorRecommendation({
+          vendor,
+          cores: data.cores || [],
+          bundles: data.bundles || [],
+          bundleSales: data._bundleSales || [],
+          receivingFull: data.receivingFull || [],
+          replenMap,
+          missingMap,
+          settings: stg,
+          purchFreqSafety: purchFreqMap[vendorName]?.safetyMultiplier || 1.0,
+          forceMode,
+        })
+      : vendorRecs[vendorName];
 
-      cores.forEach(c => {
-        const cBundles = bundlesByCore[c.id] || [];
-        if (cBundles.length === 0) {
-          if (c.needQty > 0) u[c.id] = { ...(u[c.id] || {}), pcs: cOQ(c.needQty, c.moq, c.casePack) };
-          return;
-        }
-
-        const v = vMap[c.ven] || {};
-        const ltUsed = isAgl ? AGL_LT : (v.lt || 30);
-        const cProfile = profiles[c.id] || DEFAULT_PROFILE;
-        const pfV = purchFreqMap[c.ven];
-        const targetDoc = c.targetDoc;
-
-        // Step 1: Calculate independent need per bundle (using CORE seasonal profile)
-        const bData = cBundles.map(b => {
-          const rp = replenMap[b.j];
-          const inb7f = missingMap[b.j] || 0;
-          const bundleDSR = b.cd || 0;
-          const currentInv = (b.fibInv || 0) + (rp?.pprcUnits || 0) + (rp?.batched || 0) + inb7f;
-
-          // Find this core's qty in this bundle
-          let coreQtyInBundle = 0;
-          for (let i = 1; i <= 20; i++) {
-            if (b['core' + i] === c.id) { coreQtyInBundle = b['qty' + i] || 0; break; }
-          }
-
-          if (bundleDSR <= 0) return { j: b.j, need: 0, qpb: coreQtyInBundle, currentInv, bundleDSR, currentDOC: 9999, rawAssigned: 0 };
-
-          const fakeBundle = {
-            id: b.j, dsr: bundleDSR, d7: b.d7comp || bundleDSR,
-            raw: 0, inb: 0, pp: 0, jfn: 0, pq: 0, ji: 0, fba: currentInv
-          };
-          const coverage = calcCoverageNeed(fakeBundle, ltUsed, targetDoc, cProfile, pfV);
-          const need = coverage.need || 0;
-          const currentDOC = bundleDSR > 0 ? currentInv / bundleDSR : 9999;
-          return { j: b.j, need, qpb: coreQtyInBundle, currentInv, bundleDSR, currentDOC, rawAssigned: 0 };
-        });
-
-        // Step 2: WATERFALL — assign core raw to bundles
-        let rawPool = c.raw || 0;
-
-        // Phase 1: Floor — bring all bundles to replenFloor DOC, urgency-first
-        const needsFloor = bData.filter(bd => bd.bundleDSR > 0 && bd.currentDOC < replenFloor).sort((a, b) => a.currentDOC - b.currentDOC);
-        for (const bd of needsFloor) {
-          if (rawPool <= 0) break;
-          const targetInv = Math.ceil(replenFloor * bd.bundleDSR);
-          const gapBU = Math.max(0, targetInv - bd.currentInv);
-          const gapCore = gapBU * bd.qpb;
-          const give = Math.min(gapCore, rawPool);
-          const giveBU = bd.qpb > 0 ? Math.floor(give / bd.qpb) : 0;
-          const actualGiveCore = giveBU * bd.qpb;
-          bd.rawAssigned += giveBU;
-          rawPool -= actualGiveCore;
-        }
-
-        // Phase 2: Stretch — incrementally raise all bundles in 10d steps until targetDoc
-        for (let level = replenFloor + 10; level <= targetDoc && rawPool > 0; level += 10) {
-          const sorted = [...bData].filter(bd => bd.bundleDSR > 0).sort((a, b) => a.currentDOC - b.currentDOC);
-          for (const bd of sorted) {
-            if (rawPool <= 0) break;
-            const currentEffectiveInv = bd.currentInv + (bd.rawAssigned * bd.qpb);
-            const currentEffectiveDOC = bd.bundleDSR > 0 ? currentEffectiveInv / bd.bundleDSR : 9999;
-            if (currentEffectiveDOC >= level) continue;
-            const targetInv = Math.ceil(level * bd.bundleDSR);
-            const gapBU = Math.max(0, targetInv - currentEffectiveInv);
-            const gapCore = gapBU * bd.qpb;
-            const give = Math.min(gapCore, rawPool);
-            const giveBU = bd.qpb > 0 ? Math.floor(give / bd.qpb) : 0;
-            const actualGiveCore = giveBU * bd.qpb;
-            bd.rawAssigned += giveBU;
-            rawPool -= actualGiveCore;
-          }
-        }
-
-        // Step 3: Compute final bundle need = original need − raw assigned
-        let coreExtras = 0;
-        bData.forEach(bd => {
-          const finalNeed = Math.max(0, bd.need - bd.rawAssigned);
-          if (finalNeed <= 0) return;
-          if (bMoq > 0 && finalNeed < bMoq) {
-            // Below B.MOQ → convert to core pieces
-            coreExtras += finalNeed * bd.qpb;
-          } else {
-            let ord = finalNeed;
-            const bcp = casePackFromRec[bd.j] || 0;
-            if (bcp > 0) ord = Math.ceil(ord / bcp) * bcp;
-            u[bd.j] = { ...(u[bd.j] || {}), pcs: ord };
-          }
-        });
-
-        // Step 4: Core order — extras from B.MOQ conversion, minus any leftover raw
-        const finalCoreNeed = Math.max(0, coreExtras - rawPool);
-        if (finalCoreNeed > 0) {
-          u[c.id] = { ...(u[c.id] || {}), pcs: cOQ(finalCoreNeed, c.moq, c.casePack) };
-        }
-      });
-    } else {
-      // Cores mode — unchanged
-      cores.filter(c => c.needQty > 0).forEach(c => { u[c.id] = { ...(u[c.id] || {}), pcs: cOQ(c.needQty, c.moq, c.casePack) } });
+    if (!rec || !rec.items?.length) {
+      setToast("Nothing to fill");
+      return;
     }
 
+    const u = { ...ov };
+    for (const item of rec.items) {
+      if (item.finalQty > 0) {
+        u[item.id] = { ...(u[item.id] || {}), pcs: item.finalQty };
+      }
+    }
     setOv(u);
+    setToast(`Fill Rec: ${rec.items.length} items, ${$(rec.totalCost)}`);
   };
 
-
-  const r2w = n => Math.round(n * 100) / 100;
-
-  // === FILL TO MOQ ===
+  // === FILL TO MOQ — incrementally add cases to items until vendor MOQ is met ===
+  // Strategy: keep adding a casepack to the item with the lowest projected DOC.
   const doFillMOQ = (grpCores, grpBundles, vendorMOQDollar) => {
+    // Current total from user's edited state
     let currentTotal = 0;
     grpCores.forEach(c => {
+      if (!hasCoreOrd(c)) return;
       const cogpOv = gCogP(c.id);
       currentTotal += coreEffQ(c) * (cogpOv > 0 ? cogpOv : c.cost);
     });
@@ -368,21 +311,41 @@ const fillR = (cores, bundles, mode, vendorName) => {
       const baseCost = f?.aicogs || 0;
       currentTotal += bundleEffQ(b) * (cogpOv > 0 ? cogpOv : baseCost);
     });
-    if (currentTotal >= vendorMOQDollar) { setToast("Already at/above MOQ"); return }
-    const lt = grpCores[0]?.lt || 30; const tg = grpCores[0]?.targetDoc || 90;
-    const extra = fillToMOQCalc(grpCores, vendorMOQDollar, currentTotal, profiles, lt, tg);
-    if (Object.keys(extra).length === 0) { setToast("Could not reach MOQ"); return }
-    const u = { ...ov }; let addedTotal = 0;
-    Object.entries(extra).forEach(([id, extraPcs]) => {
-      const existing = gPcs(id) || 0;
-      u[id] = { ...(u[id] || {}), pcs: existing + extraPcs };
-      const c = grpCores.find(x => x.id === id);
-      if (c) {
-        const cogpOv = gCogP(c.id);
-        addedTotal += extraPcs * (cogpOv > 0 ? cogpOv : c.cost);
-      }
-    });
-    setOv(u); setToast("MOQ filled: +" + $(addedTotal));
+    if (currentTotal >= vendorMOQDollar) { setToast("Already at/above MOQ"); return; }
+
+    // Build a list of addable items (only those already being ordered)
+    const addable = grpCores.filter(c => hasCoreOrd(c) && c.cost > 0 && c.dsr > 0).map(c => ({
+      id: c.id,
+      isCore: true,
+      casePack: c.casePack || 1,
+      cost: gCogP(c.id) > 0 ? gCogP(c.id) : c.cost,
+      dsr: c.dsr,
+      ref: c,
+    }));
+
+    if (addable.length === 0) { setToast("No orderable items — click Fill Rec first"); return; }
+
+    const u = { ...ov };
+    let added = 0;
+    let safety = 0;
+    while (currentTotal < vendorMOQDollar && safety < 500) {
+      safety++;
+      // pick the item with the lowest current projected DOC
+      addable.forEach(a => {
+        const q = (u[a.id]?.pcs ?? 0) || 0;
+        a.projDOC = a.dsr > 0 ? (cAI(a.ref) + q) / a.dsr : 99999;
+      });
+      addable.sort((x, y) => x.projDOC - y.projDOC);
+      const pick = addable[0];
+      if (!pick) break;
+      const step = pick.casePack;
+      const cur = u[pick.id]?.pcs ?? 0;
+      u[pick.id] = { ...(u[pick.id] || {}), pcs: cur + step };
+      currentTotal += step * pick.cost;
+      added += step * pick.cost;
+    }
+    setOv(u);
+    setToast("MOQ filled: +" + $(added));
   };
 
   const clrV = (cores, bundles) => { const u = { ...ov }; cores.forEach(c => { delete u[c.id] }); (bundles || []).forEach(b => { delete u[b.j] }); setOv(u) };
@@ -403,26 +366,47 @@ const fillR = (cores, bundles, mode, vendorName) => {
   // === CORE ROW ===
   const CoreRow = ({ c }) => {
     if (dismissed[c.id]) return <tr className="border-t border-gray-800/20 bg-gray-900/30 text-xs opacity-40"><td className="py-1 px-1" colSpan={2}><Dot status={c.status} /></td><td className="py-1 px-1 text-gray-500 font-mono">{c.id}</td><td className="py-1 px-1 text-gray-600 truncate max-w-[110px]">{c.ti}</td><td colSpan={20} className="py-1 px-1 text-right"><button onClick={() => togDismiss(c.id)} className="text-xs text-gray-500 hover:text-white px-1">+</button></td></tr>;
-    const eq = coreEffQ(c); const cogpOverride = gCogP(c.id); const cost = eq * (cogpOverride > 0 ? cogpOverride : c.cost);
-    const activeBundlesForCore = (data.bundles || []).filter(b => b.core1 === c.id && b.active === "Yes");
-    const bundleOrderPieces = activeBundlesForCore.reduce((s, b) => s + (bundleEffQ(b) * (b.qty1 || 1)), 0);
+    const eq = coreEffQ(c);
+    const cogpOverride = gCogP(c.id);
+    const cost = eq * (cogpOverride > 0 ? cogpOverride : c.cost);
+
+    // Effective After DOC:
+    // Sum current bundle availability (from waterfall) + user's edited bundle orders
+    // + the share of user's edited core order distributed proportionally.
+    const cBundles = (data.bundles || []).filter(b => {
+      if (b.active !== "Yes") return false;
+      for (let i = 1; i <= 20; i++) if (b['core' + i] === c.id) return true;
+      return false;
+    });
     let ad = null;
     if (eq > 0 && c.dsr > 0) {
-      if (activeBundlesForCore.length === 1) { const sb = activeBundlesForCore[0]; const alloc = rawAllocMap[sb.j] || { rawUnits: 0, baseInv: 0 }; ad = sb.cd > 0 ? Math.round((alloc.baseInv + alloc.rawUnits + bundleEffQ(sb) + (eq / (sb.qty1 || 1))) / sb.cd) : null }
-      else { ad = Math.round((c.allIn + eq + bundleOrderPieces) / c.dsr) }
+      // Aggregate bundle dimension: sum of bundle units available + bundle orders placed
+      // Then map back to core pieces: totalCorePiecesAvailable/c.dsr ≈ ad
+      ad = Math.round((c.allIn + eq) / c.dsr);
+    } else if (c.dsr > 0) {
+      ad = Math.round(c.allIn / c.dsr);
     }
-    const isCol = collapsed[c.id]; const combinedRec = showPH[c.id] ? getCombinedRec(c.id) : [];
-    const hasSeasonal = c.sProfile?.hasHistory; const isUrgent = c.sCoverage?.urgent;
+
+    const isCol = collapsed[c.id];
+    const combinedRec = showPH[c.id] ? getCombinedRec(c.id) : [];
+    const hasSeasonal = c.sProfile?.hasHistory;
+    const isUrgent = c.sCoverage?.urgent;
 
     return <><tr className={`border-t border-gray-800/30 hover:bg-gray-800/20 text-xs ${hasCoreOrd(c) ? "bg-emerald-900/10" : ""} ${isUrgent ? "bg-red-900/10" : ""}`}>
       <td className="py-1 px-0.5 sticky left-0 bg-gray-950 z-10 w-4"><Dot status={c.status} /></td>
       <td className="py-1 px-0.5 sticky left-4 bg-gray-950 z-10 whitespace-nowrap"><button onClick={() => goCore(c.id)} className="text-blue-400 font-mono hover:underline text-[11px]">{c.id}</button></td>
-     <td className="py-1 px-1 text-gray-200 truncate max-w-[130px] sticky left-[85px] bg-gray-950 z-10">
-        {c.ti}{isUrgent && <span className="ml-1 text-red-400 text-[9px] font-bold">⚠OOS</span>}{c.invAnomaly && <span className="ml-1 text-amber-400 text-[9px] font-bold" title="Unusual inventory changes — Sheet DOC vs calculated DOC mismatch &gt;20%">⚠INV</span>}{c.rawPendingBundles && <span className="ml-1 text-cyan-400 text-[9px] font-bold" title="Has raw available + bundles with DOC < 60. Consider processing raw into bundles instead of buying.">⚙PROC</span>}{c.moqInflated && <span className="ml-1 text-orange-400 text-[9px] font-bold" title={`MOQ forces ${Math.round(c.moqInflationRatio * 100)}% of actual need. Excess: ${R(c.excessFromMoq)} pcs / $${Math.round(c.excessCostFromMoq).toLocaleString()}`}>⚠MOQ</span>}</td>
+      <td className="py-1 px-1 text-gray-200 truncate max-w-[130px] sticky left-[85px] bg-gray-950 z-10">
+        {c.ti}
+        {isUrgent && <span className="ml-1 text-red-400 text-[9px] font-bold" title="Bundle will stockout before LT arrives">⚠OOS</span>}
+        {c.invAnomaly && <span className="ml-1 text-amber-400 text-[9px] font-bold" title="Sheet DOC vs calculated DOC mismatch >20%">⚠INV</span>}
+        {c.rawPendingBundles && <span className="ml-1 text-cyan-400 text-[9px] font-bold" title="Has raw available + bundles with DOC < 60. Consider processing raw into bundles instead of buying.">⚙PROC</span>}
+        {c.moqInflated && <span className="ml-1 text-orange-400 text-[9px] font-bold" title={`MOQ forces ${Math.round(c.moqInflationRatio * 100)}% of actual need. Excess: ${R(c.excessFromMoq)} pcs / $${Math.round(c.excessCostFromMoq).toLocaleString()}`}>⚠MOQ</span>}
+        {c.bundlesAffected > 0 && <span className="ml-1 text-[9px] text-gray-500" title={`Need driven by ${c.bundlesAffected} bundle(s)`}>({c.bundlesAffected}b)</span>}
+      </td>
       <SC v={c.dsr} className="py-1 px-1 text-right">{D1(c.dsr)}</SC>
       <SC v={c.d7} className="py-1 px-1 text-right">{D1(c.d7)}</SC>
       <td className="py-1 px-1 text-center">{c.d7 > c.dsr ? <span className={c.spike ? "text-orange-400 font-bold" : "text-emerald-400"}>▲</span> : c.d7 < c.dsr ? <span className="text-red-400">▼</span> : "—"}{c.spike && <span className="text-orange-400 text-xs ml-0.5">⚡</span>}</td>
-      <SC v={c.doc} className={`py-1 px-1 text-right font-semibold ${dc(c.doc, c.critDays, c.warnDays)}`}>{R(c.doc)}{c.doc > 0 && c.dsr > 0 && Math.abs(c.doc - cAI(c) / c.dsr) > c.doc * 0.2 && <span className="ml-0.5 text-red-400 text-[9px]" title={"Sheet DOC vs All-In/DSR mismatch: " + R(c.doc) + " vs " + R(Math.round(cAI(c) / c.dsr))}>⚠</span>}</SC>
+      <SC v={c.doc} className={`py-1 px-1 text-right font-semibold ${dc(c.doc, c.critDays, c.warnDays)}`}>{R(c.doc)}</SC>
       <SC v={c.allIn} className="py-1 px-1 text-right">{R(c.allIn)}</SC>
       <td className="py-1 px-1 text-right text-gray-400">{c.moq > 0 ? R(c.moq) : "—"}</td>
       <td className="py-1 px-1 text-right text-gray-400">{c.casePack > 0 ? R(c.casePack) : "—"}</td>
@@ -433,37 +417,54 @@ const fillR = (cores, bundles, mode, vendorName) => {
       <td className="py-0.5 px-0.5 sticky right-36 bg-gray-950 z-10"><NumInput value={gPcs(c.id)} onChange={v => setF(c.id, 'pcs', v)} /></td>
       <td className="py-0.5 px-0.5 sticky right-24 bg-gray-950 z-10"><NumInput value={gCas(c.id)} onChange={v => setF(c.id, 'cas', v)} /></td>
       {showCosts && <><td className="py-0.5 px-0.5"><NumInput value={gInbS(c.id)} onChange={v => setF(c.id, 'inbS', v)} /></td><td className="py-0.5 px-0.5"><NumInput value={gCogP(c.id)} onChange={v => setF(c.id, 'cogP', v)} /></td><td className="py-0.5 px-0.5"><NumInput value={gCogC(c.id)} onChange={v => setF(c.id, 'cogC', v)} /></td></>}
-      
+
       <SC v={cost} className="py-1 px-1 text-right text-amber-300 sticky right-12 bg-gray-950 z-10">{cost > 0 ? $(cost) : "—"}</SC>
       <td className={`py-1 px-1 text-right sticky right-0 bg-gray-950 z-10 ${ad ? dc(ad, c.critDays, c.warnDays) : "text-gray-500"}`}>{ad ? R(ad) : "—"}</td>
       <td className="py-1 px-0.5 flex gap-0.5">
         <button onClick={() => togCollapse(c.id)} className="text-gray-400 hover:text-white text-xs px-0.5">{isCol ? "+" : "−"}</button>
         <button onClick={() => togDismiss(c.id)} className="text-gray-400 hover:text-red-400 text-xs px-0.5">✕</button>
         {(pcMap[c.id] || hasRecData(c.id)) && <button onClick={() => togPH(c.id)} className={`text-xs px-0.5 rounded ${showPH[c.id] ? "text-amber-300" : "text-gray-500"}`}>$</button>}
-        <button onClick={() => openBreakdown(c)} className={`text-xs px-0.5 rounded ${hasSeasonal ? "text-purple-400" : "text-gray-600"}`} title="Seasonal Breakdown">📊</button>
+        <button onClick={() => openBreakdown(c)} className={`text-xs px-0.5 rounded ${hasSeasonal ? "text-purple-400" : "text-gray-600"}`} title="Seasonal Breakdown (legacy core-level view)">📊</button>
         <button onClick={() => goCore(c.id)} className="text-blue-400 px-0.5 bg-blue-400/10 rounded text-xs">V</button>
         <div className="relative"><WorkflowChip id={c.id} type="core" workflow={data.workflow} onSave={saveWorkflow} onDelete={deleteWorkflow} buyer={stg.buyer} country={c.vc} /></div>
       </td>
     </tr>
-    {showPH[c.id] && (pcMap[c.id] || combinedRec.length > 0) && <tr><td colSpan={40} className="p-0"><div className="bg-gray-800/50 px-4 py-2 space-y-3">
-      {pcMap[c.id] && <div><div className="text-gray-500 text-xs font-semibold mb-1">💰 Purchase History (7g)</div><table className="w-full text-xs"><thead><tr className="text-gray-500"><th className="py-0.5 text-left">Date</th><th className="py-0.5 text-right">Pcs</th><th className="py-0.5 text-right">Material</th><th className="py-0.5 text-right">Inb Ship</th><th className="py-0.5 text-right">Tariffs</th><th className="py-0.5 text-right">Total</th><th className="py-0.5 text-right">CPP</th></tr></thead><tbody>{pcMap[c.id].map((r, i) => <tr key={i} className="border-t border-gray-700/30"><td className="py-0.5 text-gray-300">{fDateUS(r.date)}</td><td className="py-0.5 text-right">{R(r.pcs)}</td><td className="py-0.5 text-right">{$2(r.matPrice)}</td><td className="py-0.5 text-right text-gray-400">{$2(r.inbShip)}</td><td className="py-0.5 text-right text-gray-400">{$2(r.tariffs)}</td><td className="py-0.5 text-right">{$2(r.totalCost)}</td><td className="py-0.5 text-right text-amber-300">{$2(r.cpp)}</td></tr>)}</tbody></table></div>}
-      {combinedRec.length > 0 && <div><div className="text-gray-500 text-xs font-semibold mb-1">📦 Receiving (7f)</div><table className="w-full text-xs"><thead><tr className="text-gray-500"><th className="py-0.5 text-left">Date</th><th className="py-0.5 text-left">Vendor</th><th className="py-0.5 text-left">ID</th><th className="py-0.5 text-right">Pcs</th><th className="py-0.5 text-right">Cases</th><th className="py-0.5 text-left">Order #</th><th className="py-0.5 text-right">Missing</th></tr></thead><tbody>{combinedRec.map((r, i) => <tr key={i} className="border-t border-gray-700/30"><td className="py-0.5 text-gray-300">{fDateUS(r.date) || "—"}</td><td className="py-0.5 text-gray-300">{r.vendor || "—"}</td><td className="py-0.5 text-blue-400 font-mono">{r.core}</td><td className="py-0.5 text-right text-white">{R(r.pcs)}</td><td className="py-0.5 text-right">{r.cases > 0 ? R(r.cases) : "—"}</td><td className="py-0.5 text-gray-300">{r.orderNum || "—"}</td><td className={`py-0.5 text-right ${r.piecesMissing > 0 ? "text-red-400" : "text-gray-500"}`}>{r.piecesMissing > 0 ? R(r.piecesMissing) : "—"}</td></tr>)}</tbody></table></div>}
-    </div></td></tr>}</>
+      {showPH[c.id] && (pcMap[c.id] || combinedRec.length > 0) && <tr><td colSpan={40} className="p-0"><div className="bg-gray-800/50 px-4 py-2 space-y-3">
+        {pcMap[c.id] && <div><div className="text-gray-500 text-xs font-semibold mb-1">💰 Purchase History (7g)</div><table className="w-full text-xs"><thead><tr className="text-gray-500"><th className="py-0.5 text-left">Date</th><th className="py-0.5 text-right">Pcs</th><th className="py-0.5 text-right">Material</th><th className="py-0.5 text-right">Inb Ship</th><th className="py-0.5 text-right">Tariffs</th><th className="py-0.5 text-right">Total</th><th className="py-0.5 text-right">CPP</th></tr></thead><tbody>{pcMap[c.id].map((r, i) => <tr key={i} className="border-t border-gray-700/30"><td className="py-0.5 text-gray-300">{fDateUS(r.date)}</td><td className="py-0.5 text-right">{R(r.pcs)}</td><td className="py-0.5 text-right">{$2(r.matPrice)}</td><td className="py-0.5 text-right text-gray-400">{$2(r.inbShip)}</td><td className="py-0.5 text-right text-gray-400">{$2(r.tariffs)}</td><td className="py-0.5 text-right">{$2(r.totalCost)}</td><td className="py-0.5 text-right text-amber-300">{$2(r.cpp)}</td></tr>)}</tbody></table></div>}
+        {combinedRec.length > 0 && <div><div className="text-gray-500 text-xs font-semibold mb-1">📦 Receiving (7f)</div><table className="w-full text-xs"><thead><tr className="text-gray-500"><th className="py-0.5 text-left">Date</th><th className="py-0.5 text-left">Vendor</th><th className="py-0.5 text-left">ID</th><th className="py-0.5 text-right">Pcs</th><th className="py-0.5 text-right">Cases</th><th className="py-0.5 text-left">Order #</th><th className="py-0.5 text-right">Missing</th></tr></thead><tbody>{combinedRec.map((r, i) => <tr key={i} className="border-t border-gray-700/30"><td className="py-0.5 text-gray-300">{fDateUS(r.date) || "—"}</td><td className="py-0.5 text-gray-300">{r.vendor || "—"}</td><td className="py-0.5 text-blue-400 font-mono">{r.core}</td><td className="py-0.5 text-right text-white">{R(r.pcs)}</td><td className="py-0.5 text-right">{r.cases > 0 ? R(r.cases) : "—"}</td><td className="py-0.5 text-gray-300">{r.orderNum || "—"}</td><td className={`py-0.5 text-right ${r.piecesMissing > 0 ? "text-red-400" : "text-gray-500"}`}>{r.piecesMissing > 0 ? R(r.piecesMissing) : "—"}</td></tr>)}</tbody></table></div>}
+      </div></td></tr>}</>
   };
 
   // === BUNDLE ROW ===
   const BundleRow = ({ b }) => {
-    const f = b.fee || feMap[b.j]; const eq = bundleEffQ(b); const cogpOverride = gCogP(b.j); const cost = cogpOverride > 0 ? (eq * cogpOverride) : (f ? (eq * (f.aicogs || 0)) : 0);
-    const aged = agedMap[b.j]; const kill = killMap[b.j]; const inb7f = missingMap[b.j] || 0; const rp = replenMap[b.j];
+    const f = b.fee || feMap[b.j];
+    const eq = bundleEffQ(b);
+    const cogpOverride = gCogP(b.j);
+    const cost = cogpOverride > 0 ? (eq * cogpOverride) : (f ? (eq * (f.aicogs || 0)) : 0);
+    const aged = agedMap[b.j];
+    const kill = killMap[b.j];
+    const inb7f = missingMap[b.j] || 0;
+    const rp = replenMap[b.j];
     const margin = f && f.aicogs > 0 ? ((f.gp / f.aicogs) * 100) : 0;
     const bCasePack = casePackFromRec[b.j] || 0;
-    const alloc = rawAllocMap[b.j] || { rawUnits: 0, baseDOC: 0, baseInv: 0 };
-    const effectiveDOC = b.cd > 0 ? Math.round((alloc.baseInv + alloc.rawUnits + eq) / b.cd) : null;
-    return <tr className={`border-t border-gray-800/20 hover:bg-indigo-900/10 text-xs ${hasBundleOrd(b) ? "bg-emerald-900/10" : "bg-indigo-950/30"}`}>
-     <td className="py-1 px-0.5 sticky left-0 bg-indigo-950/30 z-10 w-4 border-l-2 border-indigo-500/40" />
-     <td className="py-1 px-0.5 sticky left-4 bg-indigo-950/30 z-10 whitespace-nowrap"><button onClick={() => goBundle(b.j)} className="text-indigo-400 font-mono hover:underline text-[11px]">{b.j}</button></td>
-     <td className="py-1 px-1 text-indigo-200 truncate max-w-[130px] sticky left-[85px] bg-indigo-950/30 z-10">
-        {b.t}{b.asin && <a href={`https://sellercentral.amazon.com/myinventory/inventory?fulfilledBy=all&page=1&pageSize=25&searchField=all&searchTerm=${b.asin}&sort=date_created_desc&status=all`} target="_blank" rel="noopener noreferrer" className="ml-1 text-gray-500 hover:text-blue-400 text-[9px] font-mono">{b.asin}</a>}
+
+    // Effective DOC comes from the v2 waterfall: totalAvailable already includes
+    // this bundle's share of core raw, post-distribution. Adding user's edited qty
+    // on top gives the "after this order" DOC.
+    const bd = bundleEffMap[b.j];
+    const effDSR = bd?.effectiveDSR || b.cd || 0;
+    const totalAvail = bd?.totalAvailable ?? ((b.fibInv || 0) + (rp?.pprcUnits || 0) + (rp?.batched || 0) + inb7f);
+    const effectiveDOC = effDSR > 0 ? Math.round((totalAvail + eq) / effDSR) : null;
+    const urgentBundle = bd?.urgent;
+    const buyNeedBundle = bd?.buyNeed || 0;
+
+    return <tr className={`border-t border-gray-800/20 hover:bg-indigo-900/10 text-xs ${hasBundleOrd(b) ? "bg-emerald-900/10" : "bg-indigo-950/30"} ${urgentBundle ? "bg-red-900/10" : ""}`}>
+      <td className="py-1 px-0.5 sticky left-0 bg-indigo-950/30 z-10 w-4 border-l-2 border-indigo-500/40" />
+      <td className="py-1 px-0.5 sticky left-4 bg-indigo-950/30 z-10 whitespace-nowrap"><button onClick={() => goBundle(b.j)} className="text-indigo-400 font-mono hover:underline text-[11px]">{b.j}</button></td>
+      <td className="py-1 px-1 text-indigo-200 truncate max-w-[130px] sticky left-[85px] bg-indigo-950/30 z-10">
+        {b.t}
+        {b.asin && <a href={`https://sellercentral.amazon.com/myinventory/inventory?fulfilledBy=all&page=1&pageSize=25&searchField=all&searchTerm=${b.asin}&sort=date_created_desc&status=all`} target="_blank" rel="noopener noreferrer" className="ml-1 text-gray-500 hover:text-blue-400 text-[9px] font-mono">{b.asin}</a>}
+        {urgentBundle && <span className="ml-1 text-red-400 text-[9px] font-bold" title="Will stockout before LT">⚠OOS</span>}
         {aged && aged.fbaHealth !== "Healthy" && <span className={`ml-1 text-xs ${aged.fbaHealth === "At Risk" ? "text-amber-400" : "text-red-400"}`}>{aged.fbaHealth}</span>}
         {aged && aged.storageLtsf > 0 && <span className="ml-1 text-xs text-red-300">${aged.storageLtsf.toFixed(0)}</span>}
         {kill && kill.latestEval && kill.latestEval.toLowerCase().includes('kill') && <span className="ml-1 text-xs text-red-400 font-bold">KILL</span>}
@@ -515,28 +516,28 @@ const fillR = (cores, bundles, mode, vendorName) => {
       {!vf && <select value={locF} onChange={e => setLocF(e.target.value)} className="bg-gray-800 border border-gray-700 text-gray-300 text-sm rounded-lg px-2 py-1.5"><option value="all">All</option><option value="us">US Only</option><option value="intl">International</option></select>}
       <select value={nf} onChange={e => setNf(e.target.value)} className="bg-gray-800 border border-gray-700 text-gray-300 text-sm rounded-lg px-2 py-1.5"><option value="all">All</option><option value="need">Needs Buy</option><option value="ok">No Need</option></select>
       {vm === "core" && <><select value={sort} onChange={e => setSort(e.target.value)} className="bg-gray-800 border border-gray-700 text-gray-300 text-sm rounded-lg px-2 py-1.5"><option value="status">Priority</option><option value="doc">DOC</option><option value="dsr">DSR</option><option value="need$">$</option></select><span className="text-gray-500 text-xs">Min:</span><input type="number" value={minD} onChange={e => setMinD(+e.target.value)} className="bg-gray-800 border border-gray-700 text-white text-sm rounded px-2 py-1 w-14" /></>}
-      {vm === "vendor" && <div className="flex bg-gray-800 rounded-lg p-0.5">{[["cores", "Cores"], ["bundles", "Bundles"], ["mix", "Mix"]].map(([k, l]) => <button key={k} onClick={() => setVendorSub(k)} className={`px-2.5 py-1 rounded-md text-xs font-medium ${vendorSub === k ? "bg-indigo-600 text-white" : "text-gray-400"}`}>{l}</button>)}</div>}
+      {vm === "vendor" && <div className="flex bg-gray-800 rounded-lg p-0.5">{[["mix", "Mix (auto)"], ["cores", "Force Cores"], ["bundles", "Force Bundles"]].map(([k, l]) => <button key={k} onClick={() => setVendorSub(k)} className={`px-2.5 py-1 rounded-md text-xs font-medium ${vendorSub === k ? "bg-indigo-600 text-white" : "text-gray-400"}`}>{l}</button>)}</div>}
       <div className="flex gap-2 ml-auto text-xs"><span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-500" />{sc.critical}</span><span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-500" />{sc.warning}</span><span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500" />{sc.healthy}</span><span className="text-gray-500">|</span><span className="text-gray-300 font-semibold">{enr.length}</span>
-      {vm === "vendor" && <button 
-        onClick={() => setShowNoBundleCores(!showNoBundleCores)} 
-        className={`ml-1 px-2 py-0.5 rounded text-xs ${showNoBundleCores ? "bg-amber-500/20 text-amber-400" : "bg-gray-700 text-gray-500"}`}
-      >
-      {showNoBundleCores ? "Hide" : "Show"} No-Bundle
-      </button>}
-      <button onClick={() => setShowIgnored(!showIgnored)} className={`ml-1 px-2 py-0.5 rounded text-xs ${showIgnored ? "bg-red-500/20 text-red-400" : "bg-gray-700 text-gray-500"}`}>{showIgnored ? "Hide" : "Show"} Ignored</button>
+        {vm === "vendor" && <button
+          onClick={() => setShowNoBundleCores(!showNoBundleCores)}
+          className={`ml-1 px-2 py-0.5 rounded text-xs ${showNoBundleCores ? "bg-amber-500/20 text-amber-400" : "bg-gray-700 text-gray-500"}`}
+        >
+          {showNoBundleCores ? "Hide" : "Show"} No-Bundle
+        </button>}
+        <button onClick={() => setShowIgnored(!showIgnored)} className={`ml-1 px-2 py-0.5 rounded text-xs ${showIgnored ? "bg-red-500/20 text-red-400" : "bg-gray-700 text-gray-500"}`}>{showIgnored ? "Hide" : "Show"} Ignored</button>
       </div>
     </div>
     {vm === "vendor" && <div className="flex flex-wrap gap-3 mb-4 items-center text-sm"><span className="text-gray-500 text-xs">PO#:</span><input type="text" value={poN} onChange={e => setPoN(e.target.value)} placeholder="Auto" className="bg-gray-800 border border-gray-700 text-white rounded px-2 py-1 w-28 text-sm" />{!vf && <><span className="text-gray-500 text-xs">Date:</span><input type="date" value={poD} onChange={e => setPoD(e.target.value)} className="bg-gray-800 border border-gray-700 text-white rounded px-2 py-1 text-sm" /></>}<span className="text-gray-500 text-xs">Buyer:</span><span className="text-white font-semibold">{stg.buyer || <span className="text-red-400">Set in ⚙️</span>}</span></div>}
 
-    {vm === "core" && <div className="overflow-x-auto rounded-xl border border-gray-800"><table className="w-full"><thead><tr className="bg-gray-900/80 text-xs text-gray-400 uppercase sticky top-0 z-20"><th className="py-3 px-2 w-8" /><th className="py-3 px-2 text-left">Core</th><th className="py-3 px-2 text-left">Vendor</th><th className="py-3 px-2 text-left">Title</th><TH tip="DSR" className="py-3 px-2 text-right">DSR</TH><TH tip="7D" className="py-3 px-2 text-right">7D</TH><th className="py-3 px-2 text-center">T</th><TH tip="DOC" className="py-3 px-2 text-right">DOC</TH><TH tip="All-In" className="py-3 px-2 text-right">All-In</TH><th className="py-3 px-2 text-right">MOQ</th><th className="py-3 px-2 text-center">S</th><th className="py-3 px-1 border-l-2 border-gray-600" /><TH tip="Seasonal Need" className="py-3 px-2 text-right">Need</TH><th className="py-3 px-2 text-right">Order</th><th className="py-3 px-2 text-right">Cost</th><TH tip="After DOC" className="py-3 px-2 text-right">After</TH><th className="py-3 px-2 w-14" /></tr></thead>
-      <tbody>{enr.map(c => <tr key={c.id} className={`border-b border-gray-800/50 hover:bg-gray-800/30 text-sm ${c.sCoverage?.urgent ? "bg-red-900/10" : ""}`}><td className="py-2 px-2"><Dot status={c.status} /></td><td className="py-2 px-2"><button onClick={() => goCore(c.id)} className="text-blue-400 font-mono text-xs hover:underline">{c.id}</button></td><td className="py-2 px-2 text-blue-300 text-xs truncate max-w-[100px] cursor-pointer hover:underline" onClick={() => goVendor(c.ven)}>{c.ven}</td><td className="py-2 px-2 text-gray-200 truncate max-w-[180px]">{c.ti}{c.sCoverage?.urgent && <span className="ml-1 text-red-400 text-xs font-bold">⚠OOS</span>}{c.invAnomaly && <span className="ml-1 text-amber-400 text-xs font-bold" title="Unusual inventory changes detected">⚠INV</span>}{c.rawPendingBundles && <span className="ml-1 text-cyan-400 text-xs font-bold" title="Has raw + bundles with low DOC. Process raw into bundles instead of buying.">⚙PROC</span>}</td><td className="py-2 px-2 text-right">{D1(c.dsr)}</td><td className="py-2 px-2 text-right">{D1(c.d7)}</td><td className="py-2 px-2 text-center">{c.d7 > c.dsr ? <span className="text-emerald-400">▲</span> : c.d7 < c.dsr ? <span className="text-red-400">▼</span> : "—"}</td><td className={`py-2 px-2 text-right font-semibold ${dc(c.doc, c.critDays, c.warnDays)}`}>{R(c.doc)}</td><td className="py-2 px-2 text-right">{R(c.allIn)}</td><td className="py-2 px-2 text-right text-gray-400 text-xs">{c.moq > 0 ? R(c.moq) : "—"}</td><td className="py-2 px-2 text-center">{c.seas && <span className="text-purple-400 text-xs font-bold">{c.seas.peak}</span>}</td><td className="py-2 px-1 border-l-2 border-gray-600" /><td className="py-2 px-2 text-right">{c.needQty > 0 ? (
-  c.moqInflated ? (
-    <span title={`Seasonal need: ${R(c.needQty)} · MOQ forces: ${R(c.orderQty)}`}>
-      <span className="text-gray-300">{R(c.needQty)}</span>
-      <span className="text-orange-400 text-xs ml-1">→{R(c.orderQty)}</span>
-    </span>
-  ) : <span className="text-gray-300">{R(c.needQty)}</span>
-) : "—"}</td><td className="py-2 px-2 text-right text-white font-semibold">{c.orderQty > 0 ? R(c.orderQty) : "—"}</td><td className="py-2 px-2 text-right text-amber-300">{c.needDollar > 0 ? $(c.needDollar) : "—"}</td><td className={`py-2 px-2 text-right ${c.orderQty > 0 ? dc(c.docAfter, c.critDays, c.warnDays) : "text-gray-500"}`}>{c.orderQty > 0 ? R(c.docAfter) : "—"}</td><td className="py-2 px-2 flex gap-1"><button onClick={() => openBreakdown(c)} className={`text-xs px-1 rounded ${c.sProfile?.hasHistory ? "text-purple-400" : "text-gray-600"}`}>📊</button><button onClick={() => goCore(c.id)} className="text-blue-400 text-xs px-1.5 py-0.5 bg-blue-400/10 rounded">V</button></td></tr>)}</tbody>
+    {vm === "core" && <div className="overflow-x-auto rounded-xl border border-gray-800"><table className="w-full"><thead><tr className="bg-gray-900/80 text-xs text-gray-400 uppercase sticky top-0 z-20"><th className="py-3 px-2 w-8" /><th className="py-3 px-2 text-left">Core</th><th className="py-3 px-2 text-left">Vendor</th><th className="py-3 px-2 text-left">Title</th><TH tip="DSR" className="py-3 px-2 text-right">DSR</TH><TH tip="7D" className="py-3 px-2 text-right">7D</TH><th className="py-3 px-2 text-center">T</th><TH tip="DOC" className="py-3 px-2 text-right">DOC</TH><TH tip="All-In" className="py-3 px-2 text-right">All-In</TH><th className="py-3 px-2 text-right">MOQ</th><th className="py-3 px-2 text-center">S</th><th className="py-3 px-1 border-l-2 border-gray-600" /><TH tip="Need (bundle-driven)" className="py-3 px-2 text-right">Need</TH><th className="py-3 px-2 text-right">Order</th><th className="py-3 px-2 text-right">Cost</th><TH tip="After DOC" className="py-3 px-2 text-right">After</TH><th className="py-3 px-2 w-14" /></tr></thead>
+      <tbody>{enr.map(c => <tr key={c.id} className={`border-b border-gray-800/50 hover:bg-gray-800/30 text-sm ${c.sCoverage?.urgent ? "bg-red-900/10" : ""}`}><td className="py-2 px-2"><Dot status={c.status} /></td><td className="py-2 px-2"><button onClick={() => goCore(c.id)} className="text-blue-400 font-mono text-xs hover:underline">{c.id}</button></td><td className="py-2 px-2 text-blue-300 text-xs truncate max-w-[100px] cursor-pointer hover:underline" onClick={() => goVendor(c.ven)}>{c.ven}</td><td className="py-2 px-2 text-gray-200 truncate max-w-[180px]">{c.ti}{c.sCoverage?.urgent && <span className="ml-1 text-red-400 text-xs font-bold">⚠OOS</span>}{c.invAnomaly && <span className="ml-1 text-amber-400 text-xs font-bold">⚠INV</span>}{c.rawPendingBundles && <span className="ml-1 text-cyan-400 text-xs font-bold" title="Has raw + bundles with low DOC">⚙PROC</span>}{c.bundlesAffected > 0 && <span className="ml-1 text-xs text-gray-500">({c.bundlesAffected}b)</span>}</td><td className="py-2 px-2 text-right">{D1(c.dsr)}</td><td className="py-2 px-2 text-right">{D1(c.d7)}</td><td className="py-2 px-2 text-center">{c.d7 > c.dsr ? <span className="text-emerald-400">▲</span> : c.d7 < c.dsr ? <span className="text-red-400">▼</span> : "—"}</td><td className={`py-2 px-2 text-right font-semibold ${dc(c.doc, c.critDays, c.warnDays)}`}>{R(c.doc)}</td><td className="py-2 px-2 text-right">{R(c.allIn)}</td><td className="py-2 px-2 text-right text-gray-400 text-xs">{c.moq > 0 ? R(c.moq) : "—"}</td><td className="py-2 px-2 text-center">{c.seas && <span className="text-purple-400 text-xs font-bold">{c.seas.peak}</span>}</td><td className="py-2 px-1 border-l-2 border-gray-600" /><td className="py-2 px-2 text-right">{c.needQty > 0 ? (
+        c.moqInflated ? (
+          <span title={`Real need: ${R(c.needQty)} · MOQ forces: ${R(c.orderQty)}`}>
+            <span className="text-gray-300">{R(c.needQty)}</span>
+            <span className="text-orange-400 text-xs ml-1">→{R(c.orderQty)}</span>
+          </span>
+        ) : <span className="text-gray-300">{R(c.needQty)}</span>
+      ) : "—"}</td><td className="py-2 px-2 text-right text-white font-semibold">{c.orderQty > 0 ? R(c.orderQty) : "—"}</td><td className="py-2 px-2 text-right text-amber-300">{c.needDollar > 0 ? $(c.needDollar) : "—"}</td><td className={`py-2 px-2 text-right ${c.orderQty > 0 ? dc(c.docAfter, c.critDays, c.warnDays) : "text-gray-500"}`}>{c.orderQty > 0 ? R(c.docAfter) : "—"}</td><td className="py-2 px-2 flex gap-1"><button onClick={() => openBreakdown(c)} className={`text-xs px-1 rounded ${c.sProfile?.hasHistory ? "text-purple-400" : "text-gray-600"}`}>📊</button><button onClick={() => goCore(c.id)} className="text-blue-400 text-xs px-1.5 py-0.5 bg-blue-400/10 rounded">V</button></td></tr>)}</tbody>
       <tfoot><tr className="bg-gray-900 border-t-2 border-gray-700 text-sm font-semibold"><td colSpan={4} className="py-3 px-2 text-gray-300">{enr.length}</td><td className="py-3 px-2 text-right text-white">{D1(tot.d)}</td><td colSpan={3} /><td className="py-3 px-2 text-right text-white">{R(tot.a)}</td><td colSpan={2} /><td className="border-l-2 border-gray-600" /><td className="py-3 px-2 text-right">{R(tot.n)}</td><td className="py-3 px-2 text-right text-white">{R(tot.o)}</td><td className="py-3 px-2 text-right text-amber-300">{$(tot.co)}</td><td colSpan={2} /></tr></tfoot>
     </table></div>}
 
@@ -545,13 +546,16 @@ const fillR = (cores, bundles, mode, vendorName) => {
       const poI = getPOI(grp.cores, vendorSub !== "cores" ? grp.bundles : []);
       const poT = poI.reduce((s, i) => s + i.qty * i.cost, 0);
       const poC = poI.reduce((s, i) => s + (v.vou === 'Cases' && i.isCoreItem ? Math.ceil(i.qty / (i.cp || 1)) : 0), 0);
-      const effectiveMoqD = v.moqDollar || (gO('_dmoq_' + v.name).dMoq ?? 0);
-      const meets = effectiveMoqD > 0 ? poT >= effectiveMoqD : true;
+      const meets = v.moqDollar > 0 ? poT >= v.moqDollar : true;
       const anyCol = Object.values(collapsed).some(Boolean);
       const vendorPO = autoPO(v.code);
       const moqGap = (v.moqDollar || 0) - poT;
       const pf = purchFreqMap[v.name];
-      const isAgl = aglMap[v.name] || false;
+      const vRec = vendorRecs[v.name];
+
+      // How many bundles would be bought as "bundle" mode vs "core" mode (for visibility)
+      const bundlesInBundleMode = vRec?.bundleItems?.length || 0;
+      const bundlesInCoreMode = (vRec?.bundleDetails || []).filter(bd => bd.buyMode === 'core' && bd.buyNeed > 0).length;
 
       return <div key={v.name} className="mb-5 border border-gray-800 rounded-xl overflow-hidden">
         <div className="bg-gray-900 px-4 py-3">
@@ -562,44 +566,27 @@ const fillR = (cores, bundles, mode, vendorName) => {
             {v.country && <span className="text-xs text-gray-500">{v.country}</span>}
             <span className="text-xs text-gray-400">LT:{v.lt}d</span>
             <span className="text-xs text-gray-400">Buf:{grp.cores[0]?.buf || 14}d</span>
-           <span className="text-xs text-gray-400">MOQ:{$(effectiveMoqD || v.moqDollar)}</span>
+            <span className="text-xs text-gray-400">MOQ:{$(v.moqDollar)}</span>
             <span className="text-xs text-gray-400">Tgt:{tg}d</span>
             <span className="text-xs text-gray-400">{v.payment}</span>
             {pf && pf.comment && <span className="text-xs text-amber-400">{pf.comment}</span>}
             {pf && <span className="text-xs text-gray-500">{pf.ordersPerYear}/yr · ×{pf.safetyMultiplier}</span>}
+            {(bundlesInBundleMode > 0 || bundlesInCoreMode > 0) && <span className="text-xs text-cyan-400" title="Recommender's buy-mode split per bundle (from 7f history)">
+              Mix: {bundlesInCoreMode} core · {bundlesInBundleMode} bundle
+            </span>}
             {(() => {
-  const totalExcessMoq = grp.cores.filter(c => c.moqInflated).reduce((s, c) => s + c.excessCostFromMoq, 0);
-  const countInflated = grp.cores.filter(c => c.moqInflated).length;
-  if (totalExcessMoq === 0) return null;
-  return <span className="text-xs text-orange-400" title="Sum of excess inventory $ forced by MOQ across cores in this vendor">
-    ⚠ MOQ excess: ${Math.round(totalExcessMoq).toLocaleString()} ({countInflated} cores)
-  </span>;
-})()}
-            {(() => {
-              const alerts = [];
-              grp.cores.forEach(c => {
-                const eq = coreEffQ(c);
-                if (eq <= 0) return;
-                const coreRecs = (data.receivingFull || []).filter(r => (r.core || "").trim().toLowerCase() === c.id.toLowerCase() && r.pcs > 0 && r.vendor === v.name);
-                if (coreRecs.length >= 2) {
-                  const minCore = Math.min(...coreRecs.map(r => r.pcs));
-                  if (eq < minCore) alerts.push({ id: c.id, qty: eq, min: minCore, type: "core" });
-                }
-              });
-              if (alerts.length === 0) return null;
-              return <div className="w-full mt-1">{alerts.map(a => <div key={a.id} className="text-xs text-amber-400">⚠ {a.id}: ordering {R(a.qty)} but lowest {a.type} purchase was {R(a.min)}</div>)}</div>;
+              const totalExcessMoq = grp.cores.filter(c => c.moqInflated).reduce((s, c) => s + c.excessCostFromMoq, 0);
+              const countInflated = grp.cores.filter(c => c.moqInflated).length;
+              if (totalExcessMoq === 0) return null;
+              return <span className="text-xs text-orange-400" title="Sum of excess inventory $ forced by MOQ across cores in this vendor">
+                ⚠ MOQ excess: ${Math.round(totalExcessMoq).toLocaleString()} ({countInflated} cores)
+              </span>;
             })()}
-<span className="flex items-center gap-1 text-xs text-gray-400">C.MOQ:<NumInput value={gO('_cmoq_' + v.name).cMoq ?? 0} onChange={val => setF('_cmoq_' + v.name, 'cMoq', val)} placeholder="0" className="bg-gray-800 border border-gray-600 text-white rounded px-1 py-0.5 w-14 text-center text-xs" /></span>
-            <span className="flex items-center gap-1 text-xs text-gray-400">$MOQ:<NumInput value={gO('_dmoq_' + v.name).dMoq ?? 0} onChange={val => setF('_dmoq_' + v.name, 'dMoq', val)} placeholder="0" className="bg-gray-800 border border-gray-600 text-white rounded px-1 py-0.5 w-16 text-center text-xs" /></span>
-            {(vendorSub === "bundles" || vendorSub === "mix") && <>
-              <span className="flex items-center gap-1 text-xs text-gray-400">B.MOQ:<NumInput value={gBMoq('_bmoq_' + v.name)} onChange={val => setF('_bmoq_' + v.name, 'bMoq', val)} placeholder="0" className="bg-gray-800 border border-gray-600 text-white rounded px-1 py-0.5 w-14 text-center text-xs" /></span>
-              <button onClick={() => setAglMap(p => ({ ...p, [v.name]: !p[v.name] }))} className={`text-xs px-2 py-0.5 rounded font-medium ${isAgl ? "bg-cyan-600 text-white" : "bg-gray-700 text-gray-400"}`} title="AGL: use 80d lead time for bundles">AGL{isAgl ? " ✓" : ""}</button>
-            </>}
             {poI.length === 0 ? <span className="ml-auto text-xs text-gray-400 bg-gray-700 px-2 py-0.5 rounded">—</span> : <span className={`ml-auto text-xs font-semibold px-2 py-0.5 rounded ${meets ? "text-emerald-400 bg-emerald-400/10" : "text-red-400 bg-red-400/10"}`}>{meets ? "✓" : "!"} {$(poT)}{poC > 0 ? " / " + poC + "cs" : ""}</span>}
           </div>
           <div className="flex flex-wrap gap-2 items-center">
             <button onClick={() => fillR(grp.cores, grp.bundles, vendorSub, v.name)} className={`text-xs px-2.5 py-1 rounded ${data._coreInv?.length ? "bg-blue-600/80 text-white" : "bg-yellow-600 text-white animate-pulse"}`}>{data._coreInv?.length ? "Fill Rec" : "Fill Rec ⏳"}</button>
-            <button onClick={() => doFillMOQ(grp.cores, grp.bundles, v.moqDollar || (gO('_dmoq_' + v.name).dMoq ?? 0))} disabled={!v.moqDollar || poT >= v.moqDollar || poI.length === 0} className={`text-xs px-2.5 py-1 rounded font-medium ${v.moqDollar && poT < v.moqDollar && poI.length > 0 ? "bg-orange-600 text-white" : "bg-gray-700 text-gray-500 cursor-not-allowed"}`}>Fill MOQ{moqGap > 0 && poI.length > 0 ? ` (+${$(moqGap)})` : ""}</button>
+            <button onClick={() => doFillMOQ(grp.cores, grp.bundles, v.moqDollar || 0)} disabled={!v.moqDollar || poT >= v.moqDollar || poI.length === 0} className={`text-xs px-2.5 py-1 rounded font-medium ${v.moqDollar && poT < v.moqDollar && poI.length > 0 ? "bg-orange-600 text-white" : "bg-gray-700 text-gray-500 cursor-not-allowed"}`}>Fill MOQ{moqGap > 0 && poI.length > 0 ? ` (+${$(moqGap)})` : ""}</button>
             <button onClick={() => clrV(grp.cores, grp.bundles)} className="text-xs bg-gray-700 text-gray-300 px-2.5 py-1 rounded">Clear</button>
             <button onClick={() => setDismissed({})} className="text-xs bg-gray-700 text-gray-300 px-2 py-1 rounded">Show All</button>
             <div className="ml-auto flex gap-2">
@@ -614,11 +601,20 @@ const fillR = (cores, bundles, mode, vendorName) => {
         <div className="overflow-auto max-h-[70vh] max-w-[calc(100vw-2rem)]"><table className="w-full text-xs"><thead><VTH isCol={anyCol} /></thead><tbody>
           {vendorSub === "bundles" ? <>{grp.bundles.map(b => <BundleRow key={b.j} b={b} />)}{grp.bundles.length === 0 && <tr><td colSpan={40} className="py-4 text-center text-gray-500">No bundles</td></tr>}</>
             : vendorSub === "mix" ? <>{grp.cores.map(c => {
-            const cBs = (data.bundles || []).filter(b => { if (b.core1 !== c.id && b.core2 !== c.id && b.core3 !== c.id) return false; if (bA === "yes" && b.active !== "Yes") return false; if (bA === "no" && b.active === "Yes") return false; if (bI === "blank" && !!b.ignoreUntil) return false; if (bI === "set" && !b.ignoreUntil) return false; return true }).map(b => ({ ...b, fee: feMap[b.j] })).sort((a, b) => (a.fibDoc || 0) - (b.fibDoc || 0));
-            const orderedBs = nf === "need" ? cBs.filter(b => hasBundleOrd(b)) : cBs;
-            if (nf === "need" && !hasCoreOrd(c) && orderedBs.length === 0) return null;
-            return <Fragment key={c.id}><CoreRow c={c} />{!dismissed[c.id] && orderedBs.map(b => <BundleRow key={b.j} b={b} />)}</Fragment>;
-          })}</>
+              const cBs = (data.bundles || []).filter(b => {
+                let uses = false;
+                for (let i = 1; i <= 20; i++) if (b['core' + i] === c.id) { uses = true; break; }
+                if (!uses) return false;
+                if (bA === "yes" && b.active !== "Yes") return false;
+                if (bA === "no" && b.active === "Yes") return false;
+                if (bI === "blank" && !!b.ignoreUntil) return false;
+                if (bI === "set" && !b.ignoreUntil) return false;
+                return true;
+              }).map(b => ({ ...b, fee: feMap[b.j] })).sort((a, b) => (a.fibDoc || 0) - (b.fibDoc || 0));
+              const orderedBs = nf === "need" ? cBs.filter(b => hasBundleOrd(b)) : cBs;
+              if (nf === "need" && !hasCoreOrd(c) && orderedBs.length === 0) return null;
+              return <Fragment key={c.id}><CoreRow c={c} />{!dismissed[c.id] && orderedBs.map(b => <BundleRow key={b.j} b={b} />)}</Fragment>;
+            })}</>
               : <>{grp.cores.map(c => <CoreRow key={c.id} c={c} />)}</>}
         </tbody></table></div>
       </div>;
