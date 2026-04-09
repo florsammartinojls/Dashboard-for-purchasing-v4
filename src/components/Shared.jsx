@@ -1,3 +1,4 @@
+import { dotCls, MN } from "../lib/utils";
 import { createPortal } from "react-dom";
 import React, { useState, useEffect, useRef, createContext, useContext } from "react";
 import { dotCls } from "../lib/utils";
@@ -368,7 +369,7 @@ export function CalcBreakdown({ data: d, onClose }) {
 
 
 // === CALC BREAKDOWN V2 (consistent with recommender v2 — no legacy) ===
-export function CalcBreakdownV2({ core, vendor, vendorRec, stg, onClose }) {
+export function CalcBreakdownV2({ core, vendor, vendorRec, profile, stg, onClose }) {
   if (!core || !vendor || !vendorRec) return null;
 
   const fmtN = (n) => (n == null || isNaN(n)) ? "—" : Math.round(n).toLocaleString("en-US");
@@ -440,6 +441,49 @@ export function CalcBreakdownV2({ core, vendor, vendorRec, stg, onClose }) {
           )}
         </div>
 
+{/* Seasonal Shape Heatmap */}
+        {profile?.hasHistory && Array.isArray(profile.lastYearShape) && (
+          <div className="bg-gray-800/40 rounded-lg p-3 mb-4">
+            <div className="flex items-center justify-between mb-2">
+              <div>
+                <h3 className="text-sm font-semibold text-white">Core seasonal shape (last year)</h3>
+                <p className="text-[10px] text-gray-500">Normalized monthly demand. 1.0x = average. Green = above avg, red = below.</p>
+              </div>
+              {profile.cv != null && (
+                <div className="text-right">
+                  <div className="text-[9px] text-gray-500 uppercase">CV</div>
+                  <div className={`text-xs font-bold ${profile.cv > 0.35 ? "text-purple-400" : "text-gray-400"}`}>
+                    {profile.cv.toFixed(2)} <span className="text-[9px] font-normal">{profile.cv > 0.35 ? "seasonal" : "flat"}</span>
+                  </div>
+                </div>
+              )}
+            </div>
+            <div className="grid grid-cols-12 gap-1 text-center">
+              {profile.lastYearShape.map((shape, i) => {
+                const s = Number(shape) || 1;
+                const bg = s > 1.3 ? "bg-emerald-500/40 text-emerald-100 border-emerald-400/40"
+                         : s > 1.1 ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/20"
+                         : s < 0.7 ? "bg-red-500/40 text-red-100 border-red-400/40"
+                         : s < 0.9 ? "bg-red-500/20 text-red-300 border-red-500/20"
+                         : "bg-gray-700/60 text-gray-300 border-gray-600/40";
+                const isCurMonth = i === new Date().getMonth();
+                return (
+                  <div key={i} className={`rounded border py-1 ${bg} ${isCurMonth ? "ring-2 ring-blue-400" : ""}`} title={isCurMonth ? "Current month" : ""}>
+                    <div className="text-[9px] font-semibold opacity-80">{MN[i].substring(0, 3)}</div>
+                    <div className="text-xs font-bold">{s.toFixed(2)}x</div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+        {profile && !profile.hasHistory && (
+          <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-2 mb-4 text-[11px] text-amber-300">
+            ⚠ No seasonal history for this core — using flat shape (all months = 1.0x)
+          </div>
+        )}
+
+        
         {/* Step 1: Core raw pool */}
         <div className="bg-gray-800/50 rounded-lg p-4 mb-4">
           <h3 className="text-sm font-semibold text-white mb-2">Step 1: Core raw pool (waterfall input)</h3>
