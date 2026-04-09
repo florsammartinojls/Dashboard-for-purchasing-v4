@@ -264,7 +264,7 @@ export default function CoreTab({ data, stg, hist, daily, coreId, onBack, goBund
       receivingFull: data.receivingFull || [],
       replenMap: replenMapByJ,
       missingMap: missingMapByJ,
-      priceCompFull: data.priceCompFull || [],
+      priceCompFull: (data.priceCompFull?.length ? data.priceCompFull : data.priceComp) || [],
       settings: stg,
       purchFreqSafety: pf?.safetyMultiplier || 1.0,
     });
