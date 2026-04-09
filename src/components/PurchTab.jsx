@@ -144,8 +144,8 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
     return m;
   }, [data.vendors, data.receivingFull]);
 
-  // === V2 RECOMMENDER — one pass for all vendors ===
-const vendorRecs = useMemo(() => {
+// === V2 RECOMMENDER — one pass for all vendors ===
+  const vendorRecs = useMemo(() => {
     if (!data.vendors?.length) return {};
     return batchVendorRecommendations({
       vendors: data.vendors,
@@ -161,6 +161,20 @@ const vendorRecs = useMemo(() => {
     });
   }, [data.vendors, data.cores, data.bundles, data._bundleSales, data.receivingFull, data.priceCompFull, replenMap, missingMap, stg, purchFreqMap]);
 
+  // Quick lookup: "what's the real unit cost this vendor charges for this item?"
+  // Tries the recommender's coreItems/bundleItems first (already computed from 7g),
+  // then falls back to whatever fallback the caller provides (usually core.cost or aicogs).
+  const getVendorPrice = useCallback((vendorName, itemId, fallback) => {
+    const rec = vendorRecs[vendorName];
+    if (rec) {
+      const fromCore = rec.coreItems?.find(i => i.id === itemId);
+      if (fromCore?.pricePerPiece > 0) return fromCore.pricePerPiece;
+      const fromBundle = rec.bundleItems?.find(i => i.id === itemId);
+      if (fromBundle?.pricePerPiece > 0) return fromBundle.pricePerPiece;
+    }
+    return fallback || 0;
+  }, [vendorRecs]);
+
   // Flat map: bundleId -> bundleDetails from whichever vendor rec contains it.
   // Used by CoreRow and BundleRow to show consistent effective DOC after waterfall.
   const bundleEffMap = useMemo(() => {
@@ -173,6 +187,8 @@ const vendorRecs = useMemo(() => {
     }
     return m;
   }, [vendorRecs]);
+
+    
 
   // === ENRICHED CORES — status/DOC from physical data, need/order/cost from recommender ===
   const spikeThr = stg.spikeThreshold || 1.25;
@@ -298,17 +314,21 @@ const vendorRecs = useMemo(() => {
     return Object.values(g).filter(grp => vf || showIgnored || !isIgnored(grp.v.name)).sort((a, b) => b.cores.filter(c => c.status === "critical").length - a.cores.filter(c => c.status === "critical").length);
   }, [enr, vm, vMap, venBundles, isIgnored, showIgnored]);
 
-  const getPOI = (cores, bundles) => {
+const getPOI = (cores, bundles) => {
     const items = [];
     cores.filter(c => hasCoreOrd(c)).forEach(c => {
       const cogpOv = gCogP(c.id);
-      items.push({ id: c.id, ti: c.ti, vsku: c.vsku, qty: coreEffQ(c), cost: cogpOv > 0 ? cogpOv : c.cost, cp: c.casePack || 1, inbS: gInbS(c.id), isCoreItem: true });
+      const vendorPrice = getVendorPrice(c.ven, c.id, c.cost);
+      const unitCost = cogpOv > 0 ? cogpOv : vendorPrice;
+      items.push({ id: c.id, ti: c.ti, vsku: c.vsku, qty: coreEffQ(c), cost: unitCost, cp: c.casePack || 1, inbS: gInbS(c.id), isCoreItem: true });
     });
     (bundles || []).filter(b => hasBundleOrd(b)).forEach(b => {
       const f = feMap[b.j];
       const cogpOv = gCogP(b.j);
-      const baseCost = f?.aicogs || b.aicogs || 0;
-      items.push({ id: b.j, ti: b.t, vsku: b.asin || b.bundleCode, qty: bundleEffQ(b), cost: cogpOv > 0 ? cogpOv : baseCost, cp: 1, inbS: gInbS(b.j), isCoreItem: false });
+      const vendorName = (b.vendors || "").split(',').map(s => s.trim()).find(v => v) || "";
+      const vendorPrice = getVendorPrice(vendorName, b.j, f?.aicogs || b.aicogs || 0);
+      const unitCost = cogpOv > 0 ? cogpOv : vendorPrice;
+      items.push({ id: b.j, ti: b.t, vsku: b.asin || b.bundleCode, qty: bundleEffQ(b), cost: unitCost, cp: 1, inbS: gInbS(b.j), isCoreItem: false });
     });
     return items;
   };
@@ -355,36 +375,43 @@ const vendorRecs = useMemo(() => {
       }
     }
     setOv(u);
-    setToast(`Fill Rec: ${rec.items.length} items, ${$(rec.totalCost)}`);
+   setToast(`Filled ${rec.items.length} items`);
   };
 
   // === FILL TO MOQ — incrementally add cases to items until vendor MOQ is met ===
   // Strategy: keep adding a casepack to the item with the lowest projected DOC.
   const doFillMOQ = (grpCores, grpBundles, vendorMOQDollar) => {
     // Current total from user's edited state
+    // Current total from user's edited state
     let currentTotal = 0;
     grpCores.forEach(c => {
       if (!hasCoreOrd(c)) return;
       const cogpOv = gCogP(c.id);
-      currentTotal += coreEffQ(c) * (cogpOv > 0 ? cogpOv : c.cost);
+      const vendorPrice = getVendorPrice(c.ven, c.id, c.cost);
+      currentTotal += coreEffQ(c) * (cogpOv > 0 ? cogpOv : vendorPrice);
     });
     if (vendorSub !== "cores") (grpBundles || []).filter(b => hasBundleOrd(b)).forEach(b => {
       const f = feMap[b.j];
       const cogpOv = gCogP(b.j);
-      const baseCost = f?.aicogs || 0;
-      currentTotal += bundleEffQ(b) * (cogpOv > 0 ? cogpOv : baseCost);
+      const vendorName = (b.vendors || "").split(',').map(s => s.trim()).find(v => v) || "";
+      const vendorPrice = getVendorPrice(vendorName, b.j, f?.aicogs || 0);
+      currentTotal += bundleEffQ(b) * (cogpOv > 0 ? cogpOv : vendorPrice);
     });
     if (currentTotal >= vendorMOQDollar) { setToast("Already at/above MOQ"); return; }
 
-    // Build a list of addable items (only those already being ordered)
-    const addable = grpCores.filter(c => hasCoreOrd(c) && c.cost > 0 && c.dsr > 0).map(c => ({
-      id: c.id,
-      isCore: true,
-      casePack: c.casePack || 1,
-      cost: gCogP(c.id) > 0 ? gCogP(c.id) : c.cost,
-      dsr: c.dsr,
-      ref: c,
-    }));
+   // Build a list of addable items (only those already being ordered)
+    const addable = grpCores.filter(c => hasCoreOrd(c) && c.cost > 0 && c.dsr > 0).map(c => {
+      const cogpOv = gCogP(c.id);
+      const vendorPrice = getVendorPrice(c.ven, c.id, c.cost);
+      return {
+        id: c.id,
+        isCore: true,
+        casePack: c.casePack || 1,
+        cost: cogpOv > 0 ? cogpOv : vendorPrice,
+        dsr: c.dsr,
+        ref: c,
+      };
+    });
 
     if (addable.length === 0) { setToast("No orderable items — click Fill Rec first"); return; }
 
@@ -428,7 +455,9 @@ const openBreakdown = useCallback((c) => {
     if (dismissed[c.id]) return <tr className="border-t border-gray-800/20 bg-gray-900/30 text-xs opacity-40"><td className="py-1 px-1" colSpan={2}><Dot status={c.status} /></td><td className="py-1 px-1 text-gray-500 font-mono">{c.id}</td><td className="py-1 px-1 text-gray-600 truncate max-w-[110px]">{c.ti}</td><td colSpan={20} className="py-1 px-1 text-right"><button onClick={() => togDismiss(c.id)} className="text-xs text-gray-500 hover:text-white px-1">+</button></td></tr>;
     const eq = coreEffQ(c);
     const cogpOverride = gCogP(c.id);
-    const cost = eq * (cogpOverride > 0 ? cogpOverride : c.cost);
+    const vendorPrice = getVendorPrice(c.ven, c.id, c.cost);
+    const unitCost = cogpOverride > 0 ? cogpOverride : vendorPrice;
+    const cost = eq * unitCost;
 
     // Effective After DOC:
     // Sum current bundle availability (from waterfall) + user's edited bundle orders
@@ -502,7 +531,14 @@ const openBreakdown = useCallback((c) => {
     const f = b.fee || feMap[b.j];
     const eq = bundleEffQ(b);
     const cogpOverride = gCogP(b.j);
-    const cost = cogpOverride > 0 ? (eq * cogpOverride) : (f ? (eq * (f.aicogs || 0)) : 0);
+    // For bundles: vendor price comes from the recommender's bundleItems
+    // (which sum the per-core costs × qty). If the recommender doesn't have
+    // this bundle in bundleItems (not in bundle mode, or not needing buy),
+    // fall back to the fee sheet's aicogs.
+    const vendorName = (b.vendors || "").split(',').map(s => s.trim()).find(v => v) || "";
+    const vendorPrice = getVendorPrice(vendorName, b.j, f?.aicogs || 0);
+    const unitCost = cogpOverride > 0 ? cogpOverride : vendorPrice;
+    const cost = eq * unitCost;
     const aged = agedMap[b.j];
     const kill = killMap[b.j];
     const inb7f = missingMap[b.j] || 0;
