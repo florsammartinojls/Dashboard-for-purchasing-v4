@@ -272,3 +272,222 @@ export function CalcBreakdown({ data: d, onClose }) {
     </div>
   </div>;
 }
+
+
+// === CALC BREAKDOWN V2 (consistent with recommender v2 — no legacy) ===
+export function CalcBreakdownV2({ core, vendor, vendorRec, stg, onClose }) {
+  if (!core || !vendor || !vendorRec) return null;
+
+  const fmtN = (n) => (n == null || isNaN(n)) ? "—" : Math.round(n).toLocaleString("en-US");
+  const fmt$ = (n) => (n == null || isNaN(n)) ? "—" : "$" + Math.round(n).toLocaleString("en-US");
+  const fmt1 = (n) => (n == null || isNaN(n)) ? "—" : Number(n).toFixed(1);
+
+  // Bundles that depend on this core
+  const bundlesForThisCore = (vendorRec.bundleDetails || [])
+    .filter(bd => (bd.coresUsed || []).some(cu => cu.coreId === core.id))
+    .map(bd => {
+      const cu = (bd.coresUsed || []).find(c => c.coreId === core.id);
+      const qtyPerBundle = cu?.qty || 1;
+      const initialDOC = bd.effectiveDSR > 0 ? bd.assignedInv / bd.effectiveDSR : null;
+      const rawUsedFromThisCore = (bd.rawAssignedFromWaterfall || 0) * qtyPerBundle;
+      return { ...bd, qtyPerBundle, initialDOC, rawUsedFromThisCore };
+    });
+
+  const initialRaw = Number(core.raw || 0);
+  const consumedFromWaterfall = bundlesForThisCore.reduce((s, b) => s + b.rawUsedFromThisCore, 0);
+  const remainingAfterWaterfall = initialRaw - consumedFromWaterfall;
+
+  const coreDetail = (vendorRec.coreDetails || []).find(cd => cd.coreId === core.id);
+  const needPieces = coreDetail?.needPieces || 0;
+  const finalQty = coreDetail?.finalQty || 0;
+  const cost = coreDetail?.cost || 0;
+  const moqInflated = coreDetail?.moqInflated || false;
+  const moqRatio = coreDetail?.moqInflationRatio || 1;
+  const excessFromMoq = coreDetail?.excessFromMoq || 0;
+  const excessCostFromMoq = coreDetail?.excessCostFromMoq || 0;
+
+  const coreModeBundles = bundlesForThisCore.filter(b => b.buyMode === 'core' && b.buyNeed > 0);
+  const bundleModeBundles = bundlesForThisCore.filter(b => b.buyMode === 'bundle' && b.buyNeed > 0);
+
+  return (
+    <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center overflow-auto p-4" onClick={onClose}>
+      <div className="bg-gray-900 border border-gray-700 rounded-xl p-5 w-full max-w-4xl max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+        <div className="flex justify-between items-start mb-3">
+          <div>
+            <h2 className="text-lg font-bold text-white">{core.id} — Why buy?</h2>
+            <p className="text-gray-400 text-sm">{core.ti} · {vendor.name} · ${Number(core.cost || 0).toFixed(3)}/pc · LT {vendor.lt}d · Target DOC {vendorRec.targetDoc}d</p>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-white text-xl">✕</button>
+        </div>
+
+        {/* Summary */}
+        <div className={`rounded-lg p-3 mb-4 ${needPieces > 0 ? "bg-blue-500/10 border border-blue-500/30" : "bg-gray-800/60"}`}>
+          <div className="grid grid-cols-4 gap-3 text-center">
+            <div>
+              <div className="text-gray-500 text-[10px] uppercase">Real need</div>
+              <div className="text-white font-bold text-xl">{fmtN(needPieces)}</div>
+            </div>
+            <div>
+              <div className="text-gray-500 text-[10px] uppercase">Order (w/ MOQ)</div>
+              <div className={`font-bold text-xl ${moqInflated ? "text-orange-300" : "text-white"}`}>{fmtN(finalQty)}</div>
+            </div>
+            <div>
+              <div className="text-gray-500 text-[10px] uppercase">Cost</div>
+              <div className="text-amber-300 font-bold text-xl">{fmt$(cost)}</div>
+            </div>
+            <div>
+              <div className="text-gray-500 text-[10px] uppercase">Bundles involved</div>
+              <div className="text-white font-bold text-xl">{bundlesForThisCore.length}</div>
+            </div>
+          </div>
+          {moqInflated && (
+            <div className="mt-2 pt-2 border-t border-gray-700 text-xs text-orange-300">
+              ⚠ MOQ inflation: {Math.round(moqRatio * 100)}% of real need · excess: {fmtN(excessFromMoq)} pcs ({fmt$(excessCostFromMoq)})
+            </div>
+          )}
+        </div>
+
+        {/* Step 1: Core raw pool */}
+        <div className="bg-gray-800/50 rounded-lg p-4 mb-4">
+          <h3 className="text-sm font-semibold text-white mb-2">Step 1: Core raw pool (waterfall input)</h3>
+          <p className="text-gray-400 text-xs mb-3">
+            The recommender takes this core's raw material and distributes it across the bundles that depend on it (urgency first, then leveling). Whatever demand is still uncovered after that becomes the "buy" at Step 3.
+          </p>
+          <div className="grid grid-cols-3 gap-3 text-center">
+            <div className="bg-gray-900 rounded p-2">
+              <div className="text-gray-500 text-[10px] uppercase">Initial raw</div>
+              <div className="text-white font-bold">{fmtN(initialRaw)}</div>
+            </div>
+            <div className="bg-gray-900 rounded p-2">
+              <div className="text-gray-500 text-[10px] uppercase">Used by waterfall</div>
+              <div className="text-cyan-300 font-bold">− {fmtN(consumedFromWaterfall)}</div>
+            </div>
+            <div className="bg-gray-900 rounded p-2">
+              <div className="text-gray-500 text-[10px] uppercase">Remaining (unused)</div>
+              <div className={`font-bold ${remainingAfterWaterfall > 0 ? "text-emerald-400" : "text-gray-500"}`}>{fmtN(remainingAfterWaterfall)}</div>
+            </div>
+          </div>
+          <p className="text-[10px] text-gray-500 mt-2">
+            Used = Σ (raw assigned to bundle × qty per bundle). "Remaining" is what's left in the pool after reaching the leveling target — it doesn't need to be bought because it's already in stock.
+          </p>
+        </div>
+
+        {/* Step 2: Bundles depending on this core */}
+        <div className="bg-gray-800/50 rounded-lg p-4 mb-4">
+          <h3 className="text-sm font-semibold text-white mb-2">Step 2: Bundles depending on this core ({bundlesForThisCore.length})</h3>
+          <p className="text-gray-400 text-xs mb-2">
+            DOC₀ = before waterfall (only assigned bundle inventory). DOC₁ = after waterfall (includes raw distributed in bundle units). Buy = what's still short of the coverage demand.
+          </p>
+          {bundlesForThisCore.length === 0 ? (
+            <p className="text-gray-500 text-xs">No active bundles depend on this core.</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="text-gray-500 uppercase border-b border-gray-700">
+                    <th className="py-1.5 text-left">Bundle</th>
+                    <th className="py-1.5 text-right" title="Effective DSR (spike-adjusted)">Eff DSR</th>
+                    <th className="py-1.5 text-right" title="Qty of this core per bundle unit">Qty</th>
+                    <th className="py-1.5 text-right" title="Assigned bundle inventory (not fungible)">Inv</th>
+                    <th className="py-1.5 text-right" title="DOC using only assigned inv">DOC₀</th>
+                    <th className="py-1.5 text-right" title="Raw added by waterfall (in bundle units)">+Raw</th>
+                    <th className="py-1.5 text-right" title="DOC after waterfall">DOC₁</th>
+                    <th className="py-1.5 text-right" title="Total coverage demand for target window">Demand</th>
+                    <th className="py-1.5 text-right" title="Still needs buying (in bundle units)">Buy</th>
+                    <th className="py-1.5 text-center">Mode</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {bundlesForThisCore
+                    .slice()
+                    .sort((a, b) => (a.currentCoverDOC || 0) - (b.currentCoverDOC || 0))
+                    .map(b => {
+                      const docBefore = b.initialDOC;
+                      const docAfter = b.currentCoverDOC;
+                      const docColor = docAfter <= 30 ? "text-red-400" : docAfter <= 60 ? "text-amber-400" : "text-emerald-400";
+                      return (
+                        <tr key={b.bundleId} className={`border-t border-gray-800/40 ${b.urgent ? "bg-red-900/10" : ""}`}>
+                          <td className="py-1.5 text-blue-300 font-mono">
+                            {b.bundleId}
+                            {b.urgent && <span className="ml-1 text-red-400 text-[9px]" title="Will stockout before LT">⚠</span>}
+                          </td>
+                          <td className="py-1.5 text-right text-gray-300">{fmt1(b.effectiveDSR)}</td>
+                          <td className="py-1.5 text-right text-gray-500">×{b.qtyPerBundle}</td>
+                          <td className="py-1.5 text-right text-gray-300">{fmtN(b.assignedInv)}</td>
+                          <td className="py-1.5 text-right text-gray-400">{docBefore != null ? fmtN(docBefore) : "—"}</td>
+                          <td className="py-1.5 text-right text-cyan-300">{b.rawAssignedFromWaterfall > 0 ? "+" + fmtN(b.rawAssignedFromWaterfall) : "—"}</td>
+                          <td className={`py-1.5 text-right font-semibold ${docColor}`}>{fmtN(docAfter)}</td>
+                          <td className="py-1.5 text-right text-gray-300">{fmtN(b.coverageDemand)}</td>
+                          <td className={`py-1.5 text-right font-semibold ${b.buyNeed > 0 ? "text-amber-300" : "text-gray-600"}`}>{b.buyNeed > 0 ? fmtN(b.buyNeed) : "—"}</td>
+                          <td className={`py-1.5 text-center text-[10px] font-semibold ${b.buyMode === 'bundle' ? "text-cyan-400" : "text-purple-400"}`}>{b.buyMode}</td>
+                        </tr>
+                      );
+                    })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+
+        {/* Step 3: Aggregate to core */}
+        <div className="bg-gray-800/50 rounded-lg p-4 mb-4">
+          <h3 className="text-sm font-semibold text-white mb-2">Step 3: Aggregate to core need</h3>
+          <p className="text-gray-400 text-xs mb-3">
+            Only bundles in <span className="text-purple-400 font-semibold">core mode</span> contribute to this core's raw need. Bundle-mode bundles are bought pre-assembled and don't draw from this core's pool.
+          </p>
+          {coreModeBundles.length > 0 ? (
+            <div className="space-y-1 text-xs">
+              {coreModeBundles.map(b => (
+                <div key={b.bundleId} className="flex items-center gap-2 bg-gray-900/50 rounded px-2 py-1">
+                  <span className="text-blue-300 font-mono min-w-[80px]">{b.bundleId}</span>
+                  <span className="text-gray-400">buy {fmtN(b.buyNeed)} × {b.qtyPerBundle} pc/bundle =</span>
+                  <span className="text-white font-semibold ml-auto">{fmtN(b.buyNeed * b.qtyPerBundle)} pcs</span>
+                </div>
+              ))}
+              <div className="flex items-center gap-2 border-t border-gray-700 pt-2 mt-2">
+                <span className="text-gray-400 text-xs">Total raw need for this core</span>
+                <span className="text-white font-bold ml-auto">{fmtN(needPieces)} pcs</span>
+              </div>
+            </div>
+          ) : (
+            <p className="text-gray-500 text-xs">No core-mode bundles need this core right now.</p>
+          )}
+          {bundleModeBundles.length > 0 && (
+            <p className="text-[10px] text-cyan-400 mt-2">
+              + {bundleModeBundles.length} bundle(s) in bundle mode ({bundleModeBundles.map(b => b.bundleId).join(", ")}) — bought as finished bundles, not drawing from this core.
+            </p>
+          )}
+        </div>
+
+        {/* Step 4: MOQ & casepack */}
+        <div className={`rounded-lg p-4 ${moqInflated ? "bg-orange-500/10 border border-orange-500/30" : "bg-gray-800/50"}`}>
+          <h3 className="text-sm font-semibold text-white mb-2">Step 4: Apply MOQ & casepack</h3>
+          <div className="grid grid-cols-4 gap-3 text-center text-xs">
+            <div>
+              <div className="text-gray-500 text-[10px] uppercase">Raw need</div>
+              <div className="text-white font-bold text-base">{fmtN(needPieces)}</div>
+            </div>
+            <div>
+              <div className="text-gray-500 text-[10px] uppercase">MOQ</div>
+              <div className="text-gray-300 font-bold text-base">{fmtN(core.moq || 0)}</div>
+            </div>
+            <div>
+              <div className="text-gray-500 text-[10px] uppercase">Casepack</div>
+              <div className="text-gray-300 font-bold text-base">{fmtN(core.casePack || 1)}</div>
+            </div>
+            <div>
+              <div className="text-gray-500 text-[10px] uppercase">Final order</div>
+              <div className={`font-bold text-base ${moqInflated ? "text-orange-300" : "text-emerald-400"}`}>{fmtN(finalQty)}</div>
+            </div>
+          </div>
+          {moqInflated && (
+            <div className="mt-3 pt-3 border-t border-orange-500/30 text-xs text-orange-200">
+              ⚠ MOQ/casepack forces buying {Math.round(moqRatio * 100)}% of real need.
+              Excess inventory: <span className="font-bold">{fmtN(excessFromMoq)}</span> pcs · Excess cost: <span className="font-bold">{fmt$(excessCostFromMoq)}</span>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
