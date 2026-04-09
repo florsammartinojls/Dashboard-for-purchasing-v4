@@ -31,7 +31,17 @@ import { calcBundleSeasonalProfile, DEFAULT_PROFILE } from './seasonal.js';
 // Here we use matPrice / pcs, NOT cpp (cpp includes inbound + tariffs).
 //
 // If no row exists for (vendor, core), returns null so the caller can fallback.
+let __rec_debug_printed = false;
 function getVendorCoreUnitCost(coreId, vendorName, priceCompFull) {
+  if (!__rec_debug_printed) {
+    console.log('[recommender] priceCompFull received:', {
+      isArray: Array.isArray(priceCompFull),
+      length: priceCompFull?.length || 0,
+      sampleRow: priceCompFull?.[0] || null,
+      sampleKeys: priceCompFull?.[0] ? Object.keys(priceCompFull[0]) : null,
+    });
+    __rec_debug_printed = true;
+  }
   if (!Array.isArray(priceCompFull) || !coreId || !vendorName) return null;
   const cid = coreId.toLowerCase().trim();
   const vn = vendorName.toLowerCase().trim();
@@ -46,8 +56,13 @@ function getVendorCoreUnitCost(coreId, vendorName, priceCompFull) {
     // Prefer the most recent by date
     if (!best || (r.date || '') > (best.date || '')) best = r;
   }
-  if (!best) return null;
-  return Number(best.matPrice) / Number(best.pcs);
+  if (!best) {
+    console.log('[recommender] NO history for', coreId, 'at', vendorName);
+    return null;
+  }
+  const unit = Number(best.matPrice) / Number(best.pcs);
+  console.log('[recommender] found', coreId, '@', vendorName, '→ $', unit.toFixed(4), '/pc (from', best.date, ')');
+  return unit;
 }
 
 // ────────────────────────────────────────────────────────────
