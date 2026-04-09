@@ -1,3 +1,4 @@
+import { createPortal } from "react-dom";
 import React, { useState, useEffect, useRef, createContext, useContext } from "react";
 import { dotCls } from "../lib/utils";
 
@@ -138,18 +139,70 @@ function fmtDateUS(s) {
   if (!d) return s || "";
   return (d.getMonth() + 1).toString().padStart(2, '0') + '/' + d.getDate().toString().padStart(2, '0') + '/' + d.getFullYear();
 }
+
+
 export function WorkflowChip({ id, type, workflow, onSave, onDelete, buyer, country }) {
   const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState({ top: 0, left: 0 });
+  const btnRef = useRef(null);
+  const menuRef = useRef(null);
   const existing = (workflow || []).find(w => w.id === id);
   const [status, setStatus] = useState(existing?.status || "");
   const [note, setNote] = useState(existing?.note || "");
   const [ignoreUntil, setIgnoreUntil] = useState(existing?.ignoreUntil || "");
-  useEffect(() => { const ex = (workflow || []).find(w => w.id === id); if (ex) { setStatus(ex.status || ""); setNote(ex.note || ""); setIgnoreUntil(ex.ignoreUntil || ""); if (ex.ignoreUntil) { const d = new Date(ex.ignoreUntil + 'T00:00:00'); const diff = Math.ceil((d - new Date()) / 86400000); setDays(diff > 0 ? String(diff) : '0'); } else { setDays(''); } } }, [workflow, id]);
+  const [days, setDays] = useState('');
+
+  useEffect(() => {
+    const ex = (workflow || []).find(w => w.id === id);
+    if (ex) {
+      setStatus(ex.status || "");
+      setNote(ex.note || "");
+      setIgnoreUntil(ex.ignoreUntil || "");
+      if (ex.ignoreUntil) {
+        const d = new Date(ex.ignoreUntil + 'T00:00:00');
+        const diff = Math.ceil((d - new Date()) / 86400000);
+        setDays(diff > 0 ? String(diff) : '0');
+      } else {
+        setDays('');
+      }
+    }
+  }, [workflow, id]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onClickOutside = (e) => {
+      if (menuRef.current && !menuRef.current.contains(e.target) && btnRef.current && !btnRef.current.contains(e.target)) {
+        setOpen(false);
+      }
+    };
+    const onEsc = (e) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('mousedown', onClickOutside);
+    document.addEventListener('keydown', onEsc);
+    return () => {
+      document.removeEventListener('mousedown', onClickOutside);
+      document.removeEventListener('keydown', onEsc);
+    };
+  }, [open]);
+
+  const openMenu = () => {
+    if (btnRef.current) {
+      const rect = btnRef.current.getBoundingClientRect();
+      const menuW = 260;
+      const menuH = 240;
+      let left = rect.left;
+      if (left + menuW > window.innerWidth - 10) left = window.innerWidth - menuW - 10;
+      if (left < 10) left = 10;
+      let top = rect.bottom + 4;
+      if (top + menuH > window.innerHeight - 10) top = Math.max(10, rect.top - menuH - 4);
+      setPos({ top, left });
+    }
+    setOpen(true);
+  };
+
   const getDefaultDays = () => {
     const isDom = ['us','usa','united states',''].includes((country || '').toLowerCase().trim());
     return isDom ? 1 : 5;
   };
-  const [days, setDays] = useState('');
   const daysToDate = (d) => {
     const dt = new Date();
     dt.setDate(dt.getDate() + parseInt(d));
@@ -163,21 +216,61 @@ export function WorkflowChip({ id, type, workflow, onSave, onDelete, buyer, coun
       setIgnoreUntil(daysToDate(def));
     }
   };
-  const save = () => { onSave({ id, type, status, note, ignoreUntil, updatedBy: buyer || "" }); setOpen(false) };
-  const del = () => { onDelete({ id }); setOpen(false); setStatus(""); setNote(""); setIgnoreUntil("") };
- const effStatus = (() => { if (!existing?.status) return ""; if (!existing.ignoreUntil) return existing.status; const d = parseDate(existing.ignoreUntil); if (d && d < new Date(new Date().toDateString())) return ""; return existing.status; })();
-  if (!open) return <button onClick={() => setOpen(true)} className={`text-xs px-1.5 py-0.5 rounded ${effStatus ? WF_COLORS[effStatus] || "bg-gray-700 text-gray-300" : "bg-gray-800 text-gray-500 hover:text-gray-300"}`}>{effStatus ? <>{effStatus}{existing.ignoreUntil && parseDate(existing.ignoreUntil) >= new Date(new Date().toDateString()) ? " · " + fmtDateUS(existing.ignoreUntil) : ""}{existing.note ? " · " + existing.note.substring(0, 15) + (existing.note.length > 15 ? "…" : "") : ""}</> : "📝"}</button>;
-  return <div className="absolute z-50 mt-1 bg-gray-900 border border-gray-700 rounded-lg shadow-xl p-3 w-64" onClick={e => e.stopPropagation()}>
-    <div className="space-y-2">
-      <div><label className="text-xs text-gray-500 block mb-1">Status</label><div className="flex gap-1 flex-wrap">{WF_STATUSES.filter(Boolean).map(s => <button key={s} onClick={() => pickStatus(s)} className={`text-xs px-2 py-1 rounded ${status === s ? WF_COLORS[s] : "bg-gray-800 text-gray-400"}`}>{s}</button>)}</div></div>
-      <div><label className="text-xs text-gray-500 block mb-1">Note</label><input type="text" value={note} onChange={e => setNote(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') save(); }} placeholder="e.g. Negotiating price..." className="bg-gray-800 border border-gray-600 text-white rounded px-2 py-1 w-full text-xs" /></div>
-      <div><label className="text-xs text-gray-500 block mb-1">Ignore for (days)</label><div className="flex gap-2 items-center"><input type="number" value={days} onChange={e => { const v = e.target.value; setDays(v); if (parseInt(v) > 0) setIgnoreUntil(daysToDate(v)); }} onKeyDown={e => { if (e.key === 'Enter') save(); }} placeholder={String(getDefaultDays())} className="bg-gray-800 border border-gray-600 text-white rounded px-2 py-1 w-16 text-xs text-center" />{ignoreUntil && <span className="text-gray-500 text-[10px]">→ {ignoreUntil.includes('-') ? ignoreUntil.split('-')[1] + '/' + ignoreUntil.split('-')[2] + '/' + ignoreUntil.split('-')[0] : ignoreUntil}</span>}</div></div>
-    </div>
-  </div>;
-}
+  const save = () => { onSave({ id, type, status, note, ignoreUntil, updatedBy: buyer || "" }); setOpen(false); };
+  const del = () => { onDelete({ id }); setOpen(false); setStatus(""); setNote(""); setIgnoreUntil(""); };
 
-const VC_CATS = ["Communication", "Lead Time", "Pricing", "Discount", "Quality", "Other"];
-const VC_COLORS = { Communication: "text-blue-400", "Lead Time": "text-amber-400", Pricing: "text-emerald-400", Discount: "text-purple-400", Quality: "text-red-400", Other: "text-gray-400" };
+  const effStatus = (() => {
+    if (!existing?.status) return "";
+    if (!existing.ignoreUntil) return existing.status;
+    const d = parseDate(existing.ignoreUntil);
+    if (d && d < new Date(new Date().toDateString())) return "";
+    return existing.status;
+  })();
+
+  const button = (
+    <button ref={btnRef} onClick={(e) => { e.stopPropagation(); if (open) setOpen(false); else openMenu(); }} className={`text-xs px-1.5 py-0.5 rounded ${effStatus ? WF_COLORS[effStatus] || "bg-gray-700 text-gray-300" : "bg-gray-800 text-gray-500 hover:text-gray-300"}`}>
+      {effStatus ? <>{effStatus}{existing.ignoreUntil && parseDate(existing.ignoreUntil) >= new Date(new Date().toDateString()) ? " · " + fmtDateUS(existing.ignoreUntil) : ""}{existing.note ? " · " + existing.note.substring(0, 15) + (existing.note.length > 15 ? "…" : "") : ""}</> : "📝"}
+    </button>
+  );
+
+  if (!open) return button;
+
+  const menu = (
+    <div ref={menuRef} style={{ position: 'fixed', top: pos.top, left: pos.left, zIndex: 10000 }} className="bg-gray-900 border border-gray-700 rounded-lg shadow-2xl p-3 w-64" onClick={e => e.stopPropagation()}>
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-xs text-gray-400 font-semibold">{id}</span>
+        <button onClick={() => setOpen(false)} className="text-gray-500 hover:text-white text-sm">✕</button>
+      </div>
+      <div className="space-y-2">
+        <div>
+          <label className="text-xs text-gray-500 block mb-1">Status</label>
+          <div className="flex gap-1 flex-wrap">
+            {WF_STATUSES.filter(Boolean).map(s =>
+              <button key={s} onClick={() => pickStatus(s)} className={`text-xs px-2 py-1 rounded ${status === s ? WF_COLORS[s] : "bg-gray-800 text-gray-400"}`}>{s}</button>
+            )}
+          </div>
+        </div>
+        <div>
+          <label className="text-xs text-gray-500 block mb-1">Note</label>
+          <input type="text" value={note} onChange={e => setNote(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') save(); }} placeholder="e.g. Negotiating price..." className="bg-gray-800 border border-gray-600 text-white rounded px-2 py-1 w-full text-xs" />
+        </div>
+        <div>
+          <label className="text-xs text-gray-500 block mb-1">Ignore for (days)</label>
+          <div className="flex gap-2 items-center">
+            <input type="number" value={days} onChange={e => { const v = e.target.value; setDays(v); if (parseInt(v) > 0) setIgnoreUntil(daysToDate(v)); }} onKeyDown={e => { if (e.key === 'Enter') save(); }} placeholder={String(getDefaultDays())} className="bg-gray-800 border border-gray-600 text-white rounded px-2 py-1 w-16 text-xs text-center" />
+            {ignoreUntil && <span className="text-gray-500 text-[10px]">→ {ignoreUntil.includes('-') ? ignoreUntil.split('-')[1] + '/' + ignoreUntil.split('-')[2] + '/' + ignoreUntil.split('-')[0] : ignoreUntil}</span>}
+          </div>
+        </div>
+        <div className="flex gap-2 pt-2 border-t border-gray-700">
+          <button onClick={save} className="flex-1 bg-emerald-600 text-white rounded py-1 text-xs font-medium">Save</button>
+          {existing && <button onClick={del} className="bg-red-600/30 text-red-300 rounded px-2 py-1 text-xs">Delete</button>}
+        </div>
+      </div>
+    </div>
+  );
+
+  return <>{button}{createPortal(menu, document.body)}</>;
+}
 
 export function VendorNotes({ vendor, comments, onSave, buyer }) {
   const [open, setOpen] = useState(false); const [adding, setAdding] = useState(false);
