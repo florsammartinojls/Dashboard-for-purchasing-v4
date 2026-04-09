@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from "react";
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceArea, ReferenceDot } from "recharts";
 import { R, D1, $, $2, P, MN, YC, TTP, BL, TL, gS, cAI, cNQ, cOQ, cDA, gTD, dc, fE, fD, cMo, gY, cSeas } from "../lib/utils";
 import { Dot, TH, SumCtx } from "./Shared";
 import { batchProfiles, calcCoverageNeed, calcPurchaseFrequency, DEFAULT_PROFILE } from "../lib/seasonal";
@@ -517,7 +517,7 @@ export default function CoreTab({ data, stg, hist, daily, coreId, onBack, goBund
         </div>
       )}
 
-      {/* Monthly DSR (YoY) */}
+{/* Monthly DSR (YoY) */}
       {cHF.length > 0 && (
         <div className="bg-gray-900 rounded-xl p-4 mb-4 border border-gray-800">
           <h3 className="text-white font-semibold text-sm mb-2">Monthly 1-Day DSR (YoY)</h3>
@@ -526,6 +526,11 @@ export default function CoreTab({ data, stg, hist, daily, coreId, onBack, goBund
               <ResponsiveContainer width="100%" height={240}>
                 <LineChart data={dsrCh}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
+                  {/* OOS markers — for any (year, month) with oosDays > 0, draw a red dot at y=0 */}
+                  {yrs.flatMap(y => dsrCh
+                    .filter(r => r["oos_" + y] > 0)
+                    .map(r => <ReferenceDot key={`oos-${y}-${r.month}`} x={r.month} y={0} r={5} fill="#ef4444" stroke="#fff" strokeWidth={1} isFront label={{ value: `${r["oos_" + y]}d`, position: 'bottom', fill: '#ef4444', fontSize: 9 }} />)
+                  )}
                   <XAxis dataKey="month" tick={{ fill: "#9ca3af", fontSize: 11 }} axisLine={{ stroke: "#374151" }} tickLine={false} />
                   <YAxis tick={{ fill: "#9ca3af", fontSize: 11 }} axisLine={false} tickLine={false} domain={['auto', 'auto']} tickFormatter={v => v >= 1000 ? Math.round(v / 1000) + 'K' : v} />
                   <Tooltip contentStyle={{ backgroundColor: "#111827", border: "1px solid #374151", borderRadius: "8px", fontSize: 12 }} formatter={(v) => v != null ? Math.round(v).toLocaleString('en-US') : '—'} />
