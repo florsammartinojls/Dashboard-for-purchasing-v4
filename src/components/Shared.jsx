@@ -387,11 +387,12 @@ export function CalcBreakdownV2({ core, vendor, vendorRec, profile, stg, onClose
       return { ...bd, qtyPerBundle, initialDOC, rawUsedFromThisCore };
     });
 
-  const initialRaw = Number(core.raw || 0);
-  const consumedFromWaterfall = bundlesForThisCore.reduce((s, b) => s + b.rawUsedFromThisCore, 0);
-  const remainingAfterWaterfall = initialRaw - consumedFromWaterfall;
-
   const coreDetail = (vendorRec.coreDetails || []).find(cd => cd.coreId === core.id);
+  const rawOnHand = Number(coreDetail?.rawOnHand ?? core.raw ?? 0);
+  const pendingInbound = Number(coreDetail?.pendingInbound || 0);
+  const initialPool = rawOnHand + pendingInbound;
+  const consumedFromWaterfall = bundlesForThisCore.reduce((s, b) => s + b.rawUsedFromThisCore, 0);
+  const remainingAfterWaterfall = initialPool - consumedFromWaterfall;
   const needPieces = coreDetail?.needPieces || 0;
   const finalQty = coreDetail?.finalQty || 0;
   const cost = coreDetail?.cost || 0;
@@ -484,28 +485,37 @@ export function CalcBreakdownV2({ core, vendor, vendorRec, profile, stg, onClose
         )}
 
         
-        {/* Step 1: Core raw pool */}
+       {/* Step 1: Core raw pool */}
         <div className="bg-gray-800/50 rounded-lg p-4 mb-4">
           <h3 className="text-sm font-semibold text-white mb-2">Step 1: Core raw pool (waterfall input)</h3>
           <p className="text-gray-400 text-xs mb-3">
-            The recommender takes this core's raw material and distributes it across the bundles that depend on it (urgency first, then leveling). Whatever demand is still uncovered after that becomes the "buy" at Step 3.
+            The waterfall pool = raw on hand in JLS warehouse + 7f inbound in transit to JLS.
+            <span className="text-gray-500"> Inbound to Amazon (FBA) is NOT in the pool — that's committed to direct-to-Amazon flow, not available to assemble bundles.</span>
           </p>
-          <div className="grid grid-cols-3 gap-3 text-center">
+          <div className="grid grid-cols-5 gap-2 text-center">
             <div className="bg-gray-900 rounded p-2">
-              <div className="text-gray-500 text-[10px] uppercase">Initial raw</div>
-              <div className="text-white font-bold">{fmtN(initialRaw)}</div>
+              <div className="text-gray-500 text-[10px] uppercase">Raw on hand</div>
+              <div className="text-white font-bold">{fmtN(rawOnHand)}</div>
             </div>
             <div className="bg-gray-900 rounded p-2">
-              <div className="text-gray-500 text-[10px] uppercase">Used by waterfall</div>
-              <div className="text-cyan-300 font-bold">− {fmtN(consumedFromWaterfall)}</div>
+              <div className="text-gray-500 text-[10px] uppercase">+ 7f Inbound</div>
+              <div className={`font-bold ${pendingInbound > 0 ? "text-blue-300" : "text-gray-600"}`}>{pendingInbound > 0 ? "+" + fmtN(pendingInbound) : "—"}</div>
+            </div>
+            <div className="bg-gray-900 rounded p-2 border border-gray-700">
+              <div className="text-gray-500 text-[10px] uppercase">= Total Pool</div>
+              <div className="text-white font-bold">{fmtN(initialPool)}</div>
             </div>
             <div className="bg-gray-900 rounded p-2">
-              <div className="text-gray-500 text-[10px] uppercase">Remaining (unused)</div>
+              <div className="text-gray-500 text-[10px] uppercase">− Waterfall Used</div>
+              <div className="text-cyan-300 font-bold">{fmtN(consumedFromWaterfall)}</div>
+            </div>
+            <div className="bg-gray-900 rounded p-2">
+              <div className="text-gray-500 text-[10px] uppercase">Remaining</div>
               <div className={`font-bold ${remainingAfterWaterfall > 0 ? "text-emerald-400" : "text-gray-500"}`}>{fmtN(remainingAfterWaterfall)}</div>
             </div>
           </div>
           <p className="text-[10px] text-gray-500 mt-2">
-            Used = Σ (raw assigned to bundle × qty per bundle). "Remaining" is what's left in the pool after reaching the leveling target — it doesn't need to be bought because it's already in stock.
+            Waterfall Used = Σ (raw assigned to bundle × qty per bundle). Remaining stays in stock — no need to buy it.
           </p>
         </div>
 
@@ -520,7 +530,7 @@ export function CalcBreakdownV2({ core, vendor, vendorRec, profile, stg, onClose
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-xs">
-                <thead>
+               <thead>
                   <tr className="text-gray-500 uppercase border-b border-gray-700">
                     <th className="py-1.5 text-left">Bundle</th>
                     <th className="py-1.5 text-right" title="Effective DSR (spike-adjusted)">Eff DSR</th>
@@ -529,7 +539,9 @@ export function CalcBreakdownV2({ core, vendor, vendorRec, profile, stg, onClose
                     <th className="py-1.5 text-right" title="DOC using only assigned inv">DOC₀</th>
                     <th className="py-1.5 text-right" title="Raw added by waterfall (in bundle units)">+Raw</th>
                     <th className="py-1.5 text-right" title="DOC after waterfall">DOC₁</th>
-                    <th className="py-1.5 text-right" title="Total coverage demand for target window">Demand</th>
+                    <th className="py-1.5 text-right" title="Flat demand (dsr × targetDOC × safety, no seasonality)">Flat</th>
+                    <th className="py-1.5 text-right" title="Seasonal demand (what the v2 actually uses as buyNeed base)">Seas</th>
+                    <th className="py-1.5 text-right" title="Seasonal impact vs flat. Positive = bundle is in peak season (we buy more). Negative = in valley (we buy less). — = no seasonal history, flat fallback.">Δ Seas</th>
                     <th className="py-1.5 text-right" title="Still needs buying (in bundle units)">Buy</th>
                     <th className="py-1.5 text-center">Mode</th>
                   </tr>
@@ -538,10 +550,20 @@ export function CalcBreakdownV2({ core, vendor, vendorRec, profile, stg, onClose
                   {bundlesForThisCore
                     .slice()
                     .sort((a, b) => (a.currentCoverDOC || 0) - (b.currentCoverDOC || 0))
-                    .map(b => {
+                 .map(b => {
                       const docBefore = b.initialDOC;
                       const docAfter = b.currentCoverDOC;
                       const docColor = docAfter <= 30 ? "text-red-400" : docAfter <= 60 ? "text-amber-400" : "text-emerald-400";
+                      const flat = b.flatDemand || 0;
+                      const seas = b.coverageDemand || 0;
+                      const seasDiff = flat > 0 ? ((seas - flat) / flat) * 100 : 0;
+                      const hasSeas = b.hasSeasonalHistory;
+                      const seasColor = !hasSeas ? "text-gray-600"
+                                      : seasDiff > 10 ? "text-orange-300"
+                                      : seasDiff > 3 ? "text-amber-300"
+                                      : seasDiff < -10 ? "text-cyan-400"
+                                      : seasDiff < -3 ? "text-sky-400"
+                                      : "text-gray-500";
                       return (
                         <tr key={b.bundleId} className={`border-t border-gray-800/40 ${b.urgent ? "bg-red-900/10" : ""}`}>
                           <td className="py-1.5 text-blue-300 font-mono">
@@ -554,7 +576,11 @@ export function CalcBreakdownV2({ core, vendor, vendorRec, profile, stg, onClose
                           <td className="py-1.5 text-right text-gray-400">{docBefore != null ? fmtN(docBefore) : "—"}</td>
                           <td className="py-1.5 text-right text-cyan-300">{b.rawAssignedFromWaterfall > 0 ? "+" + fmtN(b.rawAssignedFromWaterfall) : "—"}</td>
                           <td className={`py-1.5 text-right font-semibold ${docColor}`}>{fmtN(docAfter)}</td>
-                          <td className="py-1.5 text-right text-gray-300">{fmtN(b.coverageDemand)}</td>
+                          <td className="py-1.5 text-right text-gray-500">{fmtN(flat)}</td>
+                          <td className="py-1.5 text-right text-gray-300 font-semibold">{fmtN(seas)}</td>
+                          <td className={`py-1.5 text-right font-semibold ${seasColor}`} title={hasSeas ? `Flat: ${fmtN(flat)} · Seasonal: ${fmtN(seas)}` : "No seasonal history — using flat"}>
+                            {hasSeas ? (seasDiff > 0 ? "+" : "") + seasDiff.toFixed(0) + "%" : "—"}
+                          </td>
                           <td className={`py-1.5 text-right font-semibold ${b.buyNeed > 0 ? "text-amber-300" : "text-gray-600"}`}>{b.buyNeed > 0 ? fmtN(b.buyNeed) : "—"}</td>
                           <td className={`py-1.5 text-center text-[10px] font-semibold ${b.buyMode === 'bundle' ? "text-cyan-400" : "text-purple-400"}`}>{b.buyMode}</td>
                         </tr>
