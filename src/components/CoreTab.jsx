@@ -288,10 +288,7 @@ export default function CoreTab({ data, stg, hist, daily, coreId, onBack, goBund
   const bundlesAffectedIds = coreDetail?.bundlesAffectedIds || [];
   const recUrgent = coreDetail?.urgent || false;
 
-  // Legacy flat/seasonal need — kept only for the comparison line
-  const flatNeed = core ? Math.ceil(Math.max(0, tg * core.dsr - ai)) : 0;
-  const legacyCoverage = useMemo(() => core ? calcCoverageNeed(core, lt, tg, profile, pf) : null, [core, lt, tg, profile, pf]);
-  const legacySeasonalNeed = legacyCoverage?.need || 0;
+  // Legacy flat (for CV/freq display only — no longer shown as comparison)
 
   const minPurchase = useMemo(() => {
     if (!core || !data.receivingFull) return null;
@@ -699,13 +696,7 @@ export default function CoreTab({ data, stg, hist, daily, coreId, onBack, goBund
           </div>
         )}
 
-        <div className="flex flex-wrap gap-4 text-xs border-t border-gray-700 pt-2">
-          <span className="text-gray-500" title="Legacy flat calculation: targetDOC × dsr − allIn">
-            Legacy flat: <span className="text-gray-400 font-semibold">{R(flatNeed)}</span>
-          </span>
-          <span className="text-gray-500" title="Legacy core-level seasonal calculation (not bundle-aware)">
-            Legacy seasonal: <span className="text-gray-400 font-semibold">{R(legacySeasonalNeed)}</span>
-          </span>
+      <div className="flex flex-wrap gap-4 text-xs border-t border-gray-700 pt-2">
           {profile.hasHistory && <span className="text-purple-400">CV: {profile.cv?.toFixed(2)}</span>}
           {pf && <span className="text-gray-500">Freq: {pf.ordersPerYear}/yr · ×{pf.safetyMultiplier}</span>}
           {minPurchase && <span className="text-gray-500">Min purchase: <span className="text-amber-300 font-semibold">{R(minPurchase.min)} pcs</span> ({minPurchase.count} orders)</span>}
