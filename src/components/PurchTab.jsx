@@ -164,13 +164,16 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
   // Quick lookup: "what's the real unit cost this vendor charges for this item?"
   // Tries the recommender's coreItems/bundleItems first (already computed from 7g),
   // then falls back to whatever fallback the caller provides (usually core.cost or aicogs).
+  // Quick lookup: "what's the real unit cost this vendor charges for this item?"
+  // Reads the recommender's priceMap, which contains a price for EVERY core
+  // and EVERY bundle of the vendor (not just the ones flagged for buyNeed).
+  // Prices come from 7g history when available, otherwise from sheet core.cost.
+  // Falls back to whatever the caller provides (usually aicogs for bundles)
+  // only if the vendor has no recommender output at all.
   const getVendorPrice = useCallback((vendorName, itemId, fallback) => {
     const rec = vendorRecs[vendorName];
-    if (rec) {
-      const fromCore = rec.coreItems?.find(i => i.id === itemId);
-      if (fromCore?.pricePerPiece > 0) return fromCore.pricePerPiece;
-      const fromBundle = rec.bundleItems?.find(i => i.id === itemId);
-      if (fromBundle?.pricePerPiece > 0) return fromBundle.pricePerPiece;
+    if (rec?.priceMap && rec.priceMap[itemId] > 0) {
+      return rec.priceMap[itemId];
     }
     return fallback || 0;
   }, [vendorRecs]);
