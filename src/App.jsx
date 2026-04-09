@@ -121,7 +121,7 @@ export default function App() {
 
   const [tab, setTab] = useState(initCore ? "core" : initBundle ? "bundle" : initVendorParam ? "purchasing" : initTab || "dashboard");
   const [showS, setShowS] = useState(false);
-  const [stg, setStg] = useState({ buyer: '', domesticDoc: 90, intlDoc: 180, replenFloorDoc: 80, fA: "yes", fI: "blank", fV: "yes" });
+  const [stg, setStg] = useState({ buyer: '', domesticDoc: 90, intlDoc: 180, replenFloorDoc: 80, spikeThreshold: 1.25, moqInflationThreshold: 1.5, fA: "yes", fI: "blank", fV: "yes" });
   const [coreId, setCoreId] = useState(initCore || null);
   const [bundleId, setBundleId] = useState(initBundle || null);
 
