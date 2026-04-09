@@ -364,7 +364,7 @@ export default function CoreTab({ data, stg, hist, daily, coreId, onBack, goBund
           <span className={`text-xs px-2 py-0.5 rounded font-semibold ${status === "critical" ? "bg-red-500/20 text-red-400" : status === "warning" ? "bg-amber-500/20 text-amber-400" : "bg-emerald-500/20 text-emerald-400"}`}>
             {status.toUpperCase()}
           </span>
-          {recUrgent && <span className="text-xs px-2 py-0.5 rounded bg-red-500/20 text-red-400 font-bold">⚠ BUNDLE OOS RISK</span>}
+          {recUrgent && <span className="text-xs px-2 py-0.5 rounded bg-red-500/20 text-red-400 font-bold border border-red-500/40" title="At least one bundle using this core will run out of stock before the next PO arrives. See 📊 breakdown for which bundles.">⚠ Stockout risk (bundle)</span>}
           {seas && <span className="text-xs px-2 py-0.5 rounded bg-purple-500/20 text-purple-400 font-semibold">SEASONAL {seas.peak}</span>}
         </div>
         <p className="text-gray-300 text-sm mb-1">{core.ti}</p>
@@ -676,13 +676,16 @@ export default function CoreTab({ data, stg, hist, daily, coreId, onBack, goBund
           ))}
         </div>
 
-        {moqInflated && (
+       {moqInflated && (
           <div className="bg-orange-500/10 border border-orange-500/30 rounded p-2 mb-2 text-xs">
-            <span className="text-orange-300 font-semibold">⚠ MOQ inflating order </span>
-            <span className="text-gray-300">
-              Real need: {R(sNeed)} · Forced to buy: {R(sOq)} ({Math.round(moqRatio * 100)}% of need) ·
-              Excess: {R(excessMoq)} pcs / ${Math.round(excessMoqCost).toLocaleString()}
-            </span>
+            <div className="text-orange-300 font-semibold mb-1">⚠ MOQ is inflating this order</div>
+            <div className="text-gray-300">
+              You actually need <span className="text-white font-semibold">{R(sNeed)}</span> pcs, but the vendor's MOQ/casepack
+              forces you to buy <span className="text-white font-semibold">{R(sOq)}</span> pcs
+              (<span className="text-orange-300">{Math.round(moqRatio * 100)}%</span> of real need).
+              That's <span className="text-white font-semibold">{R(excessMoq)}</span> pcs extra sitting in inventory
+              (<span className="text-amber-300">${Math.round(excessMoqCost).toLocaleString()}</span> in excess capital).
+            </div>
           </div>
         )}
 
