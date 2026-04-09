@@ -61,7 +61,7 @@ export function SS({ value, onChange, options, placeholder }) {
 export function Stg({ s, setS, onClose }) {
   const [l, setL] = useState({ ...s });
   return <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center" onClick={onClose}>
-    <div className="bg-gray-900 border border-gray-700 rounded-xl p-6 w-full max-w-md" onClick={e => e.stopPropagation()}>
+    <div className="bg-gray-900 border border-gray-700 rounded-xl p-6 w-full max-w-md max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
       <h2 className="text-lg font-semibold text-white mb-4">Settings</h2>
       <div className="space-y-4">
         <div><label className="text-sm text-gray-400 block mb-1">Buyer Initials</label><input type="text" value={l.buyer || ''} onChange={e => setL({ ...l, buyer: e.target.value })} placeholder="e.g. FS" className="bg-gray-800 border border-gray-600 text-white rounded px-3 py-2 w-full" /></div>
@@ -70,6 +70,27 @@ export function Stg({ s, setS, onClose }) {
           <div><label className="text-sm text-gray-400 block mb-1">Intl DOC</label><input type="number" value={l.intlDoc} onChange={e => setL({ ...l, intlDoc: +e.target.value })} className="bg-gray-800 border border-gray-600 text-white rounded px-3 py-2 w-full" /></div>
           <div><label className="text-sm text-gray-400 block mb-1" title="Floor DOC for replen waterfall (Phase 1 minimum)">Replen Floor</label><input type="number" value={l.replenFloorDoc || 80} onChange={e => setL({ ...l, replenFloorDoc: +e.target.value })} className="bg-gray-800 border border-gray-600 text-white rounded px-3 py-2 w-full" /></div>
         </div>
+
+        <div className="border-t border-gray-700 pt-4">
+          <h3 className="text-sm font-semibold text-amber-400 mb-3">Recommender v2 Tunables</h3>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-sm text-gray-400 block mb-1" title="d7/cd ratio above which we consider a bundle is in a demand spike, and use d7 as effective DSR instead of cd. Higher = less sensitive (fewer spikes). Default 1.25">
+                Spike Threshold
+              </label>
+              <input type="number" step="0.05" min="1" value={l.spikeThreshold ?? 1.25} onChange={e => setL({ ...l, spikeThreshold: +e.target.value })} className="bg-gray-800 border border-gray-600 text-white rounded px-3 py-2 w-full" />
+              <p className="text-[10px] text-gray-500 mt-1">Default 1.25 · &gt;1 triggers spike DSR</p>
+            </div>
+            <div>
+              <label className="text-sm text-gray-400 block mb-1" title="finalQty/need ratio at or above which the ⚠MOQ badge fires. Lower = more warnings. Default 1.5 (i.e. warn if you're buying ≥150% of what you actually need)">
+                MOQ Inflation Warn
+              </label>
+              <input type="number" step="0.1" min="1" value={l.moqInflationThreshold ?? 1.5} onChange={e => setL({ ...l, moqInflationThreshold: +e.target.value })} className="bg-gray-800 border border-gray-600 text-white rounded px-3 py-2 w-full" />
+              <p className="text-[10px] text-gray-500 mt-1">Default 1.5 · ≥ this triggers ⚠MOQ badge</p>
+            </div>
+          </div>
+        </div>
+
         <div className="border-t border-gray-700 pt-4"><h3 className="text-sm font-semibold text-blue-400 mb-3">Core Filters</h3><div className="space-y-3">
           {[["Active", "fA"], ["Visible", "fV"]].map(([lb, k]) => <div key={k} className="flex items-center justify-between"><span className="text-sm text-gray-300">{lb}</span><select value={l[k]} onChange={e => setL({ ...l, [k]: e.target.value })} className="bg-gray-800 border border-gray-600 text-white rounded px-2 py-1 text-sm w-28"><option value="yes">Yes</option><option value="no">No</option><option value="all">All</option></select></div>)}
           <div className="flex items-center justify-between"><span className="text-sm text-gray-300">Ignored</span><select value={l.fI} onChange={e => setL({ ...l, fI: e.target.value })} className="bg-gray-800 border border-gray-600 text-white rounded px-2 py-1 text-sm w-28"><option value="blank">Blank</option><option value="set">Set</option><option value="all">All</option></select></div>
