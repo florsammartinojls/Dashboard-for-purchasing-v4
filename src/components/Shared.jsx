@@ -1,7 +1,6 @@
-import { dotCls, MN } from "../lib/utils";
 import { createPortal } from "react-dom";
 import React, { useState, useEffect, useRef, createContext, useContext } from "react";
-import { dotCls } from "../lib/utils";
+import { dotCls, MN } from "../lib/utils";
 
 export const SumCtx = createContext({ addCell: () => {} });
 
