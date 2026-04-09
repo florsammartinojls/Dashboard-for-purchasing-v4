@@ -571,8 +571,8 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
             <span className="text-xs text-gray-400">{v.payment}</span>
             {pf && pf.comment && <span className="text-xs text-amber-400">{pf.comment}</span>}
             {pf && <span className="text-xs text-gray-500">{pf.ordersPerYear}/yr · ×{pf.safetyMultiplier}</span>}
-            {(bundlesInBundleMode > 0 || bundlesInCoreMode > 0) && <span className="text-xs text-cyan-400" title="Recommender's buy-mode split per bundle (from 7f history)">
-              Mix: {bundlesInCoreMode} core · {bundlesInBundleMode} bundle
+           {(bundlesInBundleMode > 0 || bundlesInCoreMode > 0) && <span className="text-xs text-cyan-400" title="Based on 7f history: how many of this vendor's active bundles-with-need will be bought as raw core material vs as finished bundles">
+              {bundlesInCoreMode + bundlesInBundleMode} bundle{(bundlesInCoreMode + bundlesInBundleMode) > 1 ? "s" : ""} need buy → {bundlesInCoreMode} via core, {bundlesInBundleMode} via bundle
             </span>}
             {(() => {
               const totalExcessMoq = grp.cores.filter(c => c.moqInflated).reduce((s, c) => s + c.excessCostFromMoq, 0);
