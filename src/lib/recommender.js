@@ -16,7 +16,6 @@
 //   8. vendor.lt is used as-is (already includes shipping + processing).
 // ============================================================
 
-import { calcBundleSeasonalProfile, DEFAULT_PROFILE } from './seasonal.js';
 
 import { calcBundleSeasonalProfile, DEFAULT_PROFILE } from './seasonal.js';
 
