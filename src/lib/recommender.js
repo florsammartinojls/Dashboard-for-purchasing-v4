@@ -18,11 +18,48 @@
 
 import { calcBundleSeasonalProfile, DEFAULT_PROFILE } from './seasonal.js';
 
+import { calcBundleSeasonalProfile, DEFAULT_PROFILE } from './seasonal.js';
+
+// ────────────────────────────────────────────────────────────
+// Vendor-specific unit material cost from 7g (priceCompFull)
+// ────────────────────────────────────────────────────────────
+// Returns the most recent material-only unit cost the vendor charged for
+// this exact core. Excludes inbound shipping and tariffs because those
+// are paid separately from the vendor PO.
+//
+// priceCompFull rows shape (from the sheet):
+//   { core, vendor, date, pcs, matPrice (total material $), inbShip, tariffs, totalCost, cpp }
+// Here we use matPrice / pcs, NOT cpp (cpp includes inbound + tariffs).
+//
+// If no row exists for (vendor, core), returns null so the caller can fallback.
+function getVendorCoreUnitCost(coreId, vendorName, priceCompFull) {
+  if (!Array.isArray(priceCompFull) || !coreId || !vendorName) return null;
+  const cid = coreId.toLowerCase().trim();
+  const vn = vendorName.toLowerCase().trim();
+  let best = null;
+  for (const r of priceCompFull) {
+    if (!r) continue;
+    if ((r.core || '').toLowerCase().trim() !== cid) continue;
+    if ((r.vendor || '').toLowerCase().trim() !== vn) continue;
+    const pcs = Number(r.pcs);
+    const mat = Number(r.matPrice);
+    if (!(pcs > 0) || !(mat > 0)) continue;
+    // Prefer the most recent by date
+    if (!best || (r.date || '') > (best.date || '')) best = r;
+  }
+  if (!best) return null;
+  return Number(best.matPrice) / Number(best.pcs);
+}
+
+// ────────────────────────────────────────────────────────────
+// Defaults for tunables (can be overridden via settings)
+// ────────────────────────────────────────────────────────────
 // ────────────────────────────────────────────────────────────
 // Defaults for tunables (can be overridden via settings)
 // ────────────────────────────────────────────────────────────
 export const DEFAULT_SPIKE_THRESHOLD = 1.25;          // d7 >= X * cd -> spike
 export const DEFAULT_MOQ_INFLATION_THRESHOLD = 1.5;   // finalQty/need >= X -> warn
+
 const DAMP = 0.5;                                     // matches seasonal.js
 const LEVELING_STEP_DAYS = 10;
 const MAX_WATERFALL_ITER = 100;
@@ -272,9 +309,11 @@ export function calcVendorRecommendation({
   receivingFull,
   replenMap,
   missingMap,
+  priceCompFull,   // full 7g purchase history rows — used to get the last
+                   // material unit cost the vendor charged for each core
   settings,
   purchFreqSafety,
-  forceMode,   // optional: 'cores' | 'bundles' — overrides historical detection
+  forceMode,       // optional: 'cores' | 'bundles' — overrides historical detection
 }) {
   if (!vendor || !vendor.name) return null;
 
@@ -407,22 +446,29 @@ export function calcVendorRecommendation({
   }
 
   // Step 8: MOQ + casepack per core -> coreItems
+
+  // Price per piece comes from 7g (last material cost vendor charged for this
+  // core). Falls back to sheet core.cost if no history with this vendor.
   const coreItems = [];
   for (const [coreId, needPieces] of Object.entries(coreNeedMap)) {
     const core = vCoreById[coreId];
     if (!core) continue;
+    const histUnitCost = getVendorCoreUnitCost(coreId, vendor.name, priceCompFull);
+    const pricePerPiece = histUnitCost != null ? histUnitCost : num(core.cost);
+    const priceSource = histUnitCost != null ? '7g-history' : 'sheet-cost';
     const moqRes = applyMoqAndCasePack(needPieces, core.moq, core.casePack, moqThreshold);
     coreItems.push({
       id: coreId,
       mode: 'core',
       needPieces,
       finalQty: moqRes.finalQty,
-      pricePerPiece: num(core.cost),
-      cost: moqRes.finalQty * num(core.cost),
+      pricePerPiece,
+      priceSource,
+      cost: moqRes.finalQty * pricePerPiece,
       moqInflated: moqRes.moqInflated,
       moqInflationRatio: moqRes.moqInflationRatio,
       excessFromMoq: moqRes.excessFromMoq,
-      excessCostFromMoq: moqRes.excessFromMoq * num(core.cost),
+      excessCostFromMoq: moqRes.excessFromMoq * pricePerPiece,
       bundlesAffected: (coreBundlesMap[coreId] || []).length,
       bundlesAffectedIds: coreBundlesMap[coreId] || [],
       urgent: prepped.some(b =>
@@ -430,24 +476,48 @@ export function calcVendorRecommendation({
       ),
     });
   }
-
-  // Bundle-mode items: one row per bundle bought as a finished bundle.
-  // Price per bundle = sum of (core.cost * qty) across its cores owned by this vendor.
+// Bundle-mode items: one row per bundle bought as a finished bundle.
+  // Price per bundle unit = Σ (vendor-specific unit cost of each constituent
+  // core × qty per bundle). The vendor unit cost comes from 7g history
+  // (material-only, excluding inbound/tariffs which are paid separately).
+  //
+  // Rationale: the user confirmed that the vendor charges the same material
+  // price whether they ship the core loose or assemble it into a bundle —
+  // the material cost encapsulates the bundle assembly if it was bought
+  // assembled historically.
+  //
+  // If any core in the bundle has no history with this vendor, we fallback to
+  // sheet core.cost for that one core and mark priceSource as 'partial-history'.
+  // If no core has any history, priceSource is 'sheet-cost'.
   const bundleItems = [];
   for (const b of prepped) {
     if (b.buyNeed <= 0 || b.buyMode !== 'bundle') continue;
-    let price = 0;
+    let pricePerPiece = 0;
+    let anyFromHistory = false;
+    let anyFromSheet = false;
     for (const { coreId, qty } of b.coresUsed) {
       const c = vCoreById[coreId];
-      if (c) price += num(c.cost) * qty;
+      if (!c) continue;
+      const histUnit = getVendorCoreUnitCost(coreId, vendor.name, priceCompFull);
+      if (histUnit != null) {
+        pricePerPiece += histUnit * qty;
+        anyFromHistory = true;
+      } else {
+        pricePerPiece += num(c.cost) * qty;
+        anyFromSheet = true;
+      }
     }
+    const priceSource = anyFromHistory && anyFromSheet ? 'partial-history'
+                      : anyFromHistory ? '7g-history'
+                      : 'sheet-cost';
     bundleItems.push({
       id: b.id,
       mode: 'bundle',
       needPieces: b.buyNeed,
       finalQty: b.buyNeed,
-      pricePerPiece: price,
-      cost: b.buyNeed * price,
+      pricePerPiece,
+      priceSource,
+      cost: b.buyNeed * pricePerPiece,
       moqInflated: false,
       moqInflationRatio: 1,
       excessFromMoq: 0,
@@ -537,6 +607,7 @@ export function batchVendorRecommendations({
   receivingFull,
   replenMap,
   missingMap,
+  priceCompFull,
   settings,
   purchFreqMap,
 }) {
@@ -563,6 +634,7 @@ export function batchVendorRecommendations({
       receivingFull,
       replenMap,
       missingMap,
+      priceCompFull,
       settings,
       purchFreqSafety: safety,
     });
