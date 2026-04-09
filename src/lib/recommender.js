@@ -32,37 +32,85 @@ import { calcBundleSeasonalProfile, DEFAULT_PROFILE } from './seasonal.js';
 //
 // If no row exists for (vendor, core), returns null so the caller can fallback.
 let __rec_debug_printed = false;
-function getVendorCoreUnitCost(coreId, vendorName, priceCompFull) {
-  if (!__rec_debug_printed) {
-    console.log('[recommender] priceCompFull received:', {
-      isArray: Array.isArray(priceCompFull),
-      length: priceCompFull?.length || 0,
-      sampleRow: priceCompFull?.[0] || null,
-      sampleKeys: priceCompFull?.[0] ? Object.keys(priceCompFull[0]) : null,
-    });
-    __rec_debug_printed = true;
+
+// ────────────────────────────────────────────────────────────
+// Parse the "Note" field of a 7g row to figure out which vendor paid it.
+// Two patterns:
+//   (a) "Vendor Name - PO#XXX"  → US / domestic vendor, take the Vendor Name
+//   (b) "FSMSF2406050" / "AGL..." / anything WITHOUT " - " → Chinese container
+//       (we can't tell which specific Chinese vendor, just that it's Chinese)
+// ────────────────────────────────────────────────────────────
+function parseNoteVendor(note) {
+  if (!note) return { kind: 'unknown', name: null };
+  const n = String(note).trim();
+  // US/domestic pattern: "Name - rest"
+  const m = n.match(/^(.+?)\s+-\s+/);
+  if (m) {
+    return { kind: 'named', name: m[1].trim() };
   }
-  if (!Array.isArray(priceCompFull) || !coreId || !vendorName) return null;
+  // No " - " separator → Chinese container code
+  return { kind: 'container', name: null };
+}
+
+function isChinaVendor(vendor) {
+  const c = (vendor?.country || '').toLowerCase().trim();
+  return c === 'china' || c === 'cn' || c === 'prc';
+}
+
+// ────────────────────────────────────────────────────────────
+// Vendor-specific unit material cost from 7g (priceComp / priceCompFull).
+// Returns the most recent (totalMaterial / piecesBought) that matches this
+// vendor for this core. Match strategy depends on vendor country:
+//
+//   US / domestic vendor:
+//     row.note must start with "<vendor.name> - " (case-insensitive, fuzzy).
+//
+//   Chinese vendor:
+//     row.note must start with a container code (no " - " separator).
+//     This is a best-effort heuristic: we can't distinguish between multiple
+//     Chinese vendors sharing the same core, so it returns the most recent
+//     container-code row for this core, regardless of which Chinese vendor
+//     actually shipped it. Acceptable as a transitional fallback.
+//
+// Falls back to null if nothing matches; caller then uses sheet core.cost.
+// ────────────────────────────────────────────────────────────
+function getVendorCoreUnitCost(coreId, vendor, paymentHistory) {
+  if (!Array.isArray(paymentHistory) || !coreId || !vendor?.name) return null;
   const cid = coreId.toLowerCase().trim();
-  const vn = vendorName.toLowerCase().trim();
+  const vName = vendor.name.toLowerCase().trim();
+  const china = isChinaVendor(vendor);
+
   let best = null;
-  for (const r of priceCompFull) {
+  for (const r of paymentHistory) {
     if (!r) continue;
     if ((r.core || '').toLowerCase().trim() !== cid) continue;
-    if ((r.vendor || '').toLowerCase().trim() !== vn) continue;
+
     const pcs = Number(r.pcs);
     const mat = Number(r.matPrice);
     if (!(pcs > 0) || !(mat > 0)) continue;
-    // Prefer the most recent by date
+
+    const parsed = parseNoteVendor(r.note);
+
+    let matches = false;
+    if (china) {
+      // Chinese vendor: only accept container-code rows (no " - " in note)
+      matches = parsed.kind === 'container';
+    } else {
+      // US/domestic: note's first token must match vendor.name
+      if (parsed.kind !== 'named' || !parsed.name) continue;
+      const noteName = parsed.name.toLowerCase();
+      // fuzzy match: either equal, or one contains the other
+      // (handles "Berk Enterprises, Inc." vs "Berk Enterprises Inc" etc.)
+      matches = noteName === vName
+             || noteName.includes(vName)
+             || vName.includes(noteName);
+    }
+    if (!matches) continue;
+
     if (!best || (r.date || '') > (best.date || '')) best = r;
   }
-  if (!best) {
-    console.log('[recommender] NO history for', coreId, 'at', vendorName);
-    return null;
-  }
-  const unit = Number(best.matPrice) / Number(best.pcs);
-  console.log('[recommender] found', coreId, '@', vendorName, '→ $', unit.toFixed(4), '/pc (from', best.date, ')');
-  return unit;
+  if (!best) return null;
+  return Number(best.matPrice) / Number(best.pcs);
 }
 
 // ────────────────────────────────────────────────────────────
@@ -467,7 +515,7 @@ export function calcVendorRecommendation({
   for (const [coreId, needPieces] of Object.entries(coreNeedMap)) {
     const core = vCoreById[coreId];
     if (!core) continue;
-    const histUnitCost = getVendorCoreUnitCost(coreId, vendor.name, priceCompFull);
+    const histUnitCost = getVendorCoreUnitCost(coreId, vendor, priceCompFull);
     const pricePerPiece = histUnitCost != null ? histUnitCost : num(core.cost);
     const priceSource = histUnitCost != null ? '7g-history' : 'sheet-cost';
     const moqRes = applyMoqAndCasePack(needPieces, core.moq, core.casePack, moqThreshold);
@@ -512,7 +560,7 @@ export function calcVendorRecommendation({
     for (const { coreId, qty } of b.coresUsed) {
       const c = vCoreById[coreId];
       if (!c) continue;
-      const histUnit = getVendorCoreUnitCost(coreId, vendor.name, priceCompFull);
+      const histUnit = getVendorCoreUnitCost(coreId, vendor, priceCompFull);
       if (histUnit != null) {
         pricePerPiece += histUnit * qty;
         anyFromHistory = true;
