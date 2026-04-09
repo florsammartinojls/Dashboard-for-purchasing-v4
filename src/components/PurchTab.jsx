@@ -401,13 +401,15 @@ const openBreakdown = useCallback((c) => {
     return <><tr className={`border-t border-gray-800/30 hover:bg-gray-800/20 text-xs ${hasCoreOrd(c) ? "bg-emerald-900/10" : ""} ${isUrgent ? "bg-red-900/10" : ""}`}>
       <td className="py-1 px-0.5 sticky left-0 bg-gray-950 z-10 w-4"><Dot status={c.status} /></td>
       <td className="py-1 px-0.5 sticky left-4 bg-gray-950 z-10 whitespace-nowrap"><button onClick={() => goCore(c.id)} className="text-blue-400 font-mono hover:underline text-[11px]">{c.id}</button></td>
-      <td className="py-1 px-1 text-gray-200 truncate max-w-[130px] sticky left-[85px] bg-gray-950 z-10">
-        {c.ti}
-        {isUrgent && <span className="ml-1 text-red-400 text-[9px] font-bold" title="Bundle will stockout before LT arrives">⚠OOS</span>}
-        {c.invAnomaly && <span className="ml-1 text-amber-400 text-[9px] font-bold" title="Sheet DOC vs calculated DOC mismatch >20%">⚠INV</span>}
-        {c.rawPendingBundles && <span className="ml-1 text-cyan-400 text-[9px] font-bold" title="Has raw available + bundles with DOC < 60. Consider processing raw into bundles instead of buying.">⚙PROC</span>}
-        {c.moqInflated && <span className="ml-1 text-orange-400 text-[9px] font-bold" title={`MOQ forces ${Math.round(c.moqInflationRatio * 100)}% of actual need. Excess: ${R(c.excessFromMoq)} pcs / $${Math.round(c.excessCostFromMoq).toLocaleString()}`}>⚠MOQ</span>}
-        {c.bundlesAffected > 0 && <span className="ml-1 text-[9px] text-gray-500" title={`Need driven by ${c.bundlesAffected} bundle(s)`}>({c.bundlesAffected}b)</span>}
+      <td className="py-1 px-1 sticky left-[85px] bg-gray-950 z-10">
+        <div className="flex items-center gap-1 min-w-0">
+          <span className="text-gray-200 truncate max-w-[130px]">{c.ti}</span>
+          {isUrgent && <span className="text-red-400 text-[10px] font-bold flex-shrink-0 bg-red-500/15 px-1 rounded" title="Bundle will stockout before LT arrives">⚠OOS</span>}
+          {c.invAnomaly && <span className="text-amber-400 text-[10px] font-bold flex-shrink-0 bg-amber-500/15 px-1 rounded" title="Sheet DOC vs calculated DOC mismatch >20%">⚠INV</span>}
+          {c.rawPendingBundles && <span className="text-cyan-400 text-[10px] font-bold flex-shrink-0 bg-cyan-500/15 px-1 rounded" title="Has raw available + bundles with DOC < 60. Consider processing raw into bundles instead of buying.">⚙PROC</span>}
+          {c.moqInflated && <span className="text-orange-300 text-[10px] font-bold flex-shrink-0 bg-orange-500/25 border border-orange-500/40 px-1.5 rounded" title={`MOQ forces ${Math.round(c.moqInflationRatio * 100)}% of actual need. Excess: ${R(c.excessFromMoq)} pcs / $${Math.round(c.excessCostFromMoq).toLocaleString()}`}>⚠MOQ</span>}
+          {c.bundlesAffected > 0 && <span className="text-[10px] text-gray-500 flex-shrink-0" title={`Need driven by ${c.bundlesAffected} bundle(s)`}>({c.bundlesAffected}b)</span>}
+        </div>
       </td>
       <SC v={c.dsr} className="py-1 px-1 text-right">{D1(c.dsr)}</SC>
       <SC v={c.d7} className="py-1 px-1 text-right">{D1(c.d7)}</SC>
@@ -514,7 +516,7 @@ const openBreakdown = useCallback((c) => {
   </tr>;
 
   return <div className="p-4">{toast && <Toast msg={toast} onClose={() => { setToast(null); setToastPersist(false); }} persist={toastPersist} />}
-    {breakdownCore && <CalcBreakdownV2 core={breakdownCore} vendor={vMap[breakdownCore.ven]} vendorRec={vendorRecs[breakdownCore.ven]} stg={stg} onClose={() => setBreakdownCore(null)} />}
+    {breakdownCore && <CalcBreakdownV2 core={breakdownCore} vendor={vMap[breakdownCore.ven]} vendorRec={vendorRecs[breakdownCore.ven]} profile={profiles[breakdownCore.id]} stg={stg} onClose={() => setBreakdownCore(null)} />}
     <div className="flex flex-wrap gap-2 items-center mb-4">
       <div className="flex bg-gray-800 rounded-lg p-0.5">{["core", "vendor"].map(m => <button key={m} onClick={() => setVm(m)} className={`px-3 py-1.5 rounded-md text-sm font-medium ${vm === m ? "bg-blue-600 text-white" : "text-gray-400"}`}>{m === "core" ? "By Core" : "By Vendor"}</button>)}</div>
       <SS value={vf} onChange={setVf} options={vNames} />
