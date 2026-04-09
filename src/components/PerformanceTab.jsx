@@ -1,6 +1,19 @@
 import React, { useState, useMemo, useEffect } from "react";
 import { R, D1, $, P } from "../lib/utils";
 
+// Format date as MM/DD/YY from various input formats
+const fmtDate = (d) => {
+  if (!d) return "";
+  try {
+    const dt = d instanceof Date ? d : new Date(d);
+    if (isNaN(dt.getTime())) return String(d);
+    const mm = String(dt.getMonth() + 1).padStart(2, '0');
+    const dd = String(dt.getDate()).padStart(2, '0');
+    const yy = String(dt.getFullYear()).slice(2);
+    return `${mm}/${dd}/${yy}`;
+  } catch { return String(d); }
+};
+
 const API = 'https://script.google.com/macros/s/AKfycbyxFvNQjWvF6Ckajd_H-OZ8WsXixoCWtjSxtChs8SmpL5CvidjT5P161tn0RXgYawd3sg/exec';
 
 export default function PerformanceTab() {
@@ -267,7 +280,7 @@ export default function PerformanceTab() {
           <tbody>
             {filtered.slice(0, 500).map((p, i) => (
               <tr key={i} className="border-t border-gray-800/50 hover:bg-gray-800/30">
-                <td className="py-1.5 px-2 text-gray-400">{p.date}</td>
+                <td className="py-1.5 px-2 text-gray-400">{fmtDate(p.date)}</td>
                 <td className="py-1.5 px-2 text-blue-400 font-mono">{p.coreId}</td>
                 <td className="py-1.5 px-2 text-gray-300 truncate max-w-[150px]">{p.vendor}</td>
                 <td className="py-1.5 px-2 text-right">{D1(p.dsr)}</td>
