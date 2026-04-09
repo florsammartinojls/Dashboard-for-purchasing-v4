@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useCallback, useEffect, useContext, Fragment } from "react";
 import { R, D1, $, $2, $4, P, gS, cAI, cNQ, cOQ, cDA, bNQ, isD, gTD, dc, cSeas, fSl, fMY, fE, fDateUS, effectiveDSR, roundToCasePack, genPO, genRFQ, cp7f, cp7g } from "../lib/utils";
-import { Dot, Toast, TH, SS, WorkflowChip, NumInput, SumCtx, VendorNotes, CalcBreakdown } from "./Shared";
-import { batchProfiles, batchBundleProfiles, calcCoverageNeed, calcPurchaseFrequency, getCalcBreakdown, DEFAULT_PROFILE } from "../lib/seasonal";
+import { Dot, Toast, TH, SS, WorkflowChip, NumInput, SumCtx, VendorNotes, CalcBreakdownV2 } from "./Shared";
+import { batchProfiles, batchBundleProfiles, calcCoverageNeed, calcPurchaseFrequency, DEFAULT_PROFILE } from "../lib/seasonal";
 import { batchVendorRecommendations, calcVendorRecommendation } from "../lib/recommender";
 
 function SC({ v, children, className }) {
@@ -33,7 +33,16 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
   const [toastPersist, setToastPersist] = useState(false);
   const [poN, setPoN] = useState("");
   const [poD, setPoD] = useState("");
-  const [vendorSub, setVendorSub] = useState("mix");
+ const [vendorSub, setVendorSub] = useState(() => {
+    const fromUrl = new URLSearchParams(window.location.search).get('sub');
+    if (fromUrl && ["mix", "cores", "bundles"].includes(fromUrl)) return fromUrl;
+    try {
+      const saved = localStorage.getItem('fba_vendor_sub');
+      if (saved && ["mix", "cores", "bundles"].includes(saved)) return saved;
+    } catch {}
+    return "mix";
+  });
+  useEffect(() => { try { localStorage.setItem('fba_vendor_sub', vendorSub); } catch {} }, [vendorSub]);
   const [showRS, setShowRS] = useState(false);
   const [showCosts, setShowCosts] = useState(false);
   const [showPH, setShowPH] = useState({});
@@ -41,7 +50,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
   const [dismissed, setDismissed] = useState({});
   const [showIgnored, setShowIgnored] = useState(false);
   const [showNoBundleCores, setShowNoBundleCores] = useState(false);
-  const [breakdown, setBreakdown] = useState(null);
+  const [breakdownCore, setBreakdownCore] = useState(null);
 
   useEffect(() => { if (initV) { setVm("vendor"); setVf(initV); clearIV() } }, [initV, clearIV]);
 
@@ -353,12 +362,9 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
   const togCollapse = id => setCollapsed(p => ({ ...p, [id]: !p[id] }));
   const togDismiss = id => setDismissed(p => ({ ...p, [id]: !p[id] }));
 
-  const openBreakdown = useCallback((c) => {
-    const v = vMap[c.ven] || {}; const lt = v.lt || 30; const tg = gTD(v, stg);
-    const profile = profiles[c.id] || DEFAULT_PROFILE;
-    const pf = purchFreqMap[c.ven];
-    setBreakdown(getCalcBreakdown(c, v, stg, profile, lt, tg, pf));
-  }, [vMap, stg, profiles, purchFreqMap]);
+const openBreakdown = useCallback((c) => {
+    setBreakdownCore(c);
+  }, []);
 
   const getCombinedRec = (coreId) => { const recs = [...(recMap[coreId] || [])]; (data.bundles || []).filter(b => b.core1 === coreId && b.active === "Yes").forEach(b => { if (recMap[b.j]) recs.push(...recMap[b.j]) }); return recs.sort((a, b) => (b.date || '').localeCompare(a.date || '')).slice(0, 7) };
   const hasRecData = (coreId) => recMap[coreId]?.length || (data.bundles || []).some(b => b.core1 === coreId && b.active === "Yes" && recMap[b.j]?.length);
@@ -508,7 +514,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
   </tr>;
 
   return <div className="p-4">{toast && <Toast msg={toast} onClose={() => { setToast(null); setToastPersist(false); }} persist={toastPersist} />}
-    {breakdown && <CalcBreakdown data={breakdown} onClose={() => setBreakdown(null)} />}
+    {breakdownCore && <CalcBreakdownV2 core={breakdownCore} vendor={vMap[breakdownCore.ven]} vendorRec={vendorRecs[breakdownCore.ven]} stg={stg} onClose={() => setBreakdownCore(null)} />}
     <div className="flex flex-wrap gap-2 items-center mb-4">
       <div className="flex bg-gray-800 rounded-lg p-0.5">{["core", "vendor"].map(m => <button key={m} onClick={() => setVm(m)} className={`px-3 py-1.5 rounded-md text-sm font-medium ${vm === m ? "bg-blue-600 text-white" : "text-gray-400"}`}>{m === "core" ? "By Core" : "By Vendor"}</button>)}</div>
       <SS value={vf} onChange={setVf} options={vNames} />
