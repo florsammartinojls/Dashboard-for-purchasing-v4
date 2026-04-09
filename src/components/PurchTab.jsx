@@ -145,7 +145,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
   }, [data.vendors, data.receivingFull]);
 
   // === V2 RECOMMENDER — one pass for all vendors ===
-  const vendorRecs = useMemo(() => {
+const vendorRecs = useMemo(() => {
     if (!data.vendors?.length) return {};
     return batchVendorRecommendations({
       vendors: data.vendors,
@@ -155,10 +155,11 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
       receivingFull: data.receivingFull || [],
       replenMap,
       missingMap,
+      priceCompFull: data.priceCompFull || [],
       settings: stg,
       purchFreqMap,
     });
-  }, [data.vendors, data.cores, data.bundles, data._bundleSales, data.receivingFull, replenMap, missingMap, stg, purchFreqMap]);
+  }, [data.vendors, data.cores, data.bundles, data._bundleSales, data.receivingFull, data.priceCompFull, replenMap, missingMap, stg, purchFreqMap]);
 
   // Flat map: bundleId -> bundleDetails from whichever vendor rec contains it.
   // Used by CoreRow and BundleRow to show consistent effective DOC after waterfall.
@@ -326,7 +327,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
     const forceMode = mode === 'cores' ? 'cores' : mode === 'bundles' ? 'bundles' : null;
 
     // If forceMode differs from the default, recompute; else use the cached rec.
-    const rec = forceMode
+  const rec = forceMode
       ? calcVendorRecommendation({
           vendor,
           cores: data.cores || [],
@@ -335,6 +336,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
           receivingFull: data.receivingFull || [],
           replenMap,
           missingMap,
+          priceCompFull: data.priceCompFull || [],
           settings: stg,
           purchFreqSafety: purchFreqMap[vendorName]?.safetyMultiplier || 1.0,
           forceMode,
