@@ -171,15 +171,29 @@ function applyBundleGive(b, give, corePools) {
 }
 
 function distributeRawToBundles(prepped, corePools, targetDoc, replenFloor) {
+  // Helper: seasonal-aware DSR for waterfall targets. Falls back to plain dsr
+  // if seasonalDSR isn't set (shouldn't happen, but defensive).
+  const effDSR = (b) => (b.seasonalDSR && b.seasonalDSR > 0) ? b.seasonalDSR : b.dsr;
+
+  // "DOC" inside the waterfall is measured against seasonalDSR so that
+  // reaching "90 days" here means "90 days of actual expected demand",
+  // not 90 days of the flat current-DSR projection. This keeps the
+  // waterfall target consistent with coverageDemand / buyNeed downstream.
+
   // PHASE A — urgency: bring critical bundles up to replenFloor
-  const byUrgency = [...prepped].sort((a, b) => a.currentDOC - b.currentDOC);
+  const byUrgency = [...prepped].sort((a, b) => {
+    const ad = a.assignedInv / (effDSR(a) || 1);
+    const bd = b.assignedInv / (effDSR(b) || 1);
+    return ad - bd;
+  });
   for (const b of byUrgency) {
     if (!(b.dsr > 0)) continue;
+    const edsr = effDSR(b);
     const curInv = b.assignedInv + b.rawAssigned;
-    const curDOC = curInv / b.dsr;
+    const curDOC = curInv / edsr;
     if (curDOC >= replenFloor) continue;
 
-    const targetInv = Math.ceil(replenFloor * b.dsr);
+    const targetInv = Math.ceil(replenFloor * edsr);
     const gap = Math.max(0, targetInv - curInv);
     if (gap <= 0) continue;
 
@@ -190,24 +204,26 @@ function distributeRawToBundles(prepped, corePools, targetDoc, replenFloor) {
     applyBundleGive(b, give, corePools);
   }
 
-  // PHASE B — leveling: raise everyone toward targetDoc in steps
+  // PHASE B — leveling: raise everyone toward targetDoc in steps,
+  // using seasonal-aware DSR so the end state matches coverageDemand.
   let level = replenFloor + LEVELING_STEP_DAYS;
   let iter = 0;
   while (level <= targetDoc && iter < MAX_WATERFALL_ITER) {
     iter++;
     let any = false;
     const sorted = [...prepped].sort((a, b) => {
-      const ad = (a.assignedInv + a.rawAssigned) / (a.dsr || 1);
-      const bd = (b.assignedInv + b.rawAssigned) / (b.dsr || 1);
+      const ad = (a.assignedInv + a.rawAssigned) / (effDSR(a) || 1);
+      const bd = (b.assignedInv + b.rawAssigned) / (effDSR(b) || 1);
       return ad - bd;
     });
     for (const b of sorted) {
       if (!(b.dsr > 0)) continue;
+      const edsr = effDSR(b);
       const curInv = b.assignedInv + b.rawAssigned;
-      const curDOC = curInv / b.dsr;
+      const curDOC = curInv / edsr;
       if (curDOC >= level) continue;
 
-      const targetInv = Math.ceil(level * b.dsr);
+      const targetInv = Math.ceil(level * edsr);
       const gap = Math.max(0, targetInv - curInv);
       if (gap <= 0) continue;
 
@@ -321,10 +337,15 @@ export function calcVendorRecommendation({
   //   flatDemand    = dsr × targetDoc × safety (the non-seasonal baseline)
   //   coverageDemand = seasonally-adjusted (what buyNeed uses)
   //   ltDemand      = for the urgency flag only
+  //   seasonalDSR   = coverageDemand / targetDoc — average DSR over the horizon
+  //                   accounting for seasonality. Used by the waterfall so the
+  //                   leveling target matches the actual demand the bundle
+  //                   will face, not a flat projection.
   for (const b of prepped) {
     b.coverageDemand = projectBundleDemand(b.dsr, targetDoc, b.profile, safety);
     b.flatDemand = Math.round(b.dsr * targetDoc * safety);
     b.ltDemand = projectBundleDemand(b.dsr, lt, b.profile, 1.0);
+    b.seasonalDSR = targetDoc > 0 ? b.coverageDemand / targetDoc : b.dsr;
   }
 
   // Step 4: waterfall — distribute this vendor's core raw among the bundles
@@ -347,11 +368,15 @@ export function calcVendorRecommendation({
   );
   distributeRawToBundles(waterfallBundles, corePools, targetDoc, replenFloor);
 
-  // Step 5: buy need per bundle
+// Step 5: buy need per bundle
+  //   currentCoverDOC is expressed in "seasonal days" — how many days of the
+  //   expected (seasonal) demand the current total covers. This matches what
+  //   buyNeed operates on, so DOC₁ and buyNeed stay consistent.
   for (const b of prepped) {
     const total = b.assignedInv + b.rawAssigned;
     b.totalAvailable = total;
-    b.currentCoverDOC = b.dsr > 0 ? total / b.dsr : 99999;
+    const edsr = (b.seasonalDSR && b.seasonalDSR > 0) ? b.seasonalDSR : b.dsr;
+    b.currentCoverDOC = edsr > 0 ? total / edsr : 99999;
     b.buyNeed = Math.max(0, Math.ceil(b.coverageDemand - total));
     b.urgent = (total - b.ltDemand) < 0;
   }
@@ -446,6 +471,7 @@ const bundleDetails = prepped.map(b => ({
     rawAssignedFromWaterfall: b.rawAssigned,
     totalAvailable: b.totalAvailable,
     effectiveDSR: b.dsr,
+    seasonalDSR: b.seasonalDSR,
     currentCoverDOC: b.currentCoverDOC,
     targetDOC: targetDoc,
     coverageDemand: Math.round(b.coverageDemand),
