@@ -317,18 +317,30 @@ export function calcVendorRecommendation({
     };
   });
 
-  // Step 3: project demand (coverage horizon + LT horizon for urgency flag)
+// Step 3: project demand
+  //   flatDemand    = dsr × targetDoc × safety (the non-seasonal baseline)
+  //   coverageDemand = seasonally-adjusted (what buyNeed uses)
+  //   ltDemand      = for the urgency flag only
   for (const b of prepped) {
     b.coverageDemand = projectBundleDemand(b.dsr, targetDoc, b.profile, safety);
+    b.flatDemand = Math.round(b.dsr * targetDoc * safety);
     b.ltDemand = projectBundleDemand(b.dsr, lt, b.profile, 1.0);
   }
 
   // Step 4: waterfall — distribute this vendor's core raw among the bundles
-  // that use those cores. Pool is ONLY this vendor's cores' raw.
+  // that use those cores. Pool = raw in JLS warehouse + 7f inbound to JLS
+  // (pendingInbound from missingMap keyed by core.id). `core.inb` is NOT
+  // included because that's inbound to Amazon FBA (already committed to
+  // direct-to-Amazon flow, can't be used to assemble bundles).
   const corePools = {};
+  const corePendingInbound = {};
   for (const c of vendorCores) {
-    corePools[c.id] = num(c.raw);
+    const pending = num(missingMap?.[c.id]);
+    corePendingInbound[c.id] = pending;
+    corePools[c.id] = num(c.raw) + pending;
   }
+
+  
   // Only bundles that have at least one core from this vendor participate
   const waterfallBundles = prepped.filter(
     b => b.coresUsed.some(c => vCoreById[c.coreId])
@@ -428,7 +440,7 @@ export function calcVendorRecommendation({
   const vendorMoqGap = Math.max(0, vendorMoqDollar - totalCost);
 
   // Per-bundle transparency (used by Bundle rows and CoreTab BundlesTable)
-  const bundleDetails = prepped.map(b => ({
+const bundleDetails = prepped.map(b => ({
     bundleId: b.id,
     assignedInv: b.assignedInv,
     rawAssignedFromWaterfall: b.rawAssigned,
@@ -437,6 +449,7 @@ export function calcVendorRecommendation({
     currentCoverDOC: b.currentCoverDOC,
     targetDOC: targetDoc,
     coverageDemand: Math.round(b.coverageDemand),
+    flatDemand: b.flatDemand,
     ltDemand: Math.round(b.ltDemand),
     buyNeed: b.buyNeed,
     buyMode: b.buyMode,
@@ -449,6 +462,8 @@ export function calcVendorRecommendation({
   // Zero rows for cores with no need so the view can still show them.
   const coreDetails = vendorCores.map(c => {
     const item = coreItems.find(i => i.id === c.id);
+    const pending = corePendingInbound[c.id] || 0;
+    const rawOnHand = num(c.raw);
     return {
       coreId: c.id,
       needPieces: item?.needPieces || 0,
@@ -461,6 +476,9 @@ export function calcVendorRecommendation({
       urgent: item?.urgent || false,
       bundlesAffected: item?.bundlesAffected || 0,
       bundlesAffectedIds: item?.bundlesAffectedIds || [],
+      rawOnHand,
+      pendingInbound: pending,
+      totalPool: rawOnHand + pending,
     };
   });
 
