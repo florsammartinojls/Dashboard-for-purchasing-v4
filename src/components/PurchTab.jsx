@@ -4,6 +4,58 @@ import { Dot, Toast, TH, SS, WorkflowChip, NumInput, SumCtx, VendorNotes, CalcBr
 import { batchProfiles, batchBundleProfiles, calcCoverageNeed, calcPurchaseFrequency, DEFAULT_PROFILE } from "../lib/seasonal";
 import { batchVendorRecommendations, calcVendorRecommendation } from "../lib/recommender";
 
+// === FLAG DEFINITIONS — shared labels, colors, and explanations ===
+// If you add a new flag, put it here and the legend will auto-update.
+const FLAG_DEFS = {
+  OOS: {
+    label: "Stockout risk",
+    short: "OOS",
+    cls: "text-red-300 bg-red-500/20 border border-red-500/40",
+    tip: "A bundle using this core will run out of stock BEFORE the next PO arrives (inventory < lead-time demand). Needs to be in the next order.",
+  },
+  INV: {
+    label: "Inv mismatch",
+    short: "INV",
+    cls: "text-amber-300 bg-amber-500/20 border border-amber-500/40",
+    tip: "Sheet-reported DOC and recalculated DOC (allIn ÷ DSR) differ by more than 20%. Usually means the sheet hasn't caught up with a recent stock movement. Recheck manually before ordering.",
+  },
+  PROC: {
+    label: "Process raw",
+    short: "PROC",
+    cls: "text-cyan-300 bg-cyan-500/20 border border-cyan-500/40",
+    tip: "This core has raw material available AND at least one bundle that uses it has DOC < 60. Consider processing the existing raw into bundles instead of (or before) buying more.",
+  },
+  MOQ: {
+    label: "MOQ inflated",
+    short: "MOQ",
+    cls: "text-orange-300 bg-orange-500/25 border border-orange-500/40",
+    tip: "The MOQ or casepack is forcing an order significantly larger than the real need. Check the Cost/Excess for this core in the 📊 breakdown.",
+  },
+};
+
+function Flag({ type, extraTip }) {
+  const def = FLAG_DEFS[type];
+  if (!def) return null;
+  const title = extraTip ? `${def.tip}\n\n${extraTip}` : def.tip;
+  return (
+    <span className={`text-[10px] font-bold flex-shrink-0 px-1.5 py-0.5 rounded whitespace-nowrap ${def.cls}`} title={title}>
+      ⚠ {def.label}
+    </span>
+  );
+}
+
+// Small legend chip, same styling as Flag but without the ⚠ prefix.
+function FlagLegendItem({ type }) {
+  const def = FLAG_DEFS[type];
+  if (!def) return null;
+  return (
+    <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded ${def.cls}`} title={def.tip}>
+      {def.short} = {def.label}
+    </span>
+  );
+}
+
+
 function SC({ v, children, className }) {
   const { addCell } = useContext(SumCtx);
   const [sel, setSel] = useState(false);
@@ -401,14 +453,14 @@ const openBreakdown = useCallback((c) => {
     return <><tr className={`border-t border-gray-800/30 hover:bg-gray-800/20 text-xs ${hasCoreOrd(c) ? "bg-emerald-900/10" : ""} ${isUrgent ? "bg-red-900/10" : ""}`}>
       <td className="py-1 px-0.5 sticky left-0 bg-gray-950 z-10 w-4"><Dot status={c.status} /></td>
       <td className="py-1 px-0.5 sticky left-4 bg-gray-950 z-10 whitespace-nowrap"><button onClick={() => goCore(c.id)} className="text-blue-400 font-mono hover:underline text-[11px]">{c.id}</button></td>
-      <td className="py-1 px-1 sticky left-[85px] bg-gray-950 z-10">
-        <div className="flex items-center gap-1 min-w-0">
+    <td className="py-1 px-1 sticky left-[85px] bg-gray-950 z-10">
+        <div className="flex items-center gap-1 min-w-0 flex-wrap">
           <span className="text-gray-200 truncate max-w-[130px]">{c.ti}</span>
-          {isUrgent && <span className="text-red-400 text-[10px] font-bold flex-shrink-0 bg-red-500/15 px-1 rounded" title="Bundle will stockout before LT arrives">⚠OOS</span>}
-          {c.invAnomaly && <span className="text-amber-400 text-[10px] font-bold flex-shrink-0 bg-amber-500/15 px-1 rounded" title="Sheet DOC vs calculated DOC mismatch >20%">⚠INV</span>}
-          {c.rawPendingBundles && <span className="text-cyan-400 text-[10px] font-bold flex-shrink-0 bg-cyan-500/15 px-1 rounded" title="Has raw available + bundles with DOC < 60. Consider processing raw into bundles instead of buying.">⚙PROC</span>}
-          {c.moqInflated && <span className="text-orange-300 text-[10px] font-bold flex-shrink-0 bg-orange-500/25 border border-orange-500/40 px-1.5 rounded" title={`MOQ forces ${Math.round(c.moqInflationRatio * 100)}% of actual need. Excess: ${R(c.excessFromMoq)} pcs / $${Math.round(c.excessCostFromMoq).toLocaleString()}`}>⚠MOQ</span>}
-          {c.bundlesAffected > 0 && <span className="text-[10px] text-gray-500 flex-shrink-0" title={`Need driven by ${c.bundlesAffected} bundle(s)`}>({c.bundlesAffected}b)</span>}
+          {isUrgent && <Flag type="OOS" />}
+          {c.invAnomaly && <Flag type="INV" />}
+          {c.rawPendingBundles && <Flag type="PROC" />}
+          {c.moqInflated && <Flag type="MOQ" extraTip={`MOQ forces ${Math.round(c.moqInflationRatio * 100)}% of real need. Excess: ${R(c.excessFromMoq)} pcs / $${Math.round(c.excessCostFromMoq).toLocaleString()}`} />}
+          {c.bundlesAffected > 0 && <span className="text-[10px] text-gray-500 flex-shrink-0" title={`The core's "Need" is driven by ${c.bundlesAffected} bundle(s). See 📊 Step 3 for the breakdown.`}>({c.bundlesAffected}b)</span>}
         </div>
       </td>
       <SC v={c.dsr} className="py-1 px-1 text-right">{D1(c.dsr)}</SC>
@@ -538,7 +590,16 @@ const openBreakdown = useCallback((c) => {
     {vm === "vendor" && <div className="flex flex-wrap gap-3 mb-4 items-center text-sm"><span className="text-gray-500 text-xs">PO#:</span><input type="text" value={poN} onChange={e => setPoN(e.target.value)} placeholder="Auto" className="bg-gray-800 border border-gray-700 text-white rounded px-2 py-1 w-28 text-sm" />{!vf && <><span className="text-gray-500 text-xs">Date:</span><input type="date" value={poD} onChange={e => setPoD(e.target.value)} className="bg-gray-800 border border-gray-700 text-white rounded px-2 py-1 text-sm" /></>}<span className="text-gray-500 text-xs">Buyer:</span><span className="text-white font-semibold">{stg.buyer || <span className="text-red-400">Set in ⚙️</span>}</span></div>}
 
     {vm === "core" && <div className="overflow-x-auto rounded-xl border border-gray-800"><table className="w-full"><thead><tr className="bg-gray-900/80 text-xs text-gray-400 uppercase sticky top-0 z-20"><th className="py-3 px-2 w-8" /><th className="py-3 px-2 text-left">Core</th><th className="py-3 px-2 text-left">Vendor</th><th className="py-3 px-2 text-left">Title</th><TH tip="DSR" className="py-3 px-2 text-right">DSR</TH><TH tip="7D" className="py-3 px-2 text-right">7D</TH><th className="py-3 px-2 text-center">T</th><TH tip="DOC" className="py-3 px-2 text-right">DOC</TH><TH tip="All-In" className="py-3 px-2 text-right">All-In</TH><th className="py-3 px-2 text-right">MOQ</th><th className="py-3 px-2 text-center">S</th><th className="py-3 px-1 border-l-2 border-gray-600" /><TH tip="Need (bundle-driven)" className="py-3 px-2 text-right">Need</TH><th className="py-3 px-2 text-right">Order</th><th className="py-3 px-2 text-right">Cost</th><TH tip="After DOC" className="py-3 px-2 text-right">After</TH><th className="py-3 px-2 w-14" /></tr></thead>
-      <tbody>{enr.map(c => <tr key={c.id} className={`border-b border-gray-800/50 hover:bg-gray-800/30 text-sm ${c.sCoverage?.urgent ? "bg-red-900/10" : ""}`}><td className="py-2 px-2"><Dot status={c.status} /></td><td className="py-2 px-2"><button onClick={() => goCore(c.id)} className="text-blue-400 font-mono text-xs hover:underline">{c.id}</button></td><td className="py-2 px-2 text-blue-300 text-xs truncate max-w-[100px] cursor-pointer hover:underline" onClick={() => goVendor(c.ven)}>{c.ven}</td><td className="py-2 px-2 text-gray-200 truncate max-w-[180px]">{c.ti}{c.sCoverage?.urgent && <span className="ml-1 text-red-400 text-xs font-bold">⚠OOS</span>}{c.invAnomaly && <span className="ml-1 text-amber-400 text-xs font-bold">⚠INV</span>}{c.rawPendingBundles && <span className="ml-1 text-cyan-400 text-xs font-bold" title="Has raw + bundles with low DOC">⚙PROC</span>}{c.bundlesAffected > 0 && <span className="ml-1 text-xs text-gray-500">({c.bundlesAffected}b)</span>}</td><td className="py-2 px-2 text-right">{D1(c.dsr)}</td><td className="py-2 px-2 text-right">{D1(c.d7)}</td><td className="py-2 px-2 text-center">{c.d7 > c.dsr ? <span className="text-emerald-400">▲</span> : c.d7 < c.dsr ? <span className="text-red-400">▼</span> : "—"}</td><td className={`py-2 px-2 text-right font-semibold ${dc(c.doc, c.critDays, c.warnDays)}`}>{R(c.doc)}</td><td className="py-2 px-2 text-right">{R(c.allIn)}</td><td className="py-2 px-2 text-right text-gray-400 text-xs">{c.moq > 0 ? R(c.moq) : "—"}</td><td className="py-2 px-2 text-center">{c.seas && <span className="text-purple-400 text-xs font-bold">{c.seas.peak}</span>}</td><td className="py-2 px-1 border-l-2 border-gray-600" /><td className="py-2 px-2 text-right">{c.needQty > 0 ? (
+      <tbody>{enr.map(c => <tr key={c.id} className={`border-b border-gray-800/50 hover:bg-gray-800/30 text-sm ${c.sCoverage?.urgent ? "bg-red-900/10" : ""}`}><td className="py-2 px-2"><Dot status={c.status} /></td><td className="py-2 px-2"><button onClick={() => goCore(c.id)} className="text-blue-400 font-mono text-xs hover:underline">{c.id}</button></td><td className="py-2 px-2 text-blue-300 text-xs truncate max-w-[100px] cursor-pointer hover:underline" onClick={() => goVendor(c.ven)}>{c.ven}</td><td className="py-2 px-2 text-gray-200 max-w-[260px]">
+  <div className="flex items-center gap-1 flex-wrap">
+    <span className="truncate max-w-[170px]">{c.ti}</span>
+    {c.sCoverage?.urgent && <Flag type="OOS" />}
+    {c.invAnomaly && <Flag type="INV" />}
+    {c.rawPendingBundles && <Flag type="PROC" />}
+    {c.moqInflated && <Flag type="MOQ" extraTip={`MOQ forces ${Math.round(c.moqInflationRatio * 100)}% of real need. Excess: ${R(c.excessFromMoq)} pcs / $${Math.round(c.excessCostFromMoq).toLocaleString()}`} />}
+    {c.bundlesAffected > 0 && <span className="text-[10px] text-gray-500" title={`Need driven by ${c.bundlesAffected} bundle(s). See 📊 for detail.`}>({c.bundlesAffected}b)</span>}
+  </div>
+</td><td className="py-2 px-2 text-right">{D1(c.dsr)}</td><td className="py-2 px-2 text-right">{D1(c.d7)}</td><td className="py-2 px-2 text-center">{c.d7 > c.dsr ? <span className="text-emerald-400">▲</span> : c.d7 < c.dsr ? <span className="text-red-400">▼</span> : "—"}</td><td className={`py-2 px-2 text-right font-semibold ${dc(c.doc, c.critDays, c.warnDays)}`}>{R(c.doc)}</td><td className="py-2 px-2 text-right">{R(c.allIn)}</td><td className="py-2 px-2 text-right text-gray-400 text-xs">{c.moq > 0 ? R(c.moq) : "—"}</td><td className="py-2 px-2 text-center">{c.seas && <span className="text-purple-400 text-xs font-bold">{c.seas.peak}</span>}</td><td className="py-2 px-1 border-l-2 border-gray-600" /><td className="py-2 px-2 text-right">{c.needQty > 0 ? (
         c.moqInflated ? (
           <span title={`Real need: ${R(c.needQty)} · MOQ forces: ${R(c.orderQty)}`}>
             <span className="text-gray-300">{R(c.needQty)}</span>
@@ -564,6 +625,15 @@ const openBreakdown = useCallback((c) => {
       // How many bundles would be bought as "bundle" mode vs "core" mode (for visibility)
       const bundlesInBundleMode = vRec?.bundleItems?.length || 0;
       const bundlesInCoreMode = (vRec?.bundleDetails || []).filter(bd => bd.buyMode === 'core' && bd.buyNeed > 0).length;
+
+      // Which flags actually fire for this vendor? (Only show legend for the ones present.)
+      const activeFlags = new Set();
+      grp.cores.forEach(c => {
+        if (c.sCoverage?.urgent) activeFlags.add('OOS');
+        if (c.invAnomaly) activeFlags.add('INV');
+        if (c.rawPendingBundles) activeFlags.add('PROC');
+        if (c.moqInflated) activeFlags.add('MOQ');
+      });
 
       return <div key={v.name} className="mb-5 border border-gray-800 rounded-xl overflow-hidden">
         <div className="bg-gray-900 px-4 py-3">
@@ -592,6 +662,12 @@ const openBreakdown = useCallback((c) => {
             })()}
             {poI.length === 0 ? <span className="ml-auto text-xs text-gray-400 bg-gray-700 px-2 py-0.5 rounded">—</span> : <span className={`ml-auto text-xs font-semibold px-2 py-0.5 rounded ${meets ? "text-emerald-400 bg-emerald-400/10" : "text-red-400 bg-red-400/10"}`}>{meets ? "✓" : "!"} {$(poT)}{poC > 0 ? " / " + poC + "cs" : ""}</span>}
           </div>
+          {activeFlags.size > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5 mb-2 pb-2 border-b border-gray-800">
+              <span className="text-[9px] uppercase text-gray-600 tracking-wider">Flags in this vendor:</span>
+              {[...activeFlags].map(f => <FlagLegendItem key={f} type={f} />)}
+            </div>
+          )}
           <div className="flex flex-wrap gap-2 items-center">
             <button onClick={() => fillR(grp.cores, grp.bundles, vendorSub, v.name)} className={`text-xs px-2.5 py-1 rounded ${data._coreInv?.length ? "bg-blue-600/80 text-white" : "bg-yellow-600 text-white animate-pulse"}`}>{data._coreInv?.length ? "Fill Rec" : "Fill Rec ⏳"}</button>
             <button onClick={() => doFillMOQ(grp.cores, grp.bundles, v.moqDollar || 0)} disabled={!v.moqDollar || poT >= v.moqDollar || poI.length === 0} className={`text-xs px-2.5 py-1 rounded font-medium ${v.moqDollar && poT < v.moqDollar && poI.length > 0 ? "bg-orange-600 text-white" : "bg-gray-700 text-gray-500 cursor-not-allowed"}`}>Fill MOQ{moqGap > 0 && poI.length > 0 ? ` (+${$(moqGap)})` : ""}</button>
