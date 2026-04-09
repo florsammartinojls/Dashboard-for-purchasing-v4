@@ -336,7 +336,12 @@ const getPOI = (cores, bundles) => {
     (bundles || []).filter(b => hasBundleOrd(b)).forEach(b => {
       const f = feMap[b.j];
       const cogpOv = gCogP(b.j);
-      const vendorName = (b.vendors || "").split(',').map(s => s.trim()).find(v => v) || "";
+      const vendorsRaw = (b.vendors || "").trim();
+      let vendorName = vendorsRaw;
+      if (!vendorRecs[vendorName]) {
+        const firstChunk = vendorsRaw.split(',').map(s => s.trim()).find(v => v && vendorRecs[v]) || "";
+        if (firstChunk) vendorName = firstChunk;
+      }
       const vendorPrice = getVendorPrice(vendorName, b.j, f?.aicogs || b.aicogs || 0);
       const unitCost = cogpOv > 0 ? cogpOv : vendorPrice;
       items.push({ id: b.j, ti: b.t, vsku: b.asin || b.bundleCode, qty: bundleEffQ(b), cost: unitCost, cp: 1, inbS: gInbS(b.j), isCoreItem: false });
@@ -401,10 +406,15 @@ const getPOI = (cores, bundles) => {
       const vendorPrice = getVendorPrice(c.ven, c.id, c.cost);
       currentTotal += coreEffQ(c) * (cogpOv > 0 ? cogpOv : vendorPrice);
     });
-    if (vendorSub !== "cores") (grpBundles || []).filter(b => hasBundleOrd(b)).forEach(b => {
+  if (vendorSub !== "cores") (grpBundles || []).filter(b => hasBundleOrd(b)).forEach(b => {
       const f = feMap[b.j];
       const cogpOv = gCogP(b.j);
-      const vendorName = (b.vendors || "").split(',').map(s => s.trim()).find(v => v) || "";
+      const vendorsRaw = (b.vendors || "").trim();
+      let vendorName = vendorsRaw;
+      if (!vendorRecs[vendorName]) {
+        const firstChunk = vendorsRaw.split(',').map(s => s.trim()).find(v => v && vendorRecs[v]) || "";
+        if (firstChunk) vendorName = firstChunk;
+      }
       const vendorPrice = getVendorPrice(vendorName, b.j, f?.aicogs || 0);
       currentTotal += bundleEffQ(b) * (cogpOv > 0 ? cogpOv : vendorPrice);
     });
