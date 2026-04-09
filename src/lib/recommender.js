@@ -74,16 +74,37 @@ function isChinaVendor(vendor) {
 //
 // Falls back to null if nothing matches; caller then uses sheet core.cost.
 // ────────────────────────────────────────────────────────────
+let __rec_debug_count = 0;
 function getVendorCoreUnitCost(coreId, vendor, paymentHistory) {
+  const shouldLog = __rec_debug_count < 5; // log first 5 calls only
+  if (shouldLog) {
+    __rec_debug_count++;
+    console.log(`[rec] === lookup: core=${coreId} vendor=${vendor?.name} country=${vendor?.country} ===`);
+    console.log(`[rec]     paymentHistory length=${paymentHistory?.length || 0}`);
+    if (paymentHistory?.length) {
+      const rowsForCore = paymentHistory.filter(r => (r?.core || '').toLowerCase().trim() === coreId.toLowerCase().trim());
+      console.log(`[rec]     rows for this core:`, rowsForCore.length);
+      if (rowsForCore.length > 0) {
+        console.log(`[rec]     first 3 rows for core:`, rowsForCore.slice(0, 3).map(r => ({
+          date: r.date, pcs: r.pcs, matPrice: r.matPrice, note: r.note,
+        })));
+      }
+    }
+    console.log(`[rec]     isChina?`, isChinaVendor(vendor));
+  }
+
   if (!Array.isArray(paymentHistory) || !coreId || !vendor?.name) return null;
   const cid = coreId.toLowerCase().trim();
   const vName = vendor.name.toLowerCase().trim();
   const china = isChinaVendor(vendor);
 
   let best = null;
+  let checked = 0;
+  let matched = 0;
   for (const r of paymentHistory) {
     if (!r) continue;
     if ((r.core || '').toLowerCase().trim() !== cid) continue;
+    checked++;
 
     const pcs = Number(r.pcs);
     const mat = Number(r.matPrice);
@@ -93,22 +114,22 @@ function getVendorCoreUnitCost(coreId, vendor, paymentHistory) {
 
     let matches = false;
     if (china) {
-      // Chinese vendor: only accept container-code rows (no " - " in note)
       matches = parsed.kind === 'container';
     } else {
-      // US/domestic: note's first token must match vendor.name
       if (parsed.kind !== 'named' || !parsed.name) continue;
       const noteName = parsed.name.toLowerCase();
-      // fuzzy match: either equal, or one contains the other
-      // (handles "Berk Enterprises, Inc." vs "Berk Enterprises Inc" etc.)
-      matches = noteName === vName
-             || noteName.includes(vName)
-             || vName.includes(noteName);
+      matches = noteName === vName || noteName.includes(vName) || vName.includes(noteName);
     }
     if (!matches) continue;
+    matched++;
 
     if (!best || (r.date || '') > (best.date || '')) best = r;
   }
+
+  if (shouldLog) {
+    console.log(`[rec]     checked=${checked} matched=${matched} best=`, best ? { date: best.date, note: best.note, mat: best.matPrice, pcs: best.pcs } : null);
+  }
+
   if (!best) return null;
   return Number(best.matPrice) / Number(best.pcs);
 }
