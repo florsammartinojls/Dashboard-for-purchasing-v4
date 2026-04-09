@@ -161,6 +161,14 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
     });
   }, [data.vendors, data.cores, data.bundles, data._bundleSales, data.receivingFull, data.priceCompFull, replenMap, missingMap, stg, purchFreqMap]);
 
+  // DEBUG: expose vendorRecs to window so we can inspect from console
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      window.__vendorRecs = vendorRecs;
+      console.log('[debug] vendorRecs exposed to window.__vendorRecs, vendor count:', Object.keys(vendorRecs).length);
+    }
+  }, [vendorRecs]);
+
   // Quick lookup: "what's the real unit cost this vendor charges for this item?"
   // Tries the recommender's coreItems/bundleItems first (already computed from 7g),
   // then falls back to whatever fallback the caller provides (usually core.cost or aicogs).
