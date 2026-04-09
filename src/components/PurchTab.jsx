@@ -552,11 +552,16 @@ const openBreakdown = useCallback((c) => {
     const f = b.fee || feMap[b.j];
     const eq = bundleEffQ(b);
     const cogpOverride = gCogP(b.j);
-    // For bundles: vendor price comes from the recommender's bundleItems
-    // (which sum the per-core costs × qty). If the recommender doesn't have
-    // this bundle in bundleItems (not in bundle mode, or not needing buy),
-    // fall back to the fee sheet's aicogs.
-    const vendorName = (b.vendors || "").split(',').map(s => s.trim()).find(v => v) || "";
+    // For bundles: vendor price comes from the recommender's priceMap.
+    // b.vendors may contain a single vendor name that includes commas
+    // (e.g. "Jiangmen Isacco Industry & Trade Co., Ltd."), so we try the
+    // full string first and only split as fallback for multi-vendor legacy.
+    const vendorsRaw = (b.vendors || "").trim();
+    let vendorName = vendorsRaw;
+    if (!vendorRecs[vendorName]) {
+      const firstChunk = vendorsRaw.split(',').map(s => s.trim()).find(v => v && vendorRecs[v]) || "";
+      if (firstChunk) vendorName = firstChunk;
+    }
     const vendorPrice = getVendorPrice(vendorName, b.j, f?.aicogs || 0);
     const unitCost = cogpOverride > 0 ? cogpOverride : vendorPrice;
     const cost = eq * unitCost;
