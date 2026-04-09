@@ -608,6 +608,31 @@ export function calcVendorRecommendation({
   const meetsVendorMoq = vendorMoqDollar <= 0 || totalCost >= vendorMoqDollar;
   const vendorMoqGap = Math.max(0, vendorMoqDollar - totalCost);
 
+// === PRICE MAP — full lookup of { id → pricePerPiece } for every core
+  // and every bundle of this vendor, regardless of whether they need to be
+  // bought right now. The UI uses this so that ANY row for this vendor
+  // displays the correct price (not just rows that are in buyNeed).
+  //
+  // For cores: unit cost = 7g material history or sheet core.cost fallback.
+  // For bundles: Σ (per-core unit cost × qty per bundle), same formula as
+  // bundleItems uses, but applied to ALL bundles of the vendor.
+  const priceMap = {};
+  for (const c of vendorCores) {
+    const histUnitCost = getVendorCoreUnitCost(c.id, vendor, priceCompFull);
+    priceMap[c.id] = histUnitCost != null ? histUnitCost : num(c.cost);
+  }
+  for (const b of vendorBundles) {
+    let price = 0;
+    for (const { coreId, qty } of coresOf(b)) {
+      const c = vCoreById[coreId];
+      if (!c) continue;
+      const histUnit = getVendorCoreUnitCost(coreId, vendor, priceCompFull);
+      const unit = histUnit != null ? histUnit : num(c.cost);
+      price += unit * qty;
+    }
+    priceMap[b.j] = price;
+  }
+  
   // Per-bundle transparency (used by Bundle rows and CoreTab BundlesTable)
 const bundleDetails = prepped.map(b => ({
     bundleId: b.id,
@@ -662,6 +687,7 @@ const bundleDetails = prepped.map(b => ({
     bundleItems,
     coreDetails,
     bundleDetails,
+    priceMap,
     totalCost,
     vendorMoqDollar,
     meetsVendorMoq,
