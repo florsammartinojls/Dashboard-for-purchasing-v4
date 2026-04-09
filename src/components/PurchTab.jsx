@@ -199,7 +199,106 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
     return m;
   }, [vendorRecs]);
 
-    
+  // === CPP BENCHMARK — compare current vendor's CPP (total cost / pcs,
+  // including inbound and tariffs) vs the most recent historical purchase
+  // of the same core from a DIFFERENT origin:
+  //   - If current vendor is in China → benchmark = last US purchase of this core
+  //   - If current vendor is in US    → benchmark = last purchase from any OTHER vendor
+  //                                     (could be US or China — whichever is most recent)
+  // Returns { currentCpp, benchmarkCpp, benchmarkLabel, pctDiff } or null.
+  const priceHistoryFull = useMemo(
+    () => (data.priceCompFull?.length ? data.priceCompFull : data.priceComp) || [],
+    [data.priceCompFull, data.priceComp]
+  );
+
+  const getCppBenchmark = useCallback((coreId, vendor) => {
+    if (!coreId || !vendor?.name) return null;
+    const isChinaCurrent = (() => {
+      const c = (vendor.country || '').toLowerCase().trim();
+      return c === 'china' || c === 'cn' || c === 'prc';
+    })();
+    const cid = coreId.toLowerCase().trim();
+    const vNameLower = vendor.name.toLowerCase().trim();
+
+    // Parse a row's note to figure out its origin
+    const parseNote = (note) => {
+      if (!note) return { kind: 'unknown', name: null };
+      const n = String(note).trim();
+      const m = n.match(/^(.+?)\s+-\s+/);
+      if (m) return { kind: 'named', name: m[1].trim() };
+      return { kind: 'container', name: null };
+    };
+
+    // Gather all rows for this core with computed cpp
+    const rows = priceHistoryFull
+      .filter(r => r && (r.core || '').toLowerCase().trim() === cid)
+      .map(r => {
+        const pcs = Number(r.pcs);
+        const total = Number(r.totalCost);
+        if (!(pcs > 0) || !(total > 0)) return null;
+        const cpp = total / pcs;
+        const parsed = parseNote(r.note);
+        return { date: r.date || '', cpp, note: r.note, parsed };
+      })
+      .filter(Boolean)
+      .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+
+    if (rows.length === 0) return null;
+
+    // Current CPP = most recent row matching this vendor
+    let currentRow = null;
+    for (const r of rows) {
+      if (isChinaCurrent) {
+        if (r.parsed.kind === 'container') { currentRow = r; break; }
+      } else {
+        if (r.parsed.kind === 'named' && r.parsed.name) {
+          const nl = r.parsed.name.toLowerCase();
+          if (nl === vNameLower || nl.includes(vNameLower) || vNameLower.includes(nl)) {
+            currentRow = r; break;
+          }
+        }
+      }
+    }
+    if (!currentRow) return null;
+
+    // Benchmark = most recent row from the OTHER origin
+    let benchRow = null;
+    let benchLabel = '';
+    if (isChinaCurrent) {
+      // current = China → benchmark = last US
+      for (const r of rows) {
+        if (r.parsed.kind === 'named' && r.parsed.name) {
+          benchRow = r;
+          benchLabel = r.parsed.name;
+          break;
+        }
+      }
+    } else {
+      // current = US → benchmark = last purchase from a DIFFERENT vendor (US or China)
+      for (const r of rows) {
+        if (r === currentRow) continue;
+        if (r.parsed.kind === 'container') {
+          benchRow = r; benchLabel = 'China'; break;
+        }
+        if (r.parsed.kind === 'named' && r.parsed.name) {
+          const nl = r.parsed.name.toLowerCase();
+          const isSameVendor = nl === vNameLower || nl.includes(vNameLower) || vNameLower.includes(nl);
+          if (!isSameVendor) { benchRow = r; benchLabel = r.parsed.name; break; }
+        }
+      }
+    }
+    if (!benchRow) return null;
+
+    const pctDiff = benchRow.cpp > 0 ? ((currentRow.cpp - benchRow.cpp) / benchRow.cpp) * 100 : 0;
+    return {
+      currentCpp: currentRow.cpp,
+      currentDate: currentRow.date,
+      benchmarkCpp: benchRow.cpp,
+      benchmarkDate: benchRow.date,
+      benchmarkLabel: benchLabel,
+      pctDiff,
+    };
+  }, [priceHistoryFull]);
 
   // === ENRICHED CORES — status/DOC from physical data, need/order/cost from recommender ===
   const spikeThr = stg.spikeThreshold || 1.25;
@@ -279,8 +378,9 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
       if (vf && c.ven !== vf) return false;
       if (sf && c.status !== sf) return false;
       if (minD > 0 && c.doc < minD) return false;
-      if (nf === "need" && c.needQty <= 0) return false;
-      if (nf === "ok" && c.needQty > 0) return false;
+      if (nf === "inorder" && !(ov[c.id]?.pcs > 0 || ov[c.id]?.cas > 0)) return false;
+      if (nf === "rec" && c.needQty <= 0) return false;
+      if (nf === "ok" && (ov[c.id]?.pcs > 0 || ov[c.id]?.cas > 0 || c.needQty > 0)) return false;
       if (locF === "us" && !c.isDom) return false;
       if (locF === "intl" && c.isDom) return false;
       return true;
@@ -291,7 +391,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
       if (sort === "dsr") return b.dsr - a.dsr;
       if (sort === "need$") return b.needDollar - a.needDollar;
       return 0;
-    }), [data, stg, vf, sf, sort, vMap, nf, minD, locF, profiles, vendorRecs, showNoBundleCores, activeBundleCores, spikeThr]);
+    }), [data, stg, vf, sf, sort, vMap, nf, minD, locF, profiles, vendorRecs, showNoBundleCores, activeBundleCores, spikeThr, ov]);
 
   const venBundles = useMemo(() => (data.bundles || []).filter(b => {
     if (bA === "yes" && b.active !== "Yes") return false;
@@ -530,7 +630,23 @@ const openBreakdown = useCallback((c) => {
       <td className="py-0.5 px-0.5 sticky right-24 bg-gray-950 z-10"><NumInput value={gCas(c.id)} onChange={v => setF(c.id, 'cas', v)} /></td>
       {showCosts && <><td className="py-0.5 px-0.5"><NumInput value={gInbS(c.id)} onChange={v => setF(c.id, 'inbS', v)} /></td><td className="py-0.5 px-0.5"><NumInput value={gCogP(c.id)} onChange={v => setF(c.id, 'cogP', v)} /></td><td className="py-0.5 px-0.5"><NumInput value={gCogC(c.id)} onChange={v => setF(c.id, 'cogC', v)} /></td></>}
 
-      <SC v={cost} className="py-1 px-1 text-right text-amber-300 sticky right-12 bg-gray-950 z-10">{cost > 0 ? $(cost) : "—"}</SC>
+      {(() => {
+        const bench = getCppBenchmark(c.id, vMap[c.ven]);
+        let tip = null;
+        let pctEl = null;
+        if (bench) {
+          const cheaper = bench.pctDiff < 0;
+          const sign = bench.pctDiff > 0 ? '+' : '';
+          tip = `Current CPP (${c.ven}): $${bench.currentCpp.toFixed(4)}/pc (from ${bench.currentDate})\nBenchmark (${bench.benchmarkLabel}): $${bench.benchmarkCpp.toFixed(4)}/pc (from ${bench.benchmarkDate})\n${sign}${bench.pctDiff.toFixed(0)}% vs benchmark (total-cost CPP, inbound+tariffs included)`;
+          pctEl = <span className={`block text-[9px] font-normal ${cheaper ? "text-emerald-400" : "text-red-400"}`} title={tip}>{sign}{bench.pctDiff.toFixed(0)}%</span>;
+        }
+        return (
+          <SC v={cost} className="py-1 px-1 text-right text-amber-300 sticky right-12 bg-gray-950 z-10">
+            <span title={tip || undefined}>{cost > 0 ? $(cost) : "—"}</span>
+            {pctEl}
+          </SC>
+        );
+      })()}
       <td className={`py-1 px-1 text-right sticky right-0 bg-gray-950 z-10 ${ad ? dc(ad, c.critDays, c.warnDays) : "text-gray-500"}`}>{ad ? R(ad) : "—"}</td>
       <td className="py-1 px-0.5 flex gap-0.5">
         <button onClick={() => togCollapse(c.id)} className="text-gray-400 hover:text-white text-xs px-0.5">{isCol ? "+" : "−"}</button>
@@ -638,7 +754,7 @@ const openBreakdown = useCallback((c) => {
       <SS value={vf} onChange={setVf} options={vNames} />
       <select value={sf} onChange={e => setSf(e.target.value)} className="bg-gray-800 border border-gray-700 text-gray-300 text-sm rounded-lg px-2 py-1.5"><option value="">All Status</option><option value="critical">Critical</option><option value="warning">Warning</option><option value="healthy">Healthy</option></select>
       {!vf && <select value={locF} onChange={e => setLocF(e.target.value)} className="bg-gray-800 border border-gray-700 text-gray-300 text-sm rounded-lg px-2 py-1.5"><option value="all">All</option><option value="us">US Only</option><option value="intl">International</option></select>}
-      <select value={nf} onChange={e => setNf(e.target.value)} className="bg-gray-800 border border-gray-700 text-gray-300 text-sm rounded-lg px-2 py-1.5"><option value="all">All</option><option value="need">Needs Buy</option><option value="ok">No Need</option></select>
+      <select value={nf} onChange={e => setNf(e.target.value)} className="bg-gray-800 border border-gray-700 text-gray-300 text-sm rounded-lg px-2 py-1.5"><option value="all">All</option><option value="inorder">In Order</option><option value="rec">Rec &gt; 0</option><option value="ok">Nothing Loaded</option></select>
       {vm === "core" && <><select value={sort} onChange={e => setSort(e.target.value)} className="bg-gray-800 border border-gray-700 text-gray-300 text-sm rounded-lg px-2 py-1.5"><option value="status">Priority</option><option value="doc">DOC</option><option value="dsr">DSR</option><option value="need$">$</option></select><span className="text-gray-500 text-xs">Min:</span><input type="number" value={minD} onChange={e => setMinD(+e.target.value)} className="bg-gray-800 border border-gray-700 text-white text-sm rounded px-2 py-1 w-14" /></>}
       {vm === "vendor" && <div className="flex bg-gray-800 rounded-lg p-0.5">{[["mix", "Mix (auto)"], ["cores", "Force Cores"], ["bundles", "Force Bundles"]].map(([k, l]) => <button key={k} onClick={() => setVendorSub(k)} className={`px-2.5 py-1 rounded-md text-xs font-medium ${vendorSub === k ? "bg-indigo-600 text-white" : "text-gray-400"}`}>{l}</button>)}</div>}
       <div className="flex gap-2 ml-auto text-xs"><span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-500" />{sc.critical}</span><span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-500" />{sc.warning}</span><span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500" />{sc.healthy}</span><span className="text-gray-500">|</span><span className="text-gray-300 font-semibold">{enr.length}</span>
@@ -670,7 +786,17 @@ const openBreakdown = useCallback((c) => {
             <span className="text-orange-400 text-xs ml-1">→{R(c.orderQty)}</span>
           </span>
         ) : <span className="text-gray-300">{R(c.needQty)}</span>
-      ) : "—"}</td><td className="py-2 px-2 text-right text-white font-semibold">{c.orderQty > 0 ? R(c.orderQty) : "—"}</td><td className="py-2 px-2 text-right text-amber-300">{c.needDollar > 0 ? $(c.needDollar) : "—"}</td><td className={`py-2 px-2 text-right ${c.orderQty > 0 ? dc(c.docAfter, c.critDays, c.warnDays) : "text-gray-500"}`}>{c.orderQty > 0 ? R(c.docAfter) : "—"}</td><td className="py-2 px-2 flex gap-1"><button onClick={() => openBreakdown(c)} className={`text-xs px-1 rounded ${c.sProfile?.hasHistory ? "text-purple-400" : "text-gray-600"}`}>📊</button><button onClick={() => goCore(c.id)} className="text-blue-400 text-xs px-1.5 py-0.5 bg-blue-400/10 rounded">V</button></td></tr>)}</tbody>
+      ) : "—"}</td><td className="py-2 px-2 text-right text-white font-semibold">{c.orderQty > 0 ? R(c.orderQty) : "—"}</td><td className="py-2 px-2 text-right text-amber-300">
+  {c.needDollar > 0 ? $(c.needDollar) : "—"}
+  {(() => {
+    const bench = getCppBenchmark(c.id, vMap[c.ven]);
+    if (!bench) return null;
+    const cheaper = bench.pctDiff < 0;
+    const sign = bench.pctDiff > 0 ? '+' : '';
+    const tip = `Current CPP (${c.ven}): $${bench.currentCpp.toFixed(4)}/pc\nBenchmark (${bench.benchmarkLabel}): $${bench.benchmarkCpp.toFixed(4)}/pc\n${sign}${bench.pctDiff.toFixed(0)}% vs benchmark (total CPP, incl. inbound+tariffs)`;
+    return <span className={`block text-[9px] font-normal ${cheaper ? "text-emerald-400" : "text-red-400"}`} title={tip}>{sign}{bench.pctDiff.toFixed(0)}%</span>;
+  })()}
+</td><td className={`py-2 px-2 text-right ${c.orderQty > 0 ? dc(c.docAfter, c.critDays, c.warnDays) : "text-gray-500"}`}>{c.orderQty > 0 ? R(c.docAfter) : "—"}</td><td className="py-2 px-2 flex gap-1"><button onClick={() => openBreakdown(c)} className={`text-xs px-1 rounded ${c.sProfile?.hasHistory ? "text-purple-400" : "text-gray-600"}`}>📊</button><button onClick={() => goCore(c.id)} className="text-blue-400 text-xs px-1.5 py-0.5 bg-blue-400/10 rounded">V</button></td></tr>)}</tbody>
       <tfoot><tr className="bg-gray-900 border-t-2 border-gray-700 text-sm font-semibold"><td colSpan={4} className="py-3 px-2 text-gray-300">{enr.length}</td><td className="py-3 px-2 text-right text-white">{D1(tot.d)}</td><td colSpan={3} /><td className="py-3 px-2 text-right text-white">{R(tot.a)}</td><td colSpan={2} /><td className="border-l-2 border-gray-600" /><td className="py-3 px-2 text-right">{R(tot.n)}</td><td className="py-3 px-2 text-right text-white">{R(tot.o)}</td><td className="py-3 px-2 text-right text-amber-300">{$(tot.co)}</td><td colSpan={2} /></tr></tfoot>
     </table></div>}
 
@@ -759,8 +885,8 @@ const openBreakdown = useCallback((c) => {
                 if (bI === "set" && !b.ignoreUntil) return false;
                 return true;
               }).map(b => ({ ...b, fee: feMap[b.j] })).sort((a, b) => (a.fibDoc || 0) - (b.fibDoc || 0));
-              const orderedBs = nf === "need" ? cBs.filter(b => hasBundleOrd(b)) : cBs;
-              if (nf === "need" && !hasCoreOrd(c) && orderedBs.length === 0) return null;
+              const orderedBs = nf === "inorder" ? cBs.filter(b => hasBundleOrd(b)) : cBs;
+              if (nf === "inorder" && !hasCoreOrd(c) && orderedBs.length === 0) return null;
               return <Fragment key={c.id}><CoreRow c={c} />{!dismissed[c.id] && orderedBs.map(b => <BundleRow key={b.j} b={b} />)}</Fragment>;
             })}</>
               : <>{grp.cores.map(c => <CoreRow key={c.id} c={c} />)}</>}
