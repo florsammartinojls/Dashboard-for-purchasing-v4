@@ -264,10 +264,11 @@ export default function CoreTab({ data, stg, hist, daily, coreId, onBack, goBund
       receivingFull: data.receivingFull || [],
       replenMap: replenMapByJ,
       missingMap: missingMapByJ,
+      priceCompFull: data.priceCompFull || [],
       settings: stg,
       purchFreqSafety: pf?.safetyMultiplier || 1.0,
     });
-  }, [core, ven, data.cores, data.bundles, hist, data.receivingFull, replenMapByJ, missingMapByJ, stg, pf]);
+  }, [core, ven, data.cores, data.bundles, hist, data.receivingFull, replenMapByJ, missingMapByJ, data.priceCompFull, stg, pf]);
 
   // Per-core detail from recommender
   const coreDetail = useMemo(() => {
