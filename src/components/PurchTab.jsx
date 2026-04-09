@@ -155,7 +155,7 @@ const vendorRecs = useMemo(() => {
       receivingFull: data.receivingFull || [],
       replenMap,
       missingMap,
-      priceCompFull: data.priceCompFull || [],
+      priceCompFull: (data.priceCompFull?.length ? data.priceCompFull : data.priceComp) || [],
       settings: stg,
       purchFreqMap,
     });
@@ -336,7 +336,7 @@ const vendorRecs = useMemo(() => {
           receivingFull: data.receivingFull || [],
           replenMap,
           missingMap,
-          priceCompFull: data.priceCompFull || [],
+          priceCompFull: (data.priceCompFull?.length ? data.priceCompFull : data.priceComp) || [],
           settings: stg,
           purchFreqSafety: purchFreqMap[vendorName]?.safetyMultiplier || 1.0,
           forceMode,
