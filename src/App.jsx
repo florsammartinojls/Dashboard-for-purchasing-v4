@@ -7,6 +7,7 @@ import PurchTab from "./components/PurchTab";
 import CoreTab from "./components/CoreTab";
 import BundleTab from "./components/BundleTab";
 import OrdersTab from "./components/OrdersTab";
+import PerformanceTab from "./components/PerformanceTab";
 
 // === Vendors Tab ===
 function VendorsTab({ data, stg, goVendor, workflow, saveWorkflow, deleteWorkflow, vendorComments, saveVendorComment }) {
@@ -98,6 +99,7 @@ const TABS = [
   { id: "bundle", l: "Bundle Detail" },
   { id: "orders", l: "Orders" },
   { id: "vendors", l: "Vendors" },
+  { id: "performance", l: "Performance" },
   { id: "glossary", l: "Glossary" }
 ];
 
@@ -382,6 +384,7 @@ const loadLive = useCallback(async ({ forceRefresh = false } = {}) => {
         {tab === "bundle" && <BundleTab data={data} stg={stg} hist={{ coreInv: data.coreInv, bundleSales: data.bundleSales, bundleInv: data.bundleInv, priceHist: data.priceHist }} daily={{ coreDays: data.coreDays, bundleDays: data.bundleDays }} bundleId={bundleId} onBack={handleBackFromBundle} goCore={goCore} />}
         {tab === "orders" && <OrdersTab data={data} />}
         {tab === "vendors" && <VendorsTab data={data} stg={stg} goVendor={goVendor} workflow={data.workflow} saveWorkflow={saveWorkflow} deleteWorkflow={deleteWorkflow} vendorComments={data.vendorComments} saveVendorComment={saveVendorComment} />}
+        {tab === "performance" && <PerformanceTab />}
         {tab === "glossary" && <GlossTab />}
       </main>
 
