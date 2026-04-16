@@ -583,8 +583,8 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
     const hasSeasonal = c.sProfile?.hasHistory;
     const isUrgent = c.sCoverage?.urgent;
 
-    const rowBg = hasCoreOrd(c) ? "bg-emerald-900/5" : "";
-    const stickyBg = isUrgent ? "bg-red-950/40" : "bg-gray-950";
+    const rowBg = "";
+    const stickyBg = "bg-gray-950";
 
     return <>
       <tr className={`${isLastOfGroup ? "border-b-2 border-gray-700" : "border-b border-gray-800/40"} hover:bg-gray-800/40 text-xs ${rowBg}`}>
@@ -694,7 +694,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
     const effectiveDOC = effDSR > 0 ? Math.round((totalAvail + eq) / effDSR) : null;
     const urgentBundle = bd?.urgent;
 
-    const rowBg = hasBundleOrd(b) ? "bg-emerald-900/5" : "bg-indigo-950/20";
+    const rowBg = "bg-indigo-950/20";
     const stickyBg = "bg-indigo-950/40";
 
     return <tr className={`border-b border-gray-800/20 hover:bg-indigo-900/20 text-xs ${rowBg}`}>
