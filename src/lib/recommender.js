@@ -462,13 +462,19 @@ export function calcVendorRecommendation({
   //                   accounting for seasonality. Used by the waterfall so the
   //                   leveling target matches the actual demand the bundle
   //                   will face, not a flat projection.
-  for (const b of prepped) {
-    b.coverageDemand = projectBundleDemand(b.dsr, targetDoc, b.profile, safety);
+for (const b of prepped) {
+    // For low-volume bundles (DSR < 1.0), seasonal signal is unreliable —
+    // noise dominates any pattern. Use flat projection instead.
+    const useFlat = b.dsr < 1.0;
+    b.coverageDemand = useFlat
+      ? Math.round(b.dsr * targetDoc * safety)
+      : projectBundleDemand(b.dsr, targetDoc, b.profile, safety);
     b.flatDemand = Math.round(b.dsr * targetDoc * safety);
-    b.ltDemand = projectBundleDemand(b.dsr, lt, b.profile, 1.0);
+    b.ltDemand = useFlat
+      ? Math.round(b.dsr * lt)
+      : projectBundleDemand(b.dsr, lt, b.profile, 1.0);
     b.seasonalDSR = targetDoc > 0 ? b.coverageDemand / targetDoc : b.dsr;
   }
-
   // Step 4: waterfall — distribute this vendor's core raw among the bundles
   // that use those cores. Pool = raw in JLS warehouse + 7f inbound to JLS
   // (pendingInbound from missingMap keyed by core.id). `core.inb` is NOT
