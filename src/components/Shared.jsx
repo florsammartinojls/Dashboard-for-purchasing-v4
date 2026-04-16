@@ -545,7 +545,6 @@ export function CalcBreakdownV2({ core, vendor, vendorRec, profile, stg, onClose
                     <th className="py-1.5 text-right" title="DOC using only assigned inv">DOC₀</th>
                     <th className="py-1.5 text-right" title="Raw added by waterfall (in bundle units)">+Raw</th>
                     <th className="py-1.5 text-right" title="DOC after waterfall">DOC₁</th>
-                    <th className="py-1.5 text-right" title="Flat demand (dsr × targetDOC × safety, no seasonality)">Flat</th>
                     <th className="py-1.5 text-right" title="Seasonal demand (what the v2 actually uses as buyNeed base)">Seas</th>
                     <th className="py-1.5 text-right" title="Seasonal impact vs flat. Positive = bundle is in peak season (we buy more). Negative = in valley (we buy less). — = no seasonal history, flat fallback.">Δ Seas</th>
                     <th className="py-1.5 text-right" title="Still needs buying (in bundle units)">Buy</th>
@@ -582,7 +581,6 @@ export function CalcBreakdownV2({ core, vendor, vendorRec, profile, stg, onClose
                           <td className="py-1.5 text-right text-gray-400">{docBefore != null ? fmtN(docBefore) : "—"}</td>
                           <td className="py-1.5 text-right text-cyan-300">{b.rawAssignedFromWaterfall > 0 ? "+" + fmtN(b.rawAssignedFromWaterfall) : "—"}</td>
                           <td className={`py-1.5 text-right font-semibold ${docColor}`}>{fmtN(docAfter)}</td>
-                          <td className="py-1.5 text-right text-gray-500">{fmtN(flat)}</td>
                           <td className="py-1.5 text-right text-gray-300 font-semibold">{fmtN(seas)}</td>
                           <td className={`py-1.5 text-right font-semibold ${seasColor}`} title={hasSeas ? `Flat: ${fmtN(flat)} · Seasonal: ${fmtN(seas)}` : "No seasonal history — using flat"}>
                             {hasSeas ? (seasDiff > 0 ? "+" : "") + seasDiff.toFixed(0) + "%" : "—"}
