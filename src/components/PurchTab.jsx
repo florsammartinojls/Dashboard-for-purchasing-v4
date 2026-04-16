@@ -4,53 +4,55 @@ import { Dot, Toast, TH, SS, WorkflowChip, NumInput, SumCtx, VendorNotes, CalcBr
 import { batchProfiles, batchBundleProfiles, calcCoverageNeed, calcPurchaseFrequency, DEFAULT_PROFILE } from "../lib/seasonal";
 import { batchVendorRecommendations, calcVendorRecommendation } from "../lib/recommender";
 
-// === FLAG DEFINITIONS — shared labels, colors, and explanations ===
-// If you add a new flag, put it here and the legend will auto-update.
+// === FLAG DEFINITIONS — compact icons, text in tooltip ===
+// PROC removed (was redundant with OOS/MOQ signals).
 const FLAG_DEFS = {
   OOS: {
     label: "Stockout risk",
     short: "OOS",
-    cls: "text-red-300 bg-red-500/20 border border-red-500/40",
-    tip: "A bundle using this core will run out of stock BEFORE the next PO arrives (inventory < lead-time demand). Needs to be in the next order.",
+    icon: "⚠",
+    cls: "text-red-300 bg-red-500/25 border border-red-500/50",
+    tip: "Stockout risk — a bundle using this core will run out BEFORE the next PO arrives. Needs to be in the next order.",
   },
   INV: {
     label: "Inv mismatch",
     short: "INV",
-    cls: "text-amber-300 bg-amber-500/20 border border-amber-500/40",
-    tip: "Sheet-reported DOC and recalculated DOC (allIn ÷ DSR) differ by more than 20%. Usually means the sheet hasn't caught up with a recent stock movement. Recheck manually before ordering.",
-  },
-  PROC: {
-    label: "Process raw",
-    short: "PROC",
-    cls: "text-cyan-300 bg-cyan-500/20 border border-cyan-500/40",
-    tip: "This core has raw material available AND at least one bundle that uses it has DOC < 60. Consider processing the existing raw into bundles instead of (or before) buying more.",
+    icon: "≠",
+    cls: "text-amber-300 bg-amber-500/25 border border-amber-500/50",
+    tip: "Inv mismatch — sheet DOC and recalculated DOC (allIn ÷ DSR) differ by >20%. Recheck stock manually before ordering.",
   },
   MOQ: {
     label: "MOQ inflated",
     short: "MOQ",
-    cls: "text-orange-300 bg-orange-500/25 border border-orange-500/40",
-    tip: "The MOQ or casepack is forcing an order significantly larger than the real need. Check the Cost/Excess for this core in the 📊 breakdown.",
+    icon: "$",
+    cls: "text-orange-300 bg-orange-500/25 border border-orange-500/50",
+    tip: "MOQ inflated — the MOQ or casepack forces an order significantly larger than the real need. Check 📊 for excess details.",
   },
 };
 
+// Compact icon-only badge (tooltip carries the full explanation).
 function Flag({ type, extraTip }) {
   const def = FLAG_DEFS[type];
   if (!def) return null;
   const title = extraTip ? `${def.tip}\n\n${extraTip}` : def.tip;
   return (
-    <span className={`text-[10px] font-bold flex-shrink-0 px-1.5 py-0.5 rounded whitespace-nowrap ${def.cls}`} title={title}>
-      ⚠ {def.label}
+    <span
+      className={`inline-flex items-center justify-center text-[11px] font-bold flex-shrink-0 w-5 h-5 rounded-full cursor-help ${def.cls}`}
+      title={title}
+    >
+      {def.icon}
     </span>
   );
 }
 
-// Small legend chip, same styling as Flag but without the ⚠ prefix.
+// Legend item shown at the top of each vendor block.
 function FlagLegendItem({ type }) {
   const def = FLAG_DEFS[type];
   if (!def) return null;
   return (
-    <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded ${def.cls}`} title={def.tip}>
-      {def.short} = {def.label}
+    <span className={`inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded ${def.cls}`} title={def.tip}>
+      <span>{def.icon}</span>
+      <span>{def.label}</span>
     </span>
   );
 }
@@ -85,7 +87,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
   const [toastPersist, setToastPersist] = useState(false);
   const [poN, setPoN] = useState("");
   const [poD, setPoD] = useState("");
- const [vendorSub, setVendorSub] = useState(() => {
+  const [vendorSub, setVendorSub] = useState(() => {
     const fromUrl = new URLSearchParams(window.location.search).get('sub');
     if (fromUrl && ["mix", "cores", "bundles"].includes(fromUrl)) return fromUrl;
     const vendorFromUrl = new URLSearchParams(window.location.search).get('vendor');
@@ -101,6 +103,9 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
     } catch {}
     return "mix";
   });
+  // Track which vendors we've already applied auto-detect on, so the user can
+  // override manually and we don't keep forcing them back.
+  const [autoDetectedVendors, setAutoDetectedVendors] = useState(() => new Set());
   useEffect(() => {
     try {
       if (vf) localStorage.setItem('fba_vendor_sub_' + vf, vendorSub);
@@ -115,7 +120,9 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
     } catch {}
   }, [vf]);
   const [showRS, setShowRS] = useState(false);
-  const [showCosts, setShowCosts] = useState(false);
+  // "Detail" toggle (formerly "+$") — expands the secondary info columns:
+  // MOQ, VCAS, RAW, PPRC, INB, FBA PCS, and input overrides (InbS/CogP/CogC).
+  const [showDetail, setShowDetail] = useState(false);
   const [showPH, setShowPH] = useState({});
   const [collapsed, setCollapsed] = useState({});
   const [dismissed, setDismissed] = useState({});
@@ -163,7 +170,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
     return m;
   }, [data.vendors, data.receivingFull]);
 
-// === V2 RECOMMENDER — one pass for all vendors ===
+  // === V2 RECOMMENDER — one pass for all vendors ===
   const vendorRecs = useMemo(() => {
     if (!data.vendors?.length) return {};
     return batchVendorRecommendations({
@@ -184,19 +191,41 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
   useEffect(() => {
     if (typeof window !== 'undefined') {
       window.__vendorRecs = vendorRecs;
-      console.log('[debug] vendorRecs exposed to window.__vendorRecs, vendor count:', Object.keys(vendorRecs).length);
     }
   }, [vendorRecs]);
 
-  // Quick lookup: "what's the real unit cost this vendor charges for this item?"
-  // Tries the recommender's coreItems/bundleItems first (already computed from 7g),
-  // then falls back to whatever fallback the caller provides (usually core.cost or aicogs).
-  // Quick lookup: "what's the real unit cost this vendor charges for this item?"
-  // Reads the recommender's priceMap, which contains a price for EVERY core
-  // and EVERY bundle of the vendor (not just the ones flagged for buyNeed).
-  // Prices come from 7g history when available, otherwise from sheet core.cost.
-  // Falls back to whatever the caller provides (usually aicogs for bundles)
-  // only if the vendor has no recommender output at all.
+  // === AUTO-DETECT vendorSub on first visit to a vendor ===
+  // Rule: if this vendor historically NEVER delivered any bundle assembled
+  // (all its bundles fall in buyMode='core'), default the view to 'cores'.
+  // If ALL its bundles are delivered assembled, default to 'bundles'.
+  // Otherwise 'mix'. Only runs once per vendor per session — the user can
+  // override and the override is remembered in localStorage.
+  useEffect(() => {
+    if (!vf) return;
+    if (autoDetectedVendors.has(vf)) return;
+    const hadSaved = (() => {
+      try { return !!localStorage.getItem('fba_vendor_sub_' + vf); } catch { return false; }
+    })();
+    if (hadSaved) {
+      setAutoDetectedVendors(prev => { const n = new Set(prev); n.add(vf); return n; });
+      return;
+    }
+    const rec = vendorRecs[vf];
+    if (!rec || !rec.bundleDetails) return;
+    const activeBundles = rec.bundleDetails.filter(bd => bd.buyNeed > 0);
+    if (activeBundles.length === 0) {
+      setAutoDetectedVendors(prev => { const n = new Set(prev); n.add(vf); return n; });
+      return;
+    }
+    const coreCount = activeBundles.filter(bd => bd.buyMode === 'core').length;
+    const bundleCount = activeBundles.filter(bd => bd.buyMode === 'bundle').length;
+    let detected = 'mix';
+    if (bundleCount === 0 && coreCount > 0) detected = 'cores';
+    else if (coreCount === 0 && bundleCount > 0) detected = 'bundles';
+    if (detected !== vendorSub) setVendorSub(detected);
+    setAutoDetectedVendors(prev => { const n = new Set(prev); n.add(vf); return n; });
+  }, [vf, vendorRecs, autoDetectedVendors, vendorSub]);
+
   const getVendorPrice = useCallback((vendorName, itemId, fallback) => {
     const rec = vendorRecs[vendorName];
     if (rec?.priceMap && rec.priceMap[itemId] > 0) {
@@ -205,8 +234,6 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
     return fallback || 0;
   }, [vendorRecs]);
 
-  // Flat map: bundleId -> bundleDetails from whichever vendor rec contains it.
-  // Used by CoreRow and BundleRow to show consistent effective DOC after waterfall.
   const bundleEffMap = useMemo(() => {
     const m = {};
     for (const vRec of Object.values(vendorRecs)) {
@@ -218,13 +245,6 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
     return m;
   }, [vendorRecs]);
 
-  // === CPP BENCHMARK — compare current vendor's CPP (total cost / pcs,
-  // including inbound and tariffs) vs the most recent historical purchase
-  // of the same core from a DIFFERENT origin:
-  //   - If current vendor is in China → benchmark = last US purchase of this core
-  //   - If current vendor is in US    → benchmark = last purchase from any OTHER vendor
-  //                                     (could be US or China — whichever is most recent)
-  // Returns { currentCpp, benchmarkCpp, benchmarkLabel, pctDiff } or null.
   const priceHistoryFull = useMemo(
     () => (data.priceCompFull?.length ? data.priceCompFull : data.priceComp) || [],
     [data.priceCompFull, data.priceComp]
@@ -238,8 +258,6 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
     })();
     const cid = coreId.toLowerCase().trim();
     const vNameLower = vendor.name.toLowerCase().trim();
-
-    // Parse a row's note to figure out its origin
     const parseNote = (note) => {
       if (!note) return { kind: 'unknown', name: null };
       const n = String(note).trim();
@@ -247,8 +265,6 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
       if (m) return { kind: 'named', name: m[1].trim() };
       return { kind: 'container', name: null };
     };
-
-    // Gather all rows for this core with computed cpp
     const rows = priceHistoryFull
       .filter(r => r && (r.core || '').toLowerCase().trim() === cid)
       .map(r => {
@@ -261,10 +277,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
       })
       .filter(Boolean)
       .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
-
     if (rows.length === 0) return null;
-
-    // Current CPP = most recent row matching this vendor
     let currentRow = null;
     for (const r of rows) {
       if (isChinaCurrent) {
@@ -279,12 +292,9 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
       }
     }
     if (!currentRow) return null;
-
-    // Benchmark = most recent row from the OTHER origin
     let benchRow = null;
     let benchLabel = '';
     if (isChinaCurrent) {
-      // current = China → benchmark = last US
       for (const r of rows) {
         if (r.parsed.kind === 'named' && r.parsed.name) {
           benchRow = r;
@@ -293,7 +303,6 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
         }
       }
     } else {
-      // current = US → benchmark = last purchase from a DIFFERENT vendor (US or China)
       for (const r of rows) {
         if (r === currentRow) continue;
         if (r.parsed.kind === 'container') {
@@ -307,7 +316,6 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
       }
     }
     if (!benchRow) return null;
-
     const pctDiff = benchRow.cpp > 0 ? ((currentRow.cpp - benchRow.cpp) / benchRow.cpp) * 100 : 0;
     return {
       currentCpp: currentRow.cpp,
@@ -319,7 +327,6 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
     };
   }, [priceHistoryFull]);
 
-  // === ENRICHED CORES — status/DOC from physical data, need/order/cost from recommender ===
   const spikeThr = stg.spikeThreshold || 1.25;
   const enr = useMemo(() => (data.cores || [])
     .filter(c => c.id && !/^JLS/i.test(c.id))
@@ -340,7 +347,6 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
       const seas = cSeas(c.id, (data._coreInv || []));
       const invAnomaly = ai > 0 && c.dsr > 0 && Math.abs(effectiveDoc - ai / c.dsr) > effectiveDoc * 0.2;
 
-      // === v2 recommender lookup (authoritative for need/order/cost) ===
       const vRec = vendorRecs[c.ven];
       const cDet = vRec?.coreDetails?.find(x => x.coreId === c.id);
       const sNeed = cDet?.needPieces || 0;
@@ -352,18 +358,6 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
       const recUrgent = cDet?.urgent || false;
       const bundlesAffected = cDet?.bundlesAffected || 0;
 
-      // ⚙PROC indicator — has raw + bundles with DOC < 60
-      let rawPendingBundles = false;
-      if ((c.raw || 0) > 0 && activeBundleCores && activeBundleCores.has(c.id)) {
-        const cBundles = (data.bundles || []).filter(b => {
-          if (b.active !== "Yes" || b.ignoreUntil) return false;
-          for (let i = 1; i <= 20; i++) if (b['core' + i] === c.id) return true;
-          return false;
-        });
-        if (cBundles.some(b => (b.fibDoc || 0) < 60)) rawPendingBundles = true;
-      }
-
-      // Keep core-level profile available for the Calc Breakdown modal (legacy view)
       const profile = profiles[c.id] || DEFAULT_PROFILE;
 
       return {
@@ -386,7 +380,6 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
         sProfile: profile,
         sCoverage: { urgent: recUrgent },
         invAnomaly,
-        rawPendingBundles,
         moqInflated,
         moqInflationRatio,
         excessFromMoq,
@@ -451,7 +444,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
     return Object.values(g).filter(grp => vf || showIgnored || !isIgnored(grp.v.name)).sort((a, b) => b.cores.filter(c => c.status === "critical").length - a.cores.filter(c => c.status === "critical").length);
   }, [enr, vm, vMap, venBundles, isIgnored, showIgnored]);
 
-const getPOI = (cores, bundles) => {
+  const getPOI = (cores, bundles) => {
     const items = [];
     cores.filter(c => hasCoreOrd(c)).forEach(c => {
       const cogpOv = gCogP(c.id);
@@ -477,19 +470,11 @@ const getPOI = (cores, bundles) => {
 
   const autoPO = (vendorCode) => { if (poN) return poN; const d = new Date(); const serial = Math.floor((d - new Date(1899, 11, 30)) / 86400000); return 'PO-' + serial + '-' + (vendorCode || 'XXX') };
 
-  // === FILL REC v2 — thin wrapper, just applies the recommender's decisions ===
   const fillR = (cores, bundles, mode, vendorName) => {
     const vendor = vMap[vendorName];
     if (!vendor) return;
-
-    // mode: 'cores' | 'bundles' | 'mix'
-    //   'cores'   → force everything as core
-    //   'bundles' → force everything as bundle
-    //   'mix'     → use historical 7f detection per bundle
     const forceMode = mode === 'cores' ? 'cores' : mode === 'bundles' ? 'bundles' : null;
-
-    // If forceMode differs from the default, recompute; else use the cached rec.
-  const rec = forceMode
+    const rec = forceMode
       ? calcVendorRecommendation({
           vendor,
           cores: data.cores || [],
@@ -504,27 +489,16 @@ const getPOI = (cores, bundles) => {
           forceMode,
         })
       : vendorRecs[vendorName];
-
-    if (!rec || !rec.items?.length) {
-      setToast("Nothing to fill");
-      return;
-    }
-
+    if (!rec || !rec.items?.length) { setToast("Nothing to fill"); return; }
     const u = { ...ov };
     for (const item of rec.items) {
-      if (item.finalQty > 0) {
-        u[item.id] = { ...(u[item.id] || {}), pcs: item.finalQty };
-      }
+      if (item.finalQty > 0) u[item.id] = { ...(u[item.id] || {}), pcs: item.finalQty };
     }
     setOv(u);
-   setToast(`Filled ${rec.items.length} items`);
+    setToast(`Filled ${rec.items.length} items`);
   };
 
-  // === FILL TO MOQ — incrementally add cases to items until vendor MOQ is met ===
-  // Strategy: keep adding a casepack to the item with the lowest projected DOC.
   const doFillMOQ = (grpCores, grpBundles, vendorMOQDollar) => {
-    // Current total from user's edited state
-    // Current total from user's edited state
     let currentTotal = 0;
     grpCores.forEach(c => {
       if (!hasCoreOrd(c)) return;
@@ -532,7 +506,7 @@ const getPOI = (cores, bundles) => {
       const vendorPrice = getVendorPrice(c.ven, c.id, c.cost);
       currentTotal += coreEffQ(c) * (cogpOv > 0 ? cogpOv : vendorPrice);
     });
-  if (vendorSub !== "cores") (grpBundles || []).filter(b => hasBundleOrd(b)).forEach(b => {
+    if (vendorSub !== "cores") (grpBundles || []).filter(b => hasBundleOrd(b)).forEach(b => {
       const f = feMap[b.j];
       const cogpOv = gCogP(b.j);
       const vendorsRaw = (b.vendors || "").trim();
@@ -545,29 +519,21 @@ const getPOI = (cores, bundles) => {
       currentTotal += bundleEffQ(b) * (cogpOv > 0 ? cogpOv : vendorPrice);
     });
     if (currentTotal >= vendorMOQDollar) { setToast("Already at/above MOQ"); return; }
-
-   // Build a list of addable items (only those already being ordered)
     const addable = grpCores.filter(c => hasCoreOrd(c) && c.cost > 0 && c.dsr > 0).map(c => {
       const cogpOv = gCogP(c.id);
       const vendorPrice = getVendorPrice(c.ven, c.id, c.cost);
       return {
-        id: c.id,
-        isCore: true,
-        casePack: c.casePack || 1,
+        id: c.id, isCore: true, casePack: c.casePack || 1,
         cost: cogpOv > 0 ? cogpOv : vendorPrice,
-        dsr: c.dsr,
-        ref: c,
+        dsr: c.dsr, ref: c,
       };
     });
-
     if (addable.length === 0) { setToast("No orderable items — click Fill Rec first"); return; }
-
     const u = { ...ov };
     let added = 0;
     let safety = 0;
     while (currentTotal < vendorMOQDollar && safety < 500) {
       safety++;
-      // pick the item with the lowest current projected DOC
       addable.forEach(a => {
         const q = (u[a.id]?.pcs ?? 0) || 0;
         a.projDOC = a.dsr > 0 ? (cAI(a.ref) + q) / a.dsr : 99999;
@@ -590,103 +556,115 @@ const getPOI = (cores, bundles) => {
   const togCollapse = id => setCollapsed(p => ({ ...p, [id]: !p[id] }));
   const togDismiss = id => setDismissed(p => ({ ...p, [id]: !p[id] }));
 
-const openBreakdown = useCallback((c) => {
-    setBreakdownCore(c);
-  }, []);
-
+  const openBreakdown = useCallback((c) => { setBreakdownCore(c); }, []);
   const getCombinedRec = (coreId) => { const recs = [...(recMap[coreId] || [])]; (data.bundles || []).filter(b => b.core1 === coreId && b.active === "Yes").forEach(b => { if (recMap[b.j]) recs.push(...recMap[b.j]) }); return recs.sort((a, b) => (b.date || '').localeCompare(a.date || '')).slice(0, 7) };
   const hasRecData = (coreId) => recMap[coreId]?.length || (data.bundles || []).some(b => b.core1 === coreId && b.active === "Yes" && recMap[b.j]?.length);
 
   // === CORE ROW ===
-  const CoreRow = ({ c }) => {
-    if (dismissed[c.id]) return <tr className="border-t border-gray-800/20 bg-gray-900/30 text-xs opacity-40"><td className="py-1 px-1" colSpan={2}><Dot status={c.status} /></td><td className="py-1 px-1 text-gray-500 font-mono">{c.id}</td><td className="py-1 px-1 text-gray-600 truncate max-w-[110px]">{c.ti}</td><td colSpan={20} className="py-1 px-1 text-right"><button onClick={() => togDismiss(c.id)} className="text-xs text-gray-500 hover:text-white px-1">+</button></td></tr>;
+  // Visual hierarchy:
+  //   - Compact badges (icon-only) right next to title
+  //   - Primary info always visible: DSR, 7D, T, DOC, ALL-IN, S (vendor's decision inputs)
+  //   - Secondary info behind +Detail toggle: MOQ, VCAS, RAW, PPRC, INB, FBA PCS
+  //   - Extra padding + stronger bottom border so each core group is visually distinct
+  const CoreRow = ({ c, isLastOfGroup }) => {
+    if (dismissed[c.id]) return <tr className="border-t border-gray-800/20 bg-gray-900/30 text-xs opacity-40"><td className="py-1 px-1" colSpan={2}><Dot status={c.status} /></td><td className="py-1 px-1 text-gray-500 font-mono">{c.id}</td><td className="py-1 px-1 text-gray-600 truncate max-w-[110px]">{c.ti}</td><td colSpan={30} className="py-1 px-1 text-right"><button onClick={() => togDismiss(c.id)} className="text-xs text-gray-500 hover:text-white px-1">+</button></td></tr>;
     const eq = coreEffQ(c);
     const cogpOverride = gCogP(c.id);
     const vendorPrice = getVendorPrice(c.ven, c.id, c.cost);
     const unitCost = cogpOverride > 0 ? cogpOverride : vendorPrice;
     const cost = eq * unitCost;
 
-    // Effective After DOC:
-    // Sum current bundle availability (from waterfall) + user's edited bundle orders
-    // + the share of user's edited core order distributed proportionally.
-    const cBundles = (data.bundles || []).filter(b => {
-      if (b.active !== "Yes") return false;
-      for (let i = 1; i <= 20; i++) if (b['core' + i] === c.id) return true;
-      return false;
-    });
     let ad = null;
-    if (eq > 0 && c.dsr > 0) {
-      // Aggregate bundle dimension: sum of bundle units available + bundle orders placed
-      // Then map back to core pieces: totalCorePiecesAvailable/c.dsr ≈ ad
-      ad = Math.round((c.allIn + eq) / c.dsr);
-    } else if (c.dsr > 0) {
-      ad = Math.round(c.allIn / c.dsr);
-    }
+    if (eq > 0 && c.dsr > 0) ad = Math.round((c.allIn + eq) / c.dsr);
+    else if (c.dsr > 0) ad = Math.round(c.allIn / c.dsr);
 
     const isCol = collapsed[c.id];
     const combinedRec = showPH[c.id] ? getCombinedRec(c.id) : [];
     const hasSeasonal = c.sProfile?.hasHistory;
     const isUrgent = c.sCoverage?.urgent;
 
-    return <><tr className={`border-t border-gray-800/30 hover:bg-gray-800/20 text-xs ${hasCoreOrd(c) ? "bg-emerald-900/10" : ""} ${isUrgent ? "bg-red-900/10" : ""}`}>
-      <td className="py-1 px-0.5 sticky left-0 bg-gray-950 z-10 w-4"><Dot status={c.status} /></td>
-      <td className="py-1 px-0.5 sticky left-4 bg-gray-950 z-10 whitespace-nowrap"><button onClick={() => goCore(c.id)} className="text-blue-400 font-mono hover:underline text-[11px]">{c.id}</button></td>
-    <td className="py-1 px-1 sticky left-[85px] bg-gray-950 z-10">
-        <div className="flex items-center gap-1 min-w-0 flex-wrap">
-          <span className="text-gray-200 truncate max-w-[130px]">{c.ti}</span>
-          {isUrgent && <Flag type="OOS" />}
-          {c.invAnomaly && <Flag type="INV" />}
-          {c.rawPendingBundles && <Flag type="PROC" />}
-          {c.moqInflated && <Flag type="MOQ" extraTip={`MOQ forces ${Math.round(c.moqInflationRatio * 100)}% of real need. Excess: ${R(c.excessFromMoq)} pcs / $${Math.round(c.excessCostFromMoq).toLocaleString()}`} />}
-          {c.bundlesAffected > 0 && <span className="text-[10px] text-gray-500 flex-shrink-0" title={`The core's "Need" is driven by ${c.bundlesAffected} bundle(s). See 📊 Step 3 for the breakdown.`}>({c.bundlesAffected}b)</span>}
-        </div>
-      </td>
-      <SC v={c.dsr} className="py-1 px-1 text-right">{D1(c.dsr)}</SC>
-      <SC v={c.d7} className="py-1 px-1 text-right">{D1(c.d7)}</SC>
-      <td className="py-1 px-1 text-center">{c.d7 > c.dsr ? <span className={c.spike ? "text-orange-400 font-bold" : "text-emerald-400"}>▲</span> : c.d7 < c.dsr ? <span className="text-red-400">▼</span> : "—"}{c.spike && <span className="text-orange-400 text-xs ml-0.5">⚡</span>}</td>
-      <SC v={c.doc} className={`py-1 px-1 text-right font-semibold ${dc(c.doc, c.critDays, c.warnDays)}`}>{R(c.doc)}</SC>
-      <SC v={c.allIn} className="py-1 px-1 text-right">{R(c.allIn)}</SC>
-      <td className="py-1 px-1 text-right text-gray-400">{c.moq > 0 ? R(c.moq) : "—"}</td>
-      <td className="py-1 px-1 text-right text-gray-400">{c.casePack > 0 ? R(c.casePack) : "—"}</td>
-      <td className="py-1 px-1 text-center">{c.seas && <span className="text-purple-400 font-bold">{c.seas.peak}</span>}</td>
-      {!isCol && <><SC v={c.raw} className="py-1 px-1 text-right">{R(c.raw)}</SC><SC v={c.pp} className="py-1 px-1 text-right">{R(c.pp)}</SC><SC v={c.inb} className="py-1 px-1 text-right">{R(c.inb)}</SC><SC v={c.fba} className="py-1 px-1 text-right">{R(c.fba)}</SC></>}
-      {showRS && <td colSpan={8} />}
-      <td className="py-1 border-l-2 border-gray-600 px-1" />
-      <td className="py-0.5 px-0.5 sticky right-36 bg-gray-950 z-10"><NumInput value={gPcs(c.id)} onChange={v => setF(c.id, 'pcs', v)} /></td>
-      <td className="py-0.5 px-0.5 sticky right-24 bg-gray-950 z-10"><NumInput value={gCas(c.id)} onChange={v => setF(c.id, 'cas', v)} /></td>
-      {showCosts && <><td className="py-0.5 px-0.5"><NumInput value={gInbS(c.id)} onChange={v => setF(c.id, 'inbS', v)} /></td><td className="py-0.5 px-0.5"><NumInput value={gCogP(c.id)} onChange={v => setF(c.id, 'cogP', v)} /></td><td className="py-0.5 px-0.5"><NumInput value={gCogC(c.id)} onChange={v => setF(c.id, 'cogC', v)} /></td></>}
+    const rowBg = hasCoreOrd(c) ? "bg-emerald-900/15" : isUrgent ? "bg-red-900/10" : "bg-gray-950/60";
+    const stickyBg = hasCoreOrd(c) ? "bg-emerald-950/40" : isUrgent ? "bg-red-950/40" : "bg-gray-950";
 
-      {(() => {
-        const bench = getCppBenchmark(c.id, vMap[c.ven]);
-        let tip = null;
-        let pctEl = null;
-        if (bench) {
-          const cheaper = bench.pctDiff < 0;
-          const sign = bench.pctDiff > 0 ? '+' : '';
-          tip = `Current CPP (${c.ven}): $${bench.currentCpp.toFixed(4)}/pc (from ${bench.currentDate})\nBenchmark (${bench.benchmarkLabel}): $${bench.benchmarkCpp.toFixed(4)}/pc (from ${bench.benchmarkDate})\n${sign}${bench.pctDiff.toFixed(0)}% vs benchmark (total-cost CPP, inbound+tariffs included)`;
-          pctEl = <span className={`block text-[9px] font-normal ${cheaper ? "text-emerald-400" : "text-red-400"}`} title={tip}>{sign}{bench.pctDiff.toFixed(0)}%</span>;
-        }
-        return (
-          <SC v={cost} className="py-1 px-1 text-right text-amber-300 sticky right-12 bg-gray-950 z-10">
-            <span title={tip || undefined}>{cost > 0 ? $(cost) : "—"}</span>
-            {pctEl}
-          </SC>
-        );
-      })()}
-      <td className={`py-1 px-1 text-right sticky right-0 bg-gray-950 z-10 ${ad ? dc(ad, c.critDays, c.warnDays) : "text-gray-500"}`}>{ad ? R(ad) : "—"}</td>
-      <td className="py-1 px-0.5 flex gap-0.5">
-        <button onClick={() => togCollapse(c.id)} className="text-gray-400 hover:text-white text-xs px-0.5">{isCol ? "+" : "−"}</button>
-        <button onClick={() => togDismiss(c.id)} className="text-gray-400 hover:text-red-400 text-xs px-0.5">✕</button>
-        {(pcMap[c.id] || hasRecData(c.id)) && <button onClick={() => togPH(c.id)} className={`text-xs px-0.5 rounded ${showPH[c.id] ? "text-amber-300" : "text-gray-500"}`}>$</button>}
-        <button onClick={() => openBreakdown(c)} className={`text-xs px-0.5 rounded ${hasSeasonal ? "text-purple-400" : "text-gray-600"}`} title="Seasonal Breakdown (legacy core-level view)">📊</button>
-        <button onClick={() => goCore(c.id)} className="text-blue-400 px-0.5 bg-blue-400/10 rounded text-xs">V</button>
-        <div className="relative"><WorkflowChip id={c.id} type="core" workflow={data.workflow} onSave={saveWorkflow} onDelete={deleteWorkflow} buyer={stg.buyer} country={c.vc} /></div>
-      </td>
-    </tr>
+    return <>
+      <tr className={`${isLastOfGroup ? "border-b-2 border-gray-700" : "border-b border-gray-800/40"} hover:bg-gray-800/40 text-xs ${rowBg}`}>
+        <td className={`py-2 px-0.5 sticky left-0 z-10 w-4 ${stickyBg}`}><Dot status={c.status} /></td>
+        <td className={`py-2 px-0.5 sticky left-4 z-10 whitespace-nowrap ${stickyBg}`}>
+          <button onClick={() => goCore(c.id)} className="text-blue-400 font-mono hover:underline text-[11px]">{c.id}</button>
+        </td>
+        <td className={`py-2 px-1 sticky left-[85px] z-10 ${stickyBg}`}>
+          <div className="flex items-center gap-1.5 min-w-0 flex-wrap">
+            <span className="text-gray-100 truncate max-w-[160px] font-medium">{c.ti}</span>
+            {isUrgent && <Flag type="OOS" />}
+            {c.invAnomaly && <Flag type="INV" />}
+            {c.moqInflated && <Flag type="MOQ" extraTip={`MOQ forces ${Math.round(c.moqInflationRatio * 100)}% of real need. Excess: ${R(c.excessFromMoq)} pcs / $${Math.round(c.excessCostFromMoq).toLocaleString()}`} />}
+            {c.bundlesAffected > 0 && <span className="text-[10px] text-gray-500 flex-shrink-0" title={`Driven by ${c.bundlesAffected} bundle(s). See 📊 Step 3.`}>({c.bundlesAffected}b)</span>}
+          </div>
+        </td>
+
+        {/* PRIMARY — always visible */}
+        <SC v={c.dsr} className="py-2 px-1 text-right">{D1(c.dsr)}</SC>
+        <SC v={c.d7} className="py-2 px-1 text-right">{D1(c.d7)}</SC>
+        <td className="py-2 px-1 text-center">{c.d7 > c.dsr ? <span className={c.spike ? "text-orange-400 font-bold" : "text-emerald-400"}>▲</span> : c.d7 < c.dsr ? <span className="text-red-400">▼</span> : "—"}{c.spike && <span className="text-orange-400 text-xs ml-0.5">⚡</span>}</td>
+        <SC v={c.doc} className={`py-2 px-1 text-right font-semibold ${dc(c.doc, c.critDays, c.warnDays)}`}>{R(c.doc)}</SC>
+        <SC v={c.allIn} className="py-2 px-1 text-right">{R(c.allIn)}</SC>
+        <td className="py-2 px-1 text-center">{c.seas && <span className="text-purple-400 font-bold">{c.seas.peak}</span>}</td>
+
+        {/* SECONDARY — only when +Detail is on */}
+        {showDetail && <>
+          <td className="py-2 px-1 text-right text-gray-500">{c.moq > 0 ? R(c.moq) : "—"}</td>
+          <td className="py-2 px-1 text-right text-gray-500">{c.casePack > 0 ? R(c.casePack) : "—"}</td>
+          {!isCol && <>
+            <SC v={c.raw} className="py-2 px-1 text-right text-gray-400">{R(c.raw)}</SC>
+            <SC v={c.pp} className="py-2 px-1 text-right text-gray-400">{R(c.pp)}</SC>
+            <SC v={c.inb} className="py-2 px-1 text-right text-gray-400">{R(c.inb)}</SC>
+            <SC v={c.fba} className="py-2 px-1 text-right text-gray-400">{R(c.fba)}</SC>
+          </>}
+        </>}
+
+        {showRS && <td colSpan={8} />}
+        <td className="py-2 border-l-2 border-blue-500/40 px-1" />
+
+        {/* ACTION — always visible */}
+        <td className={`py-1 px-0.5 sticky right-36 z-10 ${stickyBg}`}><NumInput value={gPcs(c.id)} onChange={v => setF(c.id, 'pcs', v)} /></td>
+        <td className={`py-1 px-0.5 sticky right-24 z-10 ${stickyBg}`}><NumInput value={gCas(c.id)} onChange={v => setF(c.id, 'cas', v)} /></td>
+        {showDetail && <>
+          <td className="py-1 px-0.5"><NumInput value={gInbS(c.id)} onChange={v => setF(c.id, 'inbS', v)} /></td>
+          <td className="py-1 px-0.5"><NumInput value={gCogP(c.id)} onChange={v => setF(c.id, 'cogP', v)} /></td>
+          <td className="py-1 px-0.5"><NumInput value={gCogC(c.id)} onChange={v => setF(c.id, 'cogC', v)} /></td>
+        </>}
+        {(() => {
+          const bench = getCppBenchmark(c.id, vMap[c.ven]);
+          let tip = null;
+          let pctEl = null;
+          if (bench) {
+            const cheaper = bench.pctDiff < 0;
+            const sign = bench.pctDiff > 0 ? '+' : '';
+            tip = `Current CPP (${c.ven}): $${bench.currentCpp.toFixed(4)}/pc (from ${bench.currentDate})\nBenchmark (${bench.benchmarkLabel}): $${bench.benchmarkCpp.toFixed(4)}/pc (from ${bench.benchmarkDate})\n${sign}${bench.pctDiff.toFixed(0)}% vs benchmark (total-cost CPP, inbound+tariffs included)`;
+            pctEl = <span className={`block text-[9px] font-normal ${cheaper ? "text-emerald-400" : "text-red-400"}`} title={tip}>{sign}{bench.pctDiff.toFixed(0)}%</span>;
+          }
+          return (
+            <SC v={cost} className={`py-2 px-1 text-right text-amber-300 font-semibold sticky right-12 z-10 ${stickyBg}`}>
+              <span title={tip || undefined}>{cost > 0 ? $(cost) : "—"}</span>
+              {pctEl}
+            </SC>
+          );
+        })()}
+        <td className={`py-2 px-1 text-right sticky right-0 z-10 ${stickyBg} ${ad ? dc(ad, c.critDays, c.warnDays) : "text-gray-500"}`}>{ad ? R(ad) : "—"}</td>
+        <td className="py-2 px-0.5 flex gap-0.5 items-center">
+          <button onClick={() => togCollapse(c.id)} className="text-gray-400 hover:text-white text-xs px-0.5">{isCol ? "+" : "−"}</button>
+          <button onClick={() => togDismiss(c.id)} className="text-gray-400 hover:text-red-400 text-xs px-0.5">✕</button>
+          {(pcMap[c.id] || hasRecData(c.id)) && <button onClick={() => togPH(c.id)} className={`text-xs px-0.5 rounded ${showPH[c.id] ? "text-amber-300" : "text-gray-500"}`}>$</button>}
+          <button onClick={() => openBreakdown(c)} className={`text-xs px-0.5 rounded ${hasSeasonal ? "text-purple-400" : "text-gray-600"}`} title="Breakdown">📊</button>
+          <button onClick={() => goCore(c.id)} className="text-blue-400 px-0.5 bg-blue-400/10 rounded text-xs">V</button>
+          <div className="relative"><WorkflowChip id={c.id} type="core" workflow={data.workflow} onSave={saveWorkflow} onDelete={deleteWorkflow} buyer={stg.buyer} country={c.vc} /></div>
+        </td>
+      </tr>
       {showPH[c.id] && (pcMap[c.id] || combinedRec.length > 0) && <tr><td colSpan={40} className="p-0"><div className="bg-gray-800/50 px-4 py-2 space-y-3">
         {pcMap[c.id] && <div><div className="text-gray-500 text-xs font-semibold mb-1">💰 Purchase History (7g)</div><table className="w-full text-xs"><thead><tr className="text-gray-500"><th className="py-0.5 text-left">Date</th><th className="py-0.5 text-right">Pcs</th><th className="py-0.5 text-right">Material</th><th className="py-0.5 text-right">Inb Ship</th><th className="py-0.5 text-right">Tariffs</th><th className="py-0.5 text-right">Total</th><th className="py-0.5 text-right">CPP</th></tr></thead><tbody>{pcMap[c.id].map((r, i) => <tr key={i} className="border-t border-gray-700/30"><td className="py-0.5 text-gray-300">{fDateUS(r.date)}</td><td className="py-0.5 text-right">{R(r.pcs)}</td><td className="py-0.5 text-right">{$2(r.matPrice)}</td><td className="py-0.5 text-right text-gray-400">{$2(r.inbShip)}</td><td className="py-0.5 text-right text-gray-400">{$2(r.tariffs)}</td><td className="py-0.5 text-right">{$2(r.totalCost)}</td><td className="py-0.5 text-right text-amber-300">{$2(r.cpp)}</td></tr>)}</tbody></table></div>}
         {combinedRec.length > 0 && <div><div className="text-gray-500 text-xs font-semibold mb-1">📦 Receiving (7f)</div><table className="w-full text-xs"><thead><tr className="text-gray-500"><th className="py-0.5 text-left">Date</th><th className="py-0.5 text-left">Vendor</th><th className="py-0.5 text-left">ID</th><th className="py-0.5 text-right">Pcs</th><th className="py-0.5 text-right">Cases</th><th className="py-0.5 text-left">Order #</th><th className="py-0.5 text-right">Missing</th></tr></thead><tbody>{combinedRec.map((r, i) => <tr key={i} className="border-t border-gray-700/30"><td className="py-0.5 text-gray-300">{fDateUS(r.date) || "—"}</td><td className="py-0.5 text-gray-300">{r.vendor || "—"}</td><td className="py-0.5 text-blue-400 font-mono">{r.core}</td><td className="py-0.5 text-right text-white">{R(r.pcs)}</td><td className="py-0.5 text-right">{r.cases > 0 ? R(r.cases) : "—"}</td><td className="py-0.5 text-gray-300">{r.orderNum || "—"}</td><td className={`py-0.5 text-right ${r.piecesMissing > 0 ? "text-red-400" : "text-gray-500"}`}>{r.piecesMissing > 0 ? R(r.piecesMissing) : "—"}</td></tr>)}</tbody></table></div>}
-      </div></td></tr>}</>
+      </div></td></tr>}
+    </>;
   };
 
   // === BUNDLE ROW ===
@@ -694,10 +672,6 @@ const openBreakdown = useCallback((c) => {
     const f = b.fee || feMap[b.j];
     const eq = bundleEffQ(b);
     const cogpOverride = gCogP(b.j);
-    // For bundles: vendor price comes from the recommender's priceMap.
-    // b.vendors may contain a single vendor name that includes commas
-    // (e.g. "Jiangmen Isacco Industry & Trade Co., Ltd."), so we try the
-    // full string first and only split as fallback for multi-vendor legacy.
     const vendorsRaw = (b.vendors || "").trim();
     let vendorName = vendorsRaw;
     if (!vendorRecs[vendorName]) {
@@ -714,63 +688,115 @@ const openBreakdown = useCallback((c) => {
     const margin = f && f.aicogs > 0 ? ((f.gp / f.aicogs) * 100) : 0;
     const bCasePack = casePackFromRec[b.j] || 0;
 
-    // Effective DOC comes from the v2 waterfall: totalAvailable already includes
-    // this bundle's share of core raw, post-distribution. Adding user's edited qty
-    // on top gives the "after this order" DOC.
     const bd = bundleEffMap[b.j];
     const effDSR = bd?.effectiveDSR || b.cd || 0;
     const totalAvail = bd?.totalAvailable ?? ((b.fibInv || 0) + (rp?.pprcUnits || 0) + (rp?.batched || 0) + inb7f);
     const effectiveDOC = effDSR > 0 ? Math.round((totalAvail + eq) / effDSR) : null;
     const urgentBundle = bd?.urgent;
-    const buyNeedBundle = bd?.buyNeed || 0;
 
-    return <tr className={`border-t border-gray-800/20 hover:bg-indigo-900/10 text-xs ${hasBundleOrd(b) ? "bg-emerald-900/10" : "bg-indigo-950/30"} ${urgentBundle ? "bg-red-900/10" : ""}`}>
-      <td className="py-1 px-0.5 sticky left-0 bg-indigo-950/30 z-10 w-4 border-l-2 border-indigo-500/40" />
-      <td className="py-1 px-0.5 sticky left-4 bg-indigo-950/30 z-10 whitespace-nowrap"><button onClick={() => goBundle(b.j)} className="text-indigo-400 font-mono hover:underline text-[11px]">{b.j}</button></td>
-      <td className="py-1 px-1 text-indigo-200 truncate max-w-[130px] sticky left-[85px] bg-indigo-950/30 z-10">
-        {b.t}
+    const rowBg = hasBundleOrd(b) ? "bg-emerald-900/10" : urgentBundle ? "bg-red-900/10" : "bg-indigo-950/20";
+    const stickyBg = hasBundleOrd(b) ? "bg-emerald-950/50" : urgentBundle ? "bg-red-950/40" : "bg-indigo-950/40";
+
+    return <tr className={`border-b border-gray-800/20 hover:bg-indigo-900/20 text-xs ${rowBg}`}>
+      <td className={`py-1.5 px-0.5 sticky left-0 z-10 w-4 border-l-2 border-indigo-500/40 ${stickyBg}`} />
+      <td className={`py-1.5 px-0.5 sticky left-4 z-10 whitespace-nowrap ${stickyBg}`}><button onClick={() => goBundle(b.j)} className="text-indigo-400 font-mono hover:underline text-[11px]">{b.j}</button></td>
+      <td className={`py-1.5 px-1 text-indigo-200 truncate max-w-[160px] sticky left-[85px] z-10 ${stickyBg}`}>
+        <span className="pl-3">↳ {b.t}</span>
         {b.asin && <a href={`https://sellercentral.amazon.com/myinventory/inventory?fulfilledBy=all&page=1&pageSize=25&searchField=all&searchTerm=${b.asin}&sort=date_created_desc&status=all`} target="_blank" rel="noopener noreferrer" className="ml-1 text-gray-500 hover:text-blue-400 text-[9px] font-mono">{b.asin}</a>}
-        {urgentBundle && <span className="ml-1 text-red-400 text-[9px] font-bold" title="Will stockout before LT">⚠OOS</span>}
+        {urgentBundle && <Flag type="OOS" />}
         {aged && aged.fbaHealth !== "Healthy" && <span className={`ml-1 text-xs ${aged.fbaHealth === "At Risk" ? "text-amber-400" : "text-red-400"}`}>{aged.fbaHealth}</span>}
         {aged && aged.storageLtsf > 0 && <span className="ml-1 text-xs text-red-300">${aged.storageLtsf.toFixed(0)}</span>}
         {kill && kill.latestEval && kill.latestEval.toLowerCase().includes('kill') && <span className="ml-1 text-xs text-red-400 font-bold">KILL</span>}
         {kill && kill.sellEval && kill.sellEval.toLowerCase().includes('sell') && <span className="ml-1 text-xs text-amber-400 font-bold">ST</span>}
       </td>
-      <SC v={b.cd} className="py-1 px-1 text-right text-indigo-300">{D1(b.cd)}</SC>
-      <SC v={b.d7comp} className="py-1 px-1 text-right text-indigo-300">{D1(b.d7comp)}</SC>
-      <td className="py-1 px-1 text-center">{b.d7comp > b.cd ? <span className="text-emerald-400">▲</span> : b.d7comp < b.cd ? <span className="text-red-400">▼</span> : "—"}</td>
-      <SC v={b.doc} className="py-1 px-1 text-right text-indigo-300">{R(b.doc)}</SC>
-      <td className="py-1 px-1 text-right text-gray-700" /><td className="py-1 px-1 text-gray-700" />
-      <td className="py-1 px-1 text-gray-500 text-right">{bCasePack > 0 ? R(bCasePack) : ""}</td>
-      <td className="py-1 px-1 text-center text-indigo-300">{b.replenTag || ""}</td>
-      {!collapsed[b.j] && <td colSpan={4} />}
-      {showRS && <><td className="py-1 border-l-2 border-cyan-800 px-0.5" /><SC v={b.fibDoc} className="py-1 px-1 text-right text-cyan-300">{R(b.fibDoc)}</SC><td className={`py-1 px-1 text-right ${margin >= 30 ? "text-emerald-400" : margin >= 15 ? "text-amber-400" : margin > 0 ? "text-red-400" : "text-gray-600"}`}>{margin > 0 ? Math.round(margin) + "%" : "—"}</td><SC v={rp?.rawUnits} className="py-1 px-1 text-right">{R(rp?.rawUnits || 0)}</SC><SC v={rp?.batched} className="py-1 px-1 text-right">{R(rp?.batched || 0)}</SC><SC v={b.fibInv} className="py-1 px-1 text-right text-cyan-300">{R(b.fibInv || 0)}</SC><SC v={rp?.pprcUnits} className="py-1 px-1 text-right">{R(rp?.pprcUnits || 0)}</SC><td className="py-1 px-1 text-right text-red-400">{inb7f > 0 ? R(inb7f) : "0"}</td></>}
-      <td className="py-1 border-l-2 border-gray-600 px-1" />
-      <td className="py-0.5 px-0.5 sticky right-36 bg-indigo-950/30 z-10"><NumInput value={gPcs(b.j)} onChange={v => setF(b.j, 'pcs', v)} /></td>
-      <td className="py-0.5 px-0.5 sticky right-24 bg-indigo-950/30 z-10"><NumInput value={gCas(b.j)} onChange={v => setF(b.j, 'cas', v)} /></td>
-      {showCosts && <><td className="py-0.5 px-0.5"><NumInput value={gInbS(b.j)} onChange={v => setF(b.j, 'inbS', v)} /></td><td className="py-0.5 px-0.5"><NumInput value={gCogP(b.j)} onChange={v => setF(b.j, 'cogP', v)} /></td><td className="py-0.5 px-0.5"><NumInput value={gCogC(b.j)} onChange={v => setF(b.j, 'cogC', v)} /></td></>}
-      <SC v={cost} className="py-1 px-1 text-right text-amber-300 sticky right-12 bg-indigo-950/30 z-10">{cost > 0 ? $(cost) : "—"}</SC>
-      <td className={`py-1 px-1 text-right sticky right-0 bg-indigo-950/30 z-10 ${effectiveDOC ? (effectiveDOC <= 30 ? "text-red-400" : effectiveDOC <= 60 ? "text-amber-400" : "text-emerald-400") : "text-gray-600"}`}>{effectiveDOC ? R(effectiveDOC) : "—"}</td>
-      <td className="py-1 px-1"><button onClick={() => goBundle(b.j)} className="text-indigo-400 px-0.5 bg-indigo-400/10 rounded text-xs">V</button></td>
+      <SC v={b.cd} className="py-1.5 px-1 text-right text-indigo-300">{D1(b.cd)}</SC>
+      <SC v={b.d7comp} className="py-1.5 px-1 text-right text-indigo-300">{D1(b.d7comp)}</SC>
+      <td className="py-1.5 px-1 text-center">{b.d7comp > b.cd ? <span className="text-emerald-400">▲</span> : b.d7comp < b.cd ? <span className="text-red-400">▼</span> : "—"}</td>
+      <SC v={b.doc} className="py-1.5 px-1 text-right text-indigo-300">{R(b.doc)}</SC>
+      <td className="py-1.5 px-1 text-right text-gray-700" />
+      <td className="py-1.5 px-1 text-center text-indigo-300">{b.replenTag || ""}</td>
+
+      {showDetail && <>
+        <td className="py-1.5 px-1 text-right text-gray-700" />
+        <td className="py-1.5 px-1 text-gray-500 text-right">{bCasePack > 0 ? R(bCasePack) : ""}</td>
+        {!collapsed[b.j] && <td colSpan={4} />}
+      </>}
+
+      {showRS && <>
+        <td className="py-1.5 border-l-2 border-cyan-800 px-0.5" />
+        <SC v={b.fibDoc} className="py-1.5 px-1 text-right text-cyan-300">{R(b.fibDoc)}</SC>
+        <td className={`py-1.5 px-1 text-right ${margin >= 30 ? "text-emerald-400" : margin >= 15 ? "text-amber-400" : margin > 0 ? "text-red-400" : "text-gray-600"}`}>{margin > 0 ? Math.round(margin) + "%" : "—"}</td>
+        <SC v={rp?.rawUnits} className="py-1.5 px-1 text-right">{R(rp?.rawUnits || 0)}</SC>
+        <SC v={rp?.batched} className="py-1.5 px-1 text-right">{R(rp?.batched || 0)}</SC>
+        <SC v={b.fibInv} className="py-1.5 px-1 text-right text-cyan-300">{R(b.fibInv || 0)}</SC>
+        <SC v={rp?.pprcUnits} className="py-1.5 px-1 text-right">{R(rp?.pprcUnits || 0)}</SC>
+        <td className="py-1.5 px-1 text-right text-red-400">{inb7f > 0 ? R(inb7f) : "0"}</td>
+      </>}
+
+      <td className="py-1.5 border-l-2 border-blue-500/40 px-1" />
+      <td className={`py-1 px-0.5 sticky right-36 z-10 ${stickyBg}`}><NumInput value={gPcs(b.j)} onChange={v => setF(b.j, 'pcs', v)} /></td>
+      <td className={`py-1 px-0.5 sticky right-24 z-10 ${stickyBg}`}><NumInput value={gCas(b.j)} onChange={v => setF(b.j, 'cas', v)} /></td>
+      {showDetail && <>
+        <td className="py-1 px-0.5"><NumInput value={gInbS(b.j)} onChange={v => setF(b.j, 'inbS', v)} /></td>
+        <td className="py-1 px-0.5"><NumInput value={gCogP(b.j)} onChange={v => setF(b.j, 'cogP', v)} /></td>
+        <td className="py-1 px-0.5"><NumInput value={gCogC(b.j)} onChange={v => setF(b.j, 'cogC', v)} /></td>
+      </>}
+      <SC v={cost} className={`py-1.5 px-1 text-right text-amber-300 sticky right-12 z-10 ${stickyBg}`}>{cost > 0 ? $(cost) : "—"}</SC>
+      <td className={`py-1.5 px-1 text-right sticky right-0 z-10 ${stickyBg} ${effectiveDOC ? (effectiveDOC <= 30 ? "text-red-400" : effectiveDOC <= 60 ? "text-amber-400" : "text-emerald-400") : "text-gray-600"}`}>{effectiveDOC ? R(effectiveDOC) : "—"}</td>
+      <td className="py-1.5 px-1"><button onClick={() => goBundle(b.j)} className="text-indigo-400 px-0.5 bg-indigo-400/10 rounded text-xs">V</button></td>
     </tr>;
   };
 
-  const rsToggle = <button onClick={() => setShowRS(!showRS)} className={`text-xs px-1 py-0.5 rounded font-bold ${showRS ? "bg-purple-600 text-white" : "bg-gray-700 text-gray-400"}`}>{showRS ? "−" : "+"}RS</button>;
-  const costsToggle = <button onClick={() => setShowCosts(!showCosts)} className={`text-xs px-1 py-0.5 rounded font-bold ${showCosts ? "bg-teal-600 text-white" : "bg-gray-700 text-gray-400"}`}>{showCosts ? "−" : "+"}$</button>;
+  const rsToggle = <button onClick={() => setShowRS(!showRS)} className={`text-xs px-1.5 py-0.5 rounded font-bold ${showRS ? "bg-purple-600 text-white" : "bg-gray-700 text-gray-400 hover:text-gray-200"}`} title="Show Replen Stock details (margin, batch, FIB)">{showRS ? "−" : "+"}RS</button>;
+  const detailToggle = <button onClick={() => setShowDetail(!showDetail)} className={`text-xs px-1.5 py-0.5 rounded font-bold ${showDetail ? "bg-teal-600 text-white" : "bg-gray-700 text-gray-400 hover:text-gray-200"}`} title="Show secondary detail columns (MOQ, VCAS, Raw, PPRC, INB, FBA, cost overrides)">{showDetail ? "−" : "+"} Detail</button>;
 
+  // === HEADER ROW ===
+  // Primary (always): DSR · 7D · T · DOC · All-In · S
+  // Secondary (+Detail): MOQ · VCAS · Raw · PPRC · Inb · FBA PCS · InbS · CogP · CogC
   const VTH = ({ isCol }) => <tr className="text-gray-500 uppercase bg-gray-900 text-xs sticky top-0 z-20">
     <th className="py-2 px-1 w-5 sticky left-0 bg-gray-900 z-30" />
     <TH tip="Core or JLS #" className="py-2 px-1 text-left sticky left-5 bg-gray-900 z-30">ID</TH>
     <th className="py-2 px-1 text-left sticky left-24 bg-gray-900 z-30">Title</th>
-    <TH tip="Composite DSR" className="py-2 px-1 text-right">DSR</TH><TH tip="7-Day DSR" className="py-2 px-1 text-right">7D</TH><TH tip="Trend" className="py-2 px-1 text-center">T</TH><TH tip="Days of Coverage" className="py-2 px-1 text-right">DOC</TH><TH tip="All-In" className="py-2 px-1 text-right">All-In</TH><TH tip="MOQ" className="py-2 px-1 text-right">MOQ</TH><TH tip="Case Pack" className="py-2 px-1 text-right">VCas</TH><TH tip="Seasonal" className="py-2 px-1 text-center">S</TH>
-    {!isCol && <><TH tip="Raw" className="py-2 px-1 text-right">Raw</TH><TH tip="PPRC" className="py-2 px-1 text-right">PPRC</TH><TH tip="Inbound" className="py-2 px-1 text-right">Inb</TH><TH tip="FBA Pcs" className="py-2 px-1 text-right">FBA Pcs</TH></>}
-    {showRS && <><th className="py-2 border-l-2 border-cyan-800 px-0.5" /><TH tip="FIB DOC" className="py-2 px-1 text-right text-cyan-400">FibDoc</TH><TH tip="Margin" className="py-2 px-1 text-right text-cyan-400">Mrgn</TH><TH tip="Raw" className="py-2 px-1 text-right text-cyan-400">Raw</TH><TH tip="Batch" className="py-2 px-1 text-right text-cyan-400">Batch</TH><TH tip="FIB" className="py-2 px-1 text-right text-cyan-400">FIB</TH><TH tip="PPRC" className="py-2 px-1 text-right text-cyan-400">PPRC</TH><TH tip="7f Miss" className="py-2 px-1 text-right text-red-400">7f Miss</TH></>}
-    <th className="py-2 border-l-2 border-gray-600 px-1" />
-    <TH tip="Pieces" className="py-2 px-1 text-center sticky right-36 bg-gray-900 z-30">Pcs</TH><TH tip="Cases" className="py-2 px-1 text-center sticky right-24 bg-gray-900 z-30">Cas</TH>
-    {showCosts && <><TH tip="InbS" className="py-2 px-1 text-center">InbS</TH><TH tip="CogP" className="py-2 px-1 text-center">CogP</TH><TH tip="CogC" className="py-2 px-1 text-center">CogC</TH></>}
-    <th className="py-2 px-1 text-right sticky right-12 bg-gray-900 z-30">Cost</th>
-    <TH tip="After DOC" className="py-2 px-1 text-right sticky right-0 bg-gray-900 z-30">After</TH>
-    <th className="py-2 px-1 w-20">{rsToggle} {costsToggle}</th>
+    <TH tip="Composite DSR" className="py-2 px-1 text-right">DSR</TH>
+    <TH tip="7-Day DSR" className="py-2 px-1 text-right">7D</TH>
+    <TH tip="Trend" className="py-2 px-1 text-center">T</TH>
+    <TH tip="Days of Coverage" className="py-2 px-1 text-right">DOC</TH>
+    <TH tip="All-In" className="py-2 px-1 text-right">All-In</TH>
+    <TH tip="Seasonal peak" className="py-2 px-1 text-center">S</TH>
+
+    {showDetail && <>
+      <TH tip="MOQ" className="py-2 px-1 text-right">MOQ</TH>
+      <TH tip="Case Pack" className="py-2 px-1 text-right">VCas</TH>
+      {!isCol && <>
+        <TH tip="Raw" className="py-2 px-1 text-right">Raw</TH>
+        <TH tip="PPRC" className="py-2 px-1 text-right">PPRC</TH>
+        <TH tip="Inbound to Amazon" className="py-2 px-1 text-right">Inb</TH>
+        <TH tip="FBA Pcs" className="py-2 px-1 text-right">FBA Pcs</TH>
+      </>}
+    </>}
+
+    {showRS && <>
+      <th className="py-2 border-l-2 border-cyan-800 px-0.5" />
+      <TH tip="FIB DOC" className="py-2 px-1 text-right text-cyan-400">FibDoc</TH>
+      <TH tip="Margin" className="py-2 px-1 text-right text-cyan-400">Mrgn</TH>
+      <TH tip="Raw" className="py-2 px-1 text-right text-cyan-400">Raw</TH>
+      <TH tip="Batch" className="py-2 px-1 text-right text-cyan-400">Batch</TH>
+      <TH tip="FIB" className="py-2 px-1 text-right text-cyan-400">FIB</TH>
+      <TH tip="PPRC" className="py-2 px-1 text-right text-cyan-400">PPRC</TH>
+      <TH tip="7f Miss" className="py-2 px-1 text-right text-red-400">7f Miss</TH>
+    </>}
+
+    <th className="py-2 border-l-2 border-blue-500/40 px-1" />
+    <TH tip="Pieces" className="py-2 px-1 text-center sticky right-36 bg-gray-900 z-30 text-blue-300">Pcs</TH>
+    <TH tip="Cases" className="py-2 px-1 text-center sticky right-24 bg-gray-900 z-30 text-blue-300">Cas</TH>
+    {showDetail && <>
+      <TH tip="Inbound shipping override" className="py-2 px-1 text-center">InbS</TH>
+      <TH tip="COGS per piece override" className="py-2 px-1 text-center">CogP</TH>
+      <TH tip="COGS per case override" className="py-2 px-1 text-center">CogC</TH>
+    </>}
+    <th className="py-2 px-1 text-right sticky right-12 bg-gray-900 z-30 text-blue-300">Cost</th>
+    <TH tip="After DOC" className="py-2 px-1 text-right sticky right-0 bg-gray-900 z-30 text-blue-300">After</TH>
+    <th className="py-2 px-1 w-24">{rsToggle} {detailToggle}</th>
   </tr>;
 
   return <div className="p-4">{toast && <Toast msg={toast} onClose={() => { setToast(null); setToastPersist(false); }} persist={toastPersist} />}
@@ -795,17 +821,16 @@ const openBreakdown = useCallback((c) => {
     </div>
     {vm === "vendor" && <div className="flex flex-wrap gap-3 mb-4 items-center text-sm"><span className="text-gray-500 text-xs">PO#:</span><input type="text" value={poN} onChange={e => setPoN(e.target.value)} placeholder="Auto" className="bg-gray-800 border border-gray-700 text-white rounded px-2 py-1 w-28 text-sm" />{!vf && <><span className="text-gray-500 text-xs">Date:</span><input type="date" value={poD} onChange={e => setPoD(e.target.value)} className="bg-gray-800 border border-gray-700 text-white rounded px-2 py-1 text-sm" /></>}<span className="text-gray-500 text-xs">Buyer:</span><span className="text-white font-semibold">{stg.buyer || <span className="text-red-400">Set in ⚙️</span>}</span></div>}
 
-    {vm === "core" && <div className="overflow-x-auto rounded-xl border border-gray-800"><table className="w-full"><thead><tr className="bg-gray-900/80 text-xs text-gray-400 uppercase sticky top-0 z-20"><th className="py-3 px-2 w-8" /><th className="py-3 px-2 text-left">Core</th><th className="py-3 px-2 text-left">Vendor</th><th className="py-3 px-2 text-left">Title</th><TH tip="DSR" className="py-3 px-2 text-right">DSR</TH><TH tip="7D" className="py-3 px-2 text-right">7D</TH><th className="py-3 px-2 text-center">T</th><TH tip="DOC" className="py-3 px-2 text-right">DOC</TH><TH tip="All-In" className="py-3 px-2 text-right">All-In</TH><th className="py-3 px-2 text-right">MOQ</th><th className="py-3 px-2 text-center">S</th><th className="py-3 px-1 border-l-2 border-gray-600" /><TH tip="Need (bundle-driven)" className="py-3 px-2 text-right">Need</TH><th className="py-3 px-2 text-right">Order</th><th className="py-3 px-2 text-right">Cost</th><TH tip="After DOC" className="py-3 px-2 text-right">After</TH><th className="py-3 px-2 w-14" /></tr></thead>
+    {vm === "core" && <div className="overflow-x-auto rounded-xl border border-gray-800"><table className="w-full"><thead><tr className="bg-gray-900/80 text-xs text-gray-400 uppercase sticky top-0 z-20"><th className="py-3 px-2 w-8" /><th className="py-3 px-2 text-left">Core</th><th className="py-3 px-2 text-left">Vendor</th><th className="py-3 px-2 text-left">Title</th><TH tip="DSR" className="py-3 px-2 text-right">DSR</TH><TH tip="7D" className="py-3 px-2 text-right">7D</TH><th className="py-3 px-2 text-center">T</th><TH tip="DOC" className="py-3 px-2 text-right">DOC</TH><TH tip="All-In" className="py-3 px-2 text-right">All-In</TH><th className="py-3 px-2 text-right">MOQ</th><th className="py-3 px-2 text-center">S</th><th className="py-3 px-1 border-l-2 border-blue-500/40" /><TH tip="Need (bundle-driven)" className="py-3 px-2 text-right text-blue-300">Need</TH><th className="py-3 px-2 text-right text-blue-300">Order</th><th className="py-3 px-2 text-right text-blue-300">Cost</th><TH tip="After DOC" className="py-3 px-2 text-right text-blue-300">After</TH><th className="py-3 px-2 w-14" /></tr></thead>
       <tbody>{enr.map(c => <tr key={c.id} className={`border-b border-gray-800/50 hover:bg-gray-800/30 text-sm ${c.sCoverage?.urgent ? "bg-red-900/10" : ""}`}><td className="py-2 px-2"><Dot status={c.status} /></td><td className="py-2 px-2"><button onClick={() => goCore(c.id)} className="text-blue-400 font-mono text-xs hover:underline">{c.id}</button></td><td className="py-2 px-2 text-blue-300 text-xs truncate max-w-[100px] cursor-pointer hover:underline" onClick={() => goVendor(c.ven)}>{c.ven}</td><td className="py-2 px-2 text-gray-200 max-w-[260px]">
-  <div className="flex items-center gap-1 flex-wrap">
+  <div className="flex items-center gap-1.5 flex-wrap">
     <span className="truncate max-w-[170px]">{c.ti}</span>
     {c.sCoverage?.urgent && <Flag type="OOS" />}
     {c.invAnomaly && <Flag type="INV" />}
-    {c.rawPendingBundles && <Flag type="PROC" />}
     {c.moqInflated && <Flag type="MOQ" extraTip={`MOQ forces ${Math.round(c.moqInflationRatio * 100)}% of real need. Excess: ${R(c.excessFromMoq)} pcs / $${Math.round(c.excessCostFromMoq).toLocaleString()}`} />}
-    {c.bundlesAffected > 0 && <span className="text-[10px] text-gray-500" title={`Need driven by ${c.bundlesAffected} bundle(s). See 📊 for detail.`}>({c.bundlesAffected}b)</span>}
+    {c.bundlesAffected > 0 && <span className="text-[10px] text-gray-500" title={`Driven by ${c.bundlesAffected} bundle(s).`}>({c.bundlesAffected}b)</span>}
   </div>
-</td><td className="py-2 px-2 text-right">{D1(c.dsr)}</td><td className="py-2 px-2 text-right">{D1(c.d7)}</td><td className="py-2 px-2 text-center">{c.d7 > c.dsr ? <span className="text-emerald-400">▲</span> : c.d7 < c.dsr ? <span className="text-red-400">▼</span> : "—"}</td><td className={`py-2 px-2 text-right font-semibold ${dc(c.doc, c.critDays, c.warnDays)}`}>{R(c.doc)}</td><td className="py-2 px-2 text-right">{R(c.allIn)}</td><td className="py-2 px-2 text-right text-gray-400 text-xs">{c.moq > 0 ? R(c.moq) : "—"}</td><td className="py-2 px-2 text-center">{c.seas && <span className="text-purple-400 text-xs font-bold">{c.seas.peak}</span>}</td><td className="py-2 px-1 border-l-2 border-gray-600" /><td className="py-2 px-2 text-right">{c.needQty > 0 ? (
+</td><td className="py-2 px-2 text-right">{D1(c.dsr)}</td><td className="py-2 px-2 text-right">{D1(c.d7)}</td><td className="py-2 px-2 text-center">{c.d7 > c.dsr ? <span className="text-emerald-400">▲</span> : c.d7 < c.dsr ? <span className="text-red-400">▼</span> : "—"}</td><td className={`py-2 px-2 text-right font-semibold ${dc(c.doc, c.critDays, c.warnDays)}`}>{R(c.doc)}</td><td className="py-2 px-2 text-right">{R(c.allIn)}</td><td className="py-2 px-2 text-right text-gray-400 text-xs">{c.moq > 0 ? R(c.moq) : "—"}</td><td className="py-2 px-2 text-center">{c.seas && <span className="text-purple-400 text-xs font-bold">{c.seas.peak}</span>}</td><td className="py-2 px-1 border-l-2 border-blue-500/40" /><td className="py-2 px-2 text-right">{c.needQty > 0 ? (
         c.moqInflated ? (
           <span title={`Real need: ${R(c.needQty)} · MOQ forces: ${R(c.orderQty)}`}>
             <span className="text-gray-300">{R(c.needQty)}</span>
@@ -823,7 +848,7 @@ const openBreakdown = useCallback((c) => {
     return <span className={`block text-[9px] font-normal ${cheaper ? "text-emerald-400" : "text-red-400"}`} title={tip}>{sign}{bench.pctDiff.toFixed(0)}%</span>;
   })()}
 </td><td className={`py-2 px-2 text-right ${c.orderQty > 0 ? dc(c.docAfter, c.critDays, c.warnDays) : "text-gray-500"}`}>{c.orderQty > 0 ? R(c.docAfter) : "—"}</td><td className="py-2 px-2 flex gap-1"><button onClick={() => openBreakdown(c)} className={`text-xs px-1 rounded ${c.sProfile?.hasHistory ? "text-purple-400" : "text-gray-600"}`}>📊</button><button onClick={() => goCore(c.id)} className="text-blue-400 text-xs px-1.5 py-0.5 bg-blue-400/10 rounded">V</button></td></tr>)}</tbody>
-      <tfoot><tr className="bg-gray-900 border-t-2 border-gray-700 text-sm font-semibold"><td colSpan={4} className="py-3 px-2 text-gray-300">{enr.length}</td><td className="py-3 px-2 text-right text-white">{D1(tot.d)}</td><td colSpan={3} /><td className="py-3 px-2 text-right text-white">{R(tot.a)}</td><td colSpan={2} /><td className="border-l-2 border-gray-600" /><td className="py-3 px-2 text-right">{R(tot.n)}</td><td className="py-3 px-2 text-right text-white">{R(tot.o)}</td><td className="py-3 px-2 text-right text-amber-300">{$(tot.co)}</td><td colSpan={2} /></tr></tfoot>
+      <tfoot><tr className="bg-gray-900 border-t-2 border-gray-700 text-sm font-semibold"><td colSpan={4} className="py-3 px-2 text-gray-300">{enr.length}</td><td className="py-3 px-2 text-right text-white">{D1(tot.d)}</td><td colSpan={3} /><td className="py-3 px-2 text-right text-white">{R(tot.a)}</td><td colSpan={2} /><td className="border-l-2 border-blue-500/40" /><td className="py-3 px-2 text-right">{R(tot.n)}</td><td className="py-3 px-2 text-right text-white">{R(tot.o)}</td><td className="py-3 px-2 text-right text-amber-300">{$(tot.co)}</td><td colSpan={2} /></tr></tfoot>
     </table></div>}
 
     {vm === "vendor" && vG.map(grp => {
@@ -838,16 +863,13 @@ const openBreakdown = useCallback((c) => {
       const pf = purchFreqMap[v.name];
       const vRec = vendorRecs[v.name];
 
-      // How many bundles would be bought as "bundle" mode vs "core" mode (for visibility)
       const bundlesInBundleMode = vRec?.bundleItems?.length || 0;
       const bundlesInCoreMode = (vRec?.bundleDetails || []).filter(bd => bd.buyMode === 'core' && bd.buyNeed > 0).length;
 
-      // Which flags actually fire for this vendor? (Only show legend for the ones present.)
       const activeFlags = new Set();
       grp.cores.forEach(c => {
         if (c.sCoverage?.urgent) activeFlags.add('OOS');
         if (c.invAnomaly) activeFlags.add('INV');
-        if (c.rawPendingBundles) activeFlags.add('PROC');
         if (c.moqInflated) activeFlags.add('MOQ');
       });
 
@@ -865,7 +887,7 @@ const openBreakdown = useCallback((c) => {
             <span className="text-xs text-gray-400">{v.payment}</span>
             {pf && pf.comment && <span className="text-xs text-amber-400">{pf.comment}</span>}
             {pf && <span className="text-xs text-gray-500">{pf.ordersPerYear}/yr · ×{pf.safetyMultiplier}</span>}
-           {(bundlesInBundleMode > 0 || bundlesInCoreMode > 0) && <span className="text-xs text-cyan-400" title="Based on 7f history: how many of this vendor's active bundles-with-need will be bought as raw core material vs as finished bundles">
+            {(bundlesInBundleMode > 0 || bundlesInCoreMode > 0) && <span className="text-xs text-cyan-400" title="Based on 7f history: how many of this vendor's active bundles-with-need will be bought as raw core material vs as finished bundles">
               {bundlesInCoreMode + bundlesInBundleMode} bundle{(bundlesInCoreMode + bundlesInBundleMode) > 1 ? "s" : ""} need buy → {bundlesInCoreMode} via core, {bundlesInBundleMode} via bundle
             </span>}
             {(() => {
@@ -873,14 +895,14 @@ const openBreakdown = useCallback((c) => {
               const countInflated = grp.cores.filter(c => c.moqInflated).length;
               if (totalExcessMoq === 0) return null;
               return <span className="text-xs text-orange-400" title="Sum of excess inventory $ forced by MOQ across cores in this vendor">
-                ⚠ MOQ excess: ${Math.round(totalExcessMoq).toLocaleString()} ({countInflated} cores)
+                MOQ excess: ${Math.round(totalExcessMoq).toLocaleString()} ({countInflated} cores)
               </span>;
             })()}
             {poI.length === 0 ? <span className="ml-auto text-xs text-gray-400 bg-gray-700 px-2 py-0.5 rounded">—</span> : <span className={`ml-auto text-xs font-semibold px-2 py-0.5 rounded ${meets ? "text-emerald-400 bg-emerald-400/10" : "text-red-400 bg-red-400/10"}`}>{meets ? "✓" : "!"} {$(poT)}{poC > 0 ? " / " + poC + "cs" : ""}</span>}
           </div>
           {activeFlags.size > 0 && (
             <div className="flex flex-wrap items-center gap-1.5 mb-2 pb-2 border-b border-gray-800">
-              <span className="text-[9px] uppercase text-gray-600 tracking-wider">Flags in this vendor:</span>
+              <span className="text-[9px] uppercase text-gray-600 tracking-wider">Flags:</span>
               {[...activeFlags].map(f => <FlagLegendItem key={f} type={f} />)}
             </div>
           )}
@@ -900,7 +922,7 @@ const openBreakdown = useCallback((c) => {
         </div>
         <div className="overflow-auto max-h-[70vh] max-w-[calc(100vw-2rem)]"><table className="w-full text-xs"><thead><VTH isCol={anyCol} /></thead><tbody>
           {vendorSub === "bundles" ? <>{grp.bundles.map(b => <BundleRow key={b.j} b={b} />)}{grp.bundles.length === 0 && <tr><td colSpan={40} className="py-4 text-center text-gray-500">No bundles</td></tr>}</>
-            : vendorSub === "mix" ? <>{grp.cores.map(c => {
+            : vendorSub === "mix" ? <>{grp.cores.map((c, ci) => {
               const cBs = (data.bundles || []).filter(b => {
                 let uses = false;
                 for (let i = 1; i <= 20; i++) if (b['core' + i] === c.id) { uses = true; break; }
@@ -913,9 +935,14 @@ const openBreakdown = useCallback((c) => {
               }).map(b => ({ ...b, fee: feMap[b.j] })).sort((a, b) => (a.fibDoc || 0) - (b.fibDoc || 0));
               const orderedBs = nf === "inorder" ? cBs.filter(b => hasBundleOrd(b)) : cBs;
               if (nf === "inorder" && !hasCoreOrd(c) && orderedBs.length === 0) return null;
-              return <Fragment key={c.id}><CoreRow c={c} />{!dismissed[c.id] && orderedBs.map(b => <BundleRow key={b.j} b={b} />)}</Fragment>;
+              const isLast = ci === grp.cores.length - 1;
+              const showBundles = !dismissed[c.id] && orderedBs.length > 0;
+              return <Fragment key={c.id}>
+                <CoreRow c={c} isLastOfGroup={!showBundles && isLast === false} />
+                {showBundles && orderedBs.map((b, bi) => <BundleRow key={b.j} b={b} isLastOfBundles={bi === orderedBs.length - 1 && !isLast} />)}
+              </Fragment>;
             })}</>
-              : <>{grp.cores.map(c => <CoreRow key={c.id} c={c} />)}</>}
+            : <>{grp.cores.map((c, ci) => <CoreRow key={c.id} c={c} isLastOfGroup={ci < grp.cores.length - 1} />)}</>}
         </tbody></table></div>
       </div>;
     })}
