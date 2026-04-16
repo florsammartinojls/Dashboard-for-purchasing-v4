@@ -266,7 +266,11 @@ function maxBundleUnitsFromPools(b, corePools) {
   for (const { coreId, qty } of b.coresUsed) {
     if (!(qty > 0)) continue;
     const pool = corePools[coreId];
-    if (pool === undefined || pool <= 0) return 0;
+    // Core de OTRO vendor → no es responsabilidad de este waterfall.
+    // Asumimos que ese otro vendor maneja su propio raw.
+    if (pool === undefined) continue;
+    // Mi propio core con pool en 0 → no puedo armar nada con esta bundle.
+    if (pool <= 0) return 0;
     const can = Math.floor(pool / qty);
     if (can < max) max = can;
   }
@@ -277,10 +281,12 @@ function applyBundleGive(b, give, corePools) {
   if (give <= 0) return;
   b.rawAssigned += give;
   for (const { coreId, qty } of b.coresUsed) {
-    corePools[coreId] = (corePools[coreId] || 0) - give * qty;
+    // Solo decrementar pools que pertenecen a este vendor.
+    // Cores de otros vendors no están en corePools y no se tocan.
+    if (corePools[coreId] === undefined) continue;
+    corePools[coreId] = corePools[coreId] - give * qty;
   }
 }
-
 function distributeRawToBundles(prepped, corePools, targetDoc, replenFloor) {
   // DEBUG — quitar después de validar
   const isDebugCore = Object.keys(corePools).some(k => k === 'Core-10258');
