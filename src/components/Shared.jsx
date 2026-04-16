@@ -399,6 +399,9 @@ export function CalcBreakdownV2({ core, vendor, vendorRec, profile, stg, onClose
   const initialPool = rawOnHand + pendingInbound;
   const consumedFromWaterfall = bundlesForThisCore.reduce((s, b) => s + b.rawUsedFromThisCore, 0);
   const remainingAfterWaterfall = initialPool - consumedFromWaterfall;
+  
+  const coreModeBundles = bundlesForThisCore.filter(b => b.buyMode === 'core' && b.buyNeed > 0);
+  const bundleModeBundles = bundlesForThisCore.filter(b => b.buyMode === 'bundle' && b.buyNeed > 0);
   const coreNeedPieces = coreDetail?.needPieces || 0;
   const coreFinalQty = coreDetail?.finalQty || 0;
   const coreCost = coreDetail?.cost || 0;
@@ -420,8 +423,6 @@ export function CalcBreakdownV2({ core, vendor, vendorRec, profile, stg, onClose
   const excessFromMoq = coreDetail?.excessFromMoq || 0;
   const excessCostFromMoq = coreDetail?.excessCostFromMoq || 0;
 
-  const coreModeBundles = bundlesForThisCore.filter(b => b.buyMode === 'core' && b.buyNeed > 0);
-  const bundleModeBundles = bundlesForThisCore.filter(b => b.buyMode === 'bundle' && b.buyNeed > 0);
 
   return (
     <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center overflow-auto p-4" onClick={onClose}>
