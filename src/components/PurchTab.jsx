@@ -583,7 +583,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
     const hasSeasonal = c.sProfile?.hasHistory;
     const isUrgent = c.sCoverage?.urgent;
 
-    const rowBg = hasCoreOrd(c) ? "bg-emerald-900/5" : isUrgent ? "bg-red-900/10" : "";
+    const rowBg = hasCoreOrd(c) ? "bg-emerald-900/5" : "";
     const stickyBg = isUrgent ? "bg-red-950/40" : "bg-gray-950";
 
     return <>
@@ -694,8 +694,8 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
     const effectiveDOC = effDSR > 0 ? Math.round((totalAvail + eq) / effDSR) : null;
     const urgentBundle = bd?.urgent;
 
-    const rowBg = hasBundleOrd(b) ? "bg-emerald-900/5" : urgentBundle ? "bg-red-900/10" : "bg-indigo-950/20";
-    const stickyBg = urgentBundle ? "bg-red-950/40" : "bg-indigo-950/40";
+    const rowBg = hasBundleOrd(b) ? "bg-emerald-900/5" : "bg-indigo-950/20";
+    const stickyBg = "bg-indigo-950/40";
 
     return <tr className={`border-b border-gray-800/20 hover:bg-indigo-900/20 text-xs ${rowBg}`}>
       <td className={`py-1.5 px-0.5 sticky left-0 z-10 w-4 border-l-2 border-indigo-500/40 ${stickyBg}`} />
