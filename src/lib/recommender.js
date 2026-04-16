@@ -394,6 +394,8 @@ export function calcVendorRecommendation({
   settings,
   purchFreqSafety,
   forceMode,       // optional: 'cores' | 'bundles' — overrides historical detection
+  bundleMoqOverride,      // optional: min bundle qty for bundle-mode purchases (manual input)
+  moqExtraDocThreshold,   // optional: max acceptable extra DOC days from MOQ inflation
 }) {
   if (!vendor || !vendor.name) return null;
 
@@ -510,7 +512,39 @@ export function calcVendorRecommendation({
       b.buyMode = canBuyAsBundle(b.raw, vendor, receivingFull) ? 'bundle' : 'core';
     }
   }
-
+  
+// Step 6.5: Apply Bundle MOQ override (if provided by user).
+  // For each bundle-mode bundle with buyNeed > 0 but below the MOQ:
+  //   - If urgent (OOS) → inflate to MOQ (buy it, can't wait)
+  //   - If extra DOC from inflation is acceptable (≤ threshold) → inflate
+  //   - Otherwise → wait (set buyNeed to 0, flag as 'wait')
+  const bMoq = num(bundleMoqOverride, 0);
+  const moqDocThresh = num(moqExtraDocThreshold, 30);
+  for (const b of prepped) {
+    b.bundleMoqStatus = null;
+    b.bundleMoqExtraDOC = 0;
+    b.bundleMoqOriginalNeed = b.buyNeed;
+    if (bMoq <= 0 || b.buyMode !== 'bundle' || b.buyNeed <= 0) continue;
+    if (b.buyNeed >= bMoq) {
+      b.bundleMoqStatus = 'meets_moq';
+      continue;
+    }
+    const extraUnits = bMoq - b.buyNeed;
+    const edsr = (b.seasonalDSR > 0) ? b.seasonalDSR : b.dsr;
+    const extraDOC = edsr > 0 ? Math.round(extraUnits / edsr) : 99999;
+    b.bundleMoqExtraDOC = extraDOC;
+    if (b.urgent) {
+      b.buyNeed = bMoq;
+      b.bundleMoqStatus = 'inflated_urgent';
+    } else if (extraDOC <= moqDocThresh) {
+      b.buyNeed = bMoq;
+      b.bundleMoqStatus = 'inflated_ok';
+    } else {
+      b.buyNeed = 0;
+      b.bundleMoqStatus = 'wait';
+    }
+  }
+  
   // Step 7: aggregate to core (only for core-mode bundles and
   // only for cores owned by THIS vendor)
   const coreNeedMap = {};
@@ -657,6 +691,9 @@ const bundleDetails = prepped.map(b => ({
     urgent: b.urgent,
     hasSeasonalHistory: b.hasSeasonalHistory,
     coresUsed: b.coresUsed,
+    bundleMoqStatus: b.bundleMoqStatus || null,
+    bundleMoqExtraDOC: b.bundleMoqExtraDOC || 0,
+    bundleMoqOriginalNeed: b.bundleMoqOriginalNeed ?? b.buyNeed,
   }));
 
   // Per-core summary (used by the by-core view)
@@ -743,6 +780,8 @@ export function batchVendorRecommendations({
       priceCompFull,
       settings,
       purchFreqSafety: safety,
+      bundleMoqOverride: 0,
+      moqExtraDocThreshold: num(settings?.moqExtraDocThreshold, 30),
     });
   }
   return out;
