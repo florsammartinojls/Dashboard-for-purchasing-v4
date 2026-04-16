@@ -289,22 +289,6 @@ function applyBundleGive(b, give, corePools) {
 }
 function distributeRawToBundles(prepped, corePools, targetDoc, replenFloor) {
   // DEBUG — quitar después de validar
-  const isDebugCore = Object.keys(corePools).some(k => k === 'Core-10258');
-  const dbg = isDebugCore ? (...args) => console.log('[waterfall]', ...args) : () => {};
-  if (isDebugCore) {
-    dbg('=== START ===');
-    dbg('corePools:', { ...corePools });
-    dbg('replenFloor:', replenFloor, 'targetDoc:', targetDoc);
-    dbg('bundles:', prepped.map(b => ({
-      j: b.j,
-      dsr: b.dsr,
-      seasonalDSR: b.seasonalDSR,
-      assignedInv: b.assignedInv,
-      curDOC_plain: b.assignedInv / b.dsr,
-      curDOC_seasonal: b.assignedInv / (b.seasonalDSR || b.dsr),
-      coresUsed: b.coresUsed,
-    })));
-  }
   
   // ... resto de la función sin tocar por ahora
   // Helper: seasonal-aware DSR for waterfall targets. Falls back to plain dsr
@@ -373,18 +357,7 @@ function distributeRawToBundles(prepped, corePools, targetDoc, replenFloor) {
     if (!any) break;
     level += LEVELING_STEP_DAYS;
   }
-  // DEBUG FINAL — agregar acá, justo antes del cierre de la función
-  if (isDebugCore) {
-    dbg('=== END ===');
-    dbg('corePools after:', { ...corePools });
-    dbg('bundles after:', prepped.map(b => ({
-      j: b.j,
-      rawAssigned: b.rawAssigned,
-      newDOC: (b.assignedInv + b.rawAssigned) / effDSR(b),
-    })));
-  }
-}
-
+ 
 // ────────────────────────────────────────────────────────────
 // MOQ + casepack for a core
 // ────────────────────────────────────────────────────────────
