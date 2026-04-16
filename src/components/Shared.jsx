@@ -399,9 +399,22 @@ export function CalcBreakdownV2({ core, vendor, vendorRec, profile, stg, onClose
   const initialPool = rawOnHand + pendingInbound;
   const consumedFromWaterfall = bundlesForThisCore.reduce((s, b) => s + b.rawUsedFromThisCore, 0);
   const remainingAfterWaterfall = initialPool - consumedFromWaterfall;
-  const needPieces = coreDetail?.needPieces || 0;
-  const finalQty = coreDetail?.finalQty || 0;
-  const cost = coreDetail?.cost || 0;
+  const coreNeedPieces = coreDetail?.needPieces || 0;
+  const coreFinalQty = coreDetail?.finalQty || 0;
+  const coreCost = coreDetail?.cost || 0;
+  
+  // Bundle-mode purchases for bundles that use this core
+  const bundleBuyTotal = bundleModeBundles.reduce((s, b) => s + b.buyNeed, 0);
+  const bundlePcsEquiv = bundleModeBundles.reduce((s, b) => s + b.buyNeed * b.qtyPerBundle, 0);
+  const bundleCostTotal = bundleModeBundles.reduce((s, b) => {
+    const price = vendorRec.priceMap?.[b.bundleId] || 0;
+    return s + b.buyNeed * price;
+  }, 0);
+  
+  // Combined totals for the header
+  const needPieces = coreNeedPieces + bundlePcsEquiv;
+  const finalQty = coreFinalQty + bundlePcsEquiv;
+  const cost = coreCost + bundleCostTotal;
   const moqInflated = coreDetail?.moqInflated || false;
   const moqRatio = coreDetail?.moqInflationRatio || 1;
   const excessFromMoq = coreDetail?.excessFromMoq || 0;
