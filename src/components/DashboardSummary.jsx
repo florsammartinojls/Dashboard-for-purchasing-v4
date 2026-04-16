@@ -1,12 +1,14 @@
 // src/components/DashboardSummary.jsx
 import React, { useState, useMemo } from "react";
-import { R, D1, $, gS, cAI, cNQ, cOQ, gTD, isD } from "../lib/utils";
-import { batchProfiles, calcCoverageNeed, calcPurchaseFrequency, DEFAULT_PROFILE } from "../lib/seasonal";
+import { R, D1, $, gS, cAI, isD, gTD } from "../lib/utils";
+import { calcPurchaseFrequency } from "../lib/seasonal";
+import { batchVendorRecommendations } from "../lib/recommender";
 import { Dot, WorkflowChip } from "./Shared";
 
 export default function DashboardSummary({ data, stg, goVendor, workflow, saveWorkflow, deleteWorkflow, vendorComments, saveVendorComment, onEnterPurchasing, activeBundleCores }) {
   const [originF, setOriginF] = useState("all");
   const [statusF, setStatusF] = useState("untriaged");
+  const [needsBuyOnly, setNeedsBuyOnly] = useState(true);
   const [showCleanup, setShowCleanup] = useState(false);
   const [showDead, setShowDead] = useState(false);
   const [showHousekeeping, setShowHousekeeping] = useState(false);
@@ -25,7 +27,6 @@ export default function DashboardSummary({ data, stg, goVendor, workflow, saveWo
     return m;
   }, [workflow]);
 
-  const getWf = (id) => wfMap[id] || null;
   const getWfStatus = (id) => {
     const wf = wfMap[id];
     if (!wf || !wf.status) return null;
@@ -38,13 +39,45 @@ export default function DashboardSummary({ data, stg, goVendor, workflow, saveWo
   const hasAnyStatus = (id) => !!getWfStatus(id);
   const wfColor = { Buy: "bg-emerald-500/20 text-emerald-400", Reviewing: "bg-amber-500/20 text-amber-400", Ignore: "bg-red-500/20 text-red-400", Done: "bg-blue-500/20 text-blue-400" };
 
-  // ── Seasonal engine (same as PurchTab) ──
-  const profiles = useMemo(() => batchProfiles(data.cores || [], data._coreInv || [], data._coreDays || []), [data.cores, data._coreInv, data._coreDays]);
+  // ── V2 Recommender (same engine as PurchTab) ──
+  const replenMap = useMemo(() => {
+    const m = {};
+    (data.replenRec || []).forEach(r => { m[r.j] = r });
+    return m;
+  }, [data.replenRec]);
+
+  const missingMap = useMemo(() => {
+    const m = {};
+    (data.receiving || []).forEach(r => {
+      if (r.piecesMissing > 0) {
+        const k = (r.core || "").trim();
+        m[k] = (m[k] || 0) + r.piecesMissing;
+      }
+    });
+    return m;
+  }, [data.receiving]);
+
   const purchFreqMap = useMemo(() => {
     const m = {};
     (data.vendors || []).forEach(v => { m[v.name] = calcPurchaseFrequency(v.name, data.receivingFull || []) });
     return m;
   }, [data.vendors, data.receivingFull]);
+
+  const vendorRecs = useMemo(() => {
+    if (!data.vendors?.length) return {};
+    return batchVendorRecommendations({
+      vendors: data.vendors,
+      cores: data.cores || [],
+      bundles: data.bundles || [],
+      bundleSales: data._bundleSales || [],
+      receivingFull: data.receivingFull || [],
+      replenMap,
+      missingMap,
+      priceCompFull: (data.priceCompFull?.length ? data.priceCompFull : data.priceComp) || [],
+      settings: stg,
+      purchFreqMap,
+    });
+  }, [data.vendors, data.cores, data.bundles, data._bundleSales, data.receivingFull, data.priceCompFull, data.priceComp, replenMap, missingMap, stg, purchFreqMap]);
 
   // ── Cleanup lists ──
   const noBundleCores = useMemo(() =>
@@ -62,7 +95,7 @@ export default function DashboardSummary({ data, stg, goVendor, workflow, saveWo
     return s;
   }, [noBundleCores, deadCores]);
 
-  // ── Vendor-level aggregation ──
+  // ── Vendor-level aggregation (v2 recommender) ──
   const vendorStats = useMemo(() => {
     const g = {};
     (data.cores || []).filter(c => {
@@ -71,63 +104,95 @@ export default function DashboardSummary({ data, stg, goVendor, workflow, saveWo
       if (stg.fV === "yes" && c.visible !== "Yes") return false;
       if (stg.fV === "no" && c.visible === "Yes") return false;
       if (stg.fI === "blank" && !!c.ignoreUntil) return false;
-      if (stg.fI === "set" && !c.ignoreUntil) return false;
       if (noBundleSet.has(c.id)) return false;
       return true;
     }).forEach(c => {
       const v = vMap[c.ven] || {};
       const lt = v.lt || 30;
-      const tg = gTD(v, stg);
-      const st = gS(c.doc, lt, c.buf || 14, stg);
-      const profile = profiles[c.id] || DEFAULT_PROFILE;
-      const pf = purchFreqMap[c.ven];
-      const coverage = calcCoverageNeed(c, lt, tg, profile, pf);
-      const nq = coverage.need;
-      const oq = nq > 0 ? cOQ(nq, c.moq, c.casePack) : 0;
-      const cost = oq * (c.cost || 0);
+      const effectiveDoc = c.dsr > 0 ? Math.round(cAI(c) / c.dsr) : c.doc;
+      const st = gS(effectiveDoc, lt, c.buf || 14, stg);
+
+      // v2 recommender lookup (authoritative for need/order/cost)
+      const vRec = vendorRecs[c.ven];
+      const cDet = vRec?.coreDetails?.find(x => x.coreId === c.id);
+      const nq = cDet?.needPieces || 0;
+      const oq = cDet?.finalQty || 0;
+      const unitCost = vRec?.priceMap?.[c.id] || c.cost || 0;
+      const cost = oq * unitCost;
+      const isUrgent = cDet?.urgent || false;
+
       if (!g[c.ven]) g[c.ven] = {
         name: c.ven, country: v.country || "", lt, moq: v.moqDollar || 0,
         payment: v.payment || "", isDom: isD(v.country),
         cr: 0, wa: 0, he: 0, cores: 0, needBuy: 0,
         totalCost: 0, minDoc: Infinity, totalDsr: 0,
-        critCores: [], warnCores: []
+        critCores: [], warnCores: [], hasUrgent: false
       };
       const vs = g[c.ven];
-      if (st === "critical" && nq > 0) vs.cr++; else if (st === "critical" && nq <= 0) vs.he++; // covered by bundles, not actionable else if (st === "warning") vs.wa++; else vs.he++;
+
+      if (st === "critical" && nq > 0) {
+        vs.cr++;
+      } else if (st === "critical" && nq <= 0) {
+        vs.he++; // covered by bundles/raw, not actionable
+      } else if (st === "warning") {
+        vs.wa++;
+      } else {
+        vs.he++;
+      }
+
       vs.cores++;
       vs.totalDsr += c.dsr || 0;
-      if (c.doc < vs.minDoc) vs.minDoc = c.doc;
+      if (effectiveDoc < vs.minDoc) vs.minDoc = effectiveDoc;
       if (nq > 0) { vs.needBuy++; vs.totalCost += cost; }
-      if (st === "critical" && nq > 0) vs.critCores.push({ id: c.id, ti: c.ti, doc: c.doc, dsr: c.dsr, needQty: nq, cost });
-      if (st === "warning") vs.warnCores.push({ id: c.id, ti: c.ti, doc: c.doc, dsr: c.dsr, needQty: nq, cost });
+      if (isUrgent) vs.hasUrgent = true;
+      if (st === "critical" && nq > 0) vs.critCores.push({ id: c.id, ti: c.ti, doc: effectiveDoc, dsr: c.dsr, needQty: nq, cost });
+      if (st === "warning") vs.warnCores.push({ id: c.id, ti: c.ti, doc: effectiveDoc, dsr: c.dsr, needQty: nq, cost });
     });
+
+    // Use recommender's vendor-level totalCost for consistency with PurchTab
+    for (const vs of Object.values(g)) {
+      const vRec = vendorRecs[vs.name];
+      if (vRec && vRec.totalCost > 0) {
+        vs.totalCost = vRec.totalCost;
+      }
+    }
+
     return Object.values(g).map(v => ({
       ...v,
       minDoc: v.minDoc === Infinity ? 0 : v.minDoc,
       urgency: v.cr > 0 ? "critical" : v.wa > 0 ? "warning" : "ok"
     }));
-  }, [data.cores, vMap, stg, noBundleSet, profiles, purchFreqMap]);
+  }, [data.cores, vMap, stg, noBundleSet, vendorRecs]);
 
-  // ── Apply origin + status filters ──
+  // ── Apply origin + status + needsBuy filters ──
   const filtered = useMemo(() => {
     let arr = vendorStats;
     if (originF === "us") arr = arr.filter(v => v.isDom);
     if (originF === "intl") arr = arr.filter(v => !v.isDom);
+    // Needs-buy filter (default ON)
+    if (needsBuyOnly) arr = arr.filter(v => v.needBuy > 0 || v.hasUrgent);
     // Status filter
     if (statusF === "untriaged") arr = arr.filter(v => !hasAnyStatus(v.name));
     else if (statusF === "Buy") arr = arr.filter(v => getWfStatus(v.name) === "Buy");
     else if (statusF === "Reviewing") arr = arr.filter(v => getWfStatus(v.name) === "Reviewing");
     else if (statusF === "Ignore") arr = arr.filter(v => getWfStatus(v.name) === "Ignore");
     else if (statusF === "Done") arr = arr.filter(v => getWfStatus(v.name) === "Done");
-    // "all" shows everything
     return arr;
-  }, [vendorStats, originF, statusF, wfMap]);
+  }, [vendorStats, originF, statusF, needsBuyOnly, wfMap]);
 
-  const critVendors = useMemo(() => filtered.filter(v => v.urgency === "critical").sort((a, b) => a.minDoc - b.minDoc), [filtered]);
-  const warnVendors = useMemo(() => filtered.filter(v => v.urgency === "warning").sort((a, b) => a.minDoc - b.minDoc), [filtered]);
-  const okVendors = useMemo(() => filtered.filter(v => v.urgency === "ok").sort((a, b) => a.name.localeCompare(b.name)), [filtered]);
+  // ── Sorting: urgent first, then totalCost desc ──
+  const sortedVendors = useMemo(() =>
+    [...filtered].sort((a, b) => {
+      if (a.hasUrgent !== b.hasUrgent) return a.hasUrgent ? -1 : 1;
+      return b.totalCost - a.totalCost;
+    })
+  , [filtered]);
 
-  // Totals from filtered (react to all filters)
+  const critVendors = useMemo(() => sortedVendors.filter(v => v.urgency === "critical"), [sortedVendors]);
+  const warnVendors = useMemo(() => sortedVendors.filter(v => v.urgency === "warning"), [sortedVendors]);
+  const okVendors = useMemo(() => sortedVendors.filter(v => v.urgency === "ok"), [sortedVendors]);
+
+  // Totals from filtered
   const totalCrit = filtered.reduce((s, v) => s + v.cr, 0);
   const totalWarn = filtered.reduce((s, v) => s + v.wa, 0);
   const totalOk = filtered.reduce((s, v) => s + v.he, 0);
@@ -141,13 +206,14 @@ export default function DashboardSummary({ data, stg, goVendor, workflow, saveWo
     let arr = vendorStats;
     if (originF === "us") arr = arr.filter(v => v.isDom);
     if (originF === "intl") arr = arr.filter(v => !v.isDom);
+    if (needsBuyOnly) arr = arr.filter(v => v.needBuy > 0 || v.hasUrgent);
     arr.forEach(v => {
       const st = getWfStatus(v.name);
       if (!st) c.untriaged++;
       else if (c[st] !== undefined) c[st]++;
     });
     return c;
-  }, [vendorStats, originF, wfMap]);
+  }, [vendorStats, originF, needsBuyOnly, wfMap]);
 
   const downloadCSV = (rows, filename, header) => {
     const blob = new Blob([header + "\n" + rows.join("\n")], { type: "text/csv" });
@@ -177,6 +243,7 @@ export default function DashboardSummary({ data, stg, goVendor, workflow, saveWo
                 {v.cr > 0 && <span className="text-red-400 font-semibold">{v.cr} critical</span>}
                 {v.wa > 0 && <span className="text-amber-400 font-semibold">{v.wa} warning</span>}
                 {v.needBuy > 0 && <span className="text-amber-300">{v.needBuy} need buy</span>}
+                {v.hasUrgent && <span className="text-red-400 font-bold">⚠ URGENT</span>}
                 {v.minDoc <= 7 && v.minDoc >= 0 && <span className="text-red-400 font-bold">DOC {v.minDoc}d</span>}
               </div>
             </div>
@@ -185,7 +252,6 @@ export default function DashboardSummary({ data, stg, goVendor, workflow, saveWo
               <span className="text-gray-600 text-xs">→</span>
             </div>
           </div>
-          {/* Workflow chip — click stops propagation so it doesn't open vendor */}
           <div className="relative flex-shrink-0" onClick={e => e.stopPropagation()}>
             <WorkflowChip id={v.name} type="vendor" workflow={workflow} onSave={saveWorkflow} onDelete={deleteWorkflow} buyer={stg.buyer || ""} />
           </div>
@@ -198,7 +264,7 @@ export default function DashboardSummary({ data, stg, goVendor, workflow, saveWo
                 <span className="text-blue-400 font-mono">{c.id}</span>
                 <span className="text-gray-400 truncate flex-1">{c.ti}</span>
                 <span className="text-red-400 font-semibold">DOC {Math.round(c.doc)}</span>
-                {c.cost > 0 && <span className="text-gray-500">{$(Math.round(c.cost))}</span>}  
+                {c.cost > 0 && <span className="text-gray-500">{$(Math.round(c.cost))}</span>}
               </div>
             ))}
             {v.critCores.length > 3 && <span className="text-[10px] text-gray-600">+{v.critCores.length - 3} more</span>}
@@ -267,6 +333,14 @@ export default function DashboardSummary({ data, stg, goVendor, workflow, saveWo
           <option value="intl">International</option>
         </select>
 
+        {/* Needs-buy toggle */}
+        <button
+          onClick={() => setNeedsBuyOnly(!needsBuyOnly)}
+          className={`text-xs px-3 py-1.5 rounded-lg font-medium ${needsBuyOnly ? "bg-blue-600 text-white" : "bg-gray-800 border border-gray-700 text-gray-400"}`}
+        >
+          {needsBuyOnly ? "Needs Buy Only ✓" : "All Vendors"}
+        </button>
+
         {/* Status/triage filter */}
         <div className="flex bg-gray-800 rounded-lg p-0.5 gap-0.5">
           {[
@@ -285,7 +359,7 @@ export default function DashboardSummary({ data, stg, goVendor, workflow, saveWo
         </div>
 
         <button onClick={() => setShowHousekeeping(!showHousekeeping)} className={`text-xs px-3 py-1.5 rounded-lg font-medium ${showHousekeeping ? "bg-amber-600 text-white" : "bg-gray-800 border border-gray-700 text-gray-400"}`}>
-          🧹 {filteredNoBundleCores.length + filteredDeadCores.length} Cleanup{showHousekeeping ? " ✓" : ""}
+          {filteredNoBundleCores.length + filteredDeadCores.length} Cleanup{showHousekeeping ? " ✓" : ""}
         </button>
 
         <div className="flex gap-2 text-xs ml-auto">
@@ -305,9 +379,9 @@ export default function DashboardSummary({ data, stg, goVendor, workflow, saveWo
           {filteredNoBundleCores.length > 0 && (
             <div className="bg-gray-800/30 border border-gray-700/50 rounded-lg px-4 py-2.5">
               <div className="flex justify-between items-center cursor-pointer" onClick={() => setShowCleanup(!showCleanup)}>
-                <span className="text-xs text-gray-400">🧹 {filteredNoBundleCores.length} active core{filteredNoBundleCores.length !== 1 ? "s" : ""} with sales but no active bundle</span>
+                <span className="text-xs text-gray-400">{filteredNoBundleCores.length} active core{filteredNoBundleCores.length !== 1 ? "s" : ""} with sales but no active bundle</span>
                 <div className="flex items-center gap-2">
-                  <button onClick={e => { e.stopPropagation(); downloadCSV(filteredNoBundleCores.map(c => [c.id, '"' + (c.ti || "").replace(/"/g, '""') + '"', '"' + (c.ven || "") + '"', c.dsr || 0, c.doc || 0, cAI(c), c.moq || 0].join(",")), "cores_no_bundle.csv", "Core ID,Title,Vendor,DSR,DOC,All-In,MOQ"); }} className="text-[10px] text-blue-400 hover:text-blue-300 bg-blue-400/10 px-2 py-0.5 rounded">⬇ CSV</button>
+                  <button onClick={e => { e.stopPropagation(); downloadCSV(filteredNoBundleCores.map(c => [c.id, '"' + (c.ti || "").replace(/"/g, '""') + '"', '"' + (c.ven || "") + '"', c.dsr || 0, c.doc || 0, cAI(c), c.moq || 0].join(",")), "cores_no_bundle.csv", "Core ID,Title,Vendor,DSR,DOC,All-In,MOQ"); }} className="text-[10px] text-blue-400 hover:text-blue-300 bg-blue-400/10 px-2 py-0.5 rounded">CSV</button>
                   <span className="text-[10px] text-gray-600">{showCleanup ? "▲" : "▼"}</span>
                 </div>
               </div>
@@ -329,9 +403,9 @@ export default function DashboardSummary({ data, stg, goVendor, workflow, saveWo
           {filteredDeadCores.length > 0 && (
             <div className="bg-red-900/10 border border-red-500/15 rounded-lg px-4 py-2.5">
               <div className="flex justify-between items-center cursor-pointer" onClick={() => setShowDead(!showDead)}>
-                <span className="text-xs text-red-400/80">⚠ {filteredDeadCores.length} active core{filteredDeadCores.length !== 1 ? "s" : ""} with NO sales and NO active bundle — consider deactivating</span>
+                <span className="text-xs text-red-400/80">{filteredDeadCores.length} active core{filteredDeadCores.length !== 1 ? "s" : ""} with NO sales and NO active bundle — consider deactivating</span>
                 <div className="flex items-center gap-2">
-                  <button onClick={e => { e.stopPropagation(); downloadCSV(filteredDeadCores.map(c => [c.id, '"' + (c.ti || "").replace(/"/g, '""') + '"', '"' + (c.ven || "") + '"', c.doc || 0, cAI(c), c.moq || 0].join(",")), "dead_cores_no_bundle_no_sales.csv", "Core ID,Title,Vendor,DOC,All-In,MOQ"); }} className="text-[10px] text-red-400 hover:text-red-300 bg-red-400/10 px-2 py-0.5 rounded">⬇ CSV</button>
+                  <button onClick={e => { e.stopPropagation(); downloadCSV(filteredDeadCores.map(c => [c.id, '"' + (c.ti || "").replace(/"/g, '""') + '"', '"' + (c.ven || "") + '"', c.doc || 0, cAI(c), c.moq || 0].join(",")), "dead_cores_no_bundle_no_sales.csv", "Core ID,Title,Vendor,DOC,All-In,MOQ"); }} className="text-[10px] text-red-400 hover:text-red-300 bg-red-400/10 px-2 py-0.5 rounded">CSV</button>
                   <span className="text-[10px] text-gray-600">{showDead ? "▲" : "▼"}</span>
                 </div>
               </div>
@@ -360,7 +434,7 @@ export default function DashboardSummary({ data, stg, goVendor, workflow, saveWo
 
       {filtered.length === 0 && (
         <div className="text-center text-gray-500 py-12">
-          {statusF === "untriaged" ? "All vendors have been triaged! Switch to a status filter to review them." : "No vendors match current filters."}
+          {needsBuyOnly ? "No vendors need buying right now! Turn off 'Needs Buy Only' to see all." : statusF === "untriaged" ? "All vendors have been triaged! Switch to a status filter to review them." : "No vendors match current filters."}
         </div>
       )}
     </div>
