@@ -88,13 +88,32 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
  const [vendorSub, setVendorSub] = useState(() => {
     const fromUrl = new URLSearchParams(window.location.search).get('sub');
     if (fromUrl && ["mix", "cores", "bundles"].includes(fromUrl)) return fromUrl;
+    const vendorFromUrl = new URLSearchParams(window.location.search).get('vendor');
+    if (vendorFromUrl) {
+      try {
+        const saved = localStorage.getItem('fba_vendor_sub_' + vendorFromUrl);
+        if (saved && ["mix", "cores", "bundles"].includes(saved)) return saved;
+      } catch {}
+    }
     try {
       const saved = localStorage.getItem('fba_vendor_sub');
       if (saved && ["mix", "cores", "bundles"].includes(saved)) return saved;
     } catch {}
     return "mix";
   });
-  useEffect(() => { try { localStorage.setItem('fba_vendor_sub', vendorSub); } catch {} }, [vendorSub]);
+  useEffect(() => {
+    try {
+      if (vf) localStorage.setItem('fba_vendor_sub_' + vf, vendorSub);
+      localStorage.setItem('fba_vendor_sub', vendorSub);
+    } catch {}
+  }, [vendorSub, vf]);
+  useEffect(() => {
+    if (!vf) return;
+    try {
+      const saved = localStorage.getItem('fba_vendor_sub_' + vf);
+      if (saved && ["mix", "cores", "bundles"].includes(saved)) setVendorSub(saved);
+    } catch {}
+  }, [vf]);
   const [showRS, setShowRS] = useState(false);
   const [showCosts, setShowCosts] = useState(false);
   const [showPH, setShowPH] = useState({});
