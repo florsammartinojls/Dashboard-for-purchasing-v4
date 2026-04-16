@@ -129,6 +129,9 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
   const [showIgnored, setShowIgnored] = useState(false);
   const [showNoBundleCores, setShowNoBundleCores] = useState(false);
   const [breakdownCore, setBreakdownCore] = useState(null);
+  // MOQ override inputs (session-only, not persisted)
+  const [moqOverrides, setMoqOverrides] = useState({});
+  const [overrideRecs, setOverrideRecs] = useState({});
 
   useEffect(() => { if (initV) { setVm("vendor"); setVf(initV); clearIV() } }, [initV, clearIV]);
 
@@ -187,12 +190,15 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
     });
   }, [data.vendors, data.cores, data.bundles, data._bundleSales, data.receivingFull, data.priceCompFull, replenMap, missingMap, stg, purchFreqMap]);
 
-  // DEBUG: expose vendorRecs to window so we can inspect from console
+// Merge batch recs with any per-vendor overrides (from Apply button)
+  const effectiveRecs = useMemo(() => ({ ...vendorRecs, ...overrideRecs }), [vendorRecs, overrideRecs]);
+
+  // DEBUG: expose to console
   useEffect(() => {
     if (typeof window !== 'undefined') {
-      window.__vendorRecs = vendorRecs;
+      window.__vendorRecs = effectiveRecs;
     }
-  }, [vendorRecs]);
+  }, [effectiveRecs]);
 
   // === AUTO-DETECT vendorSub on first visit to a vendor ===
   // Rule: if this vendor historically NEVER delivered any bundle assembled
@@ -210,7 +216,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
       setAutoDetectedVendors(prev => { const n = new Set(prev); n.add(vf); return n; });
       return;
     }
-    const rec = vendorRecs[vf];
+    const rec = effectiveRecs[vf];
     if (!rec || !rec.bundleDetails) return;
     const activeBundles = rec.bundleDetails.filter(bd => bd.buyNeed > 0);
     if (activeBundles.length === 0) {
@@ -227,23 +233,23 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
   }, [vf, vendorRecs, autoDetectedVendors, vendorSub]);
 
   const getVendorPrice = useCallback((vendorName, itemId, fallback) => {
-    const rec = vendorRecs[vendorName];
+    const rec = effectiveRecs[vendorName];
     if (rec?.priceMap && rec.priceMap[itemId] > 0) {
       return rec.priceMap[itemId];
     }
     return fallback || 0;
-  }, [vendorRecs]);
+  }, [effectiveRecs]);
 
   const bundleEffMap = useMemo(() => {
     const m = {};
-    for (const vRec of Object.values(vendorRecs)) {
+    for (const vRec of Object.values(effectiveRecs)) {
       if (!vRec?.bundleDetails) continue;
       for (const bd of vRec.bundleDetails) {
         m[bd.bundleId] = bd;
       }
     }
     return m;
-  }, [vendorRecs]);
+  }, [effectiveRecs]);
 
   const priceHistoryFull = useMemo(
     () => (data.priceCompFull?.length ? data.priceCompFull : data.priceComp) || [],
@@ -347,7 +353,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
       const seas = cSeas(c.id, (data._coreInv || []));
       const invAnomaly = ai > 0 && c.dsr > 0 && Math.abs(effectiveDoc - ai / c.dsr) > effectiveDoc * 0.2;
 
-      const vRec = vendorRecs[c.ven];
+      const vRec = effectiveRecs[c.ven];
       const cDet = vRec?.coreDetails?.find(x => x.coreId === c.id);
       const sNeed = cDet?.needPieces || 0;
       const oq = cDet?.finalQty || 0;
@@ -410,8 +416,8 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
       if (sort === "need$") return b.needDollar - a.needDollar;
       return 0;
     })
-    , [data, stg, vf, sf, sort, vMap, nf, minD, locF, profiles, vendorRecs, showNoBundleCores, activeBundleCores, spikeThr, ov]);
-
+   , [data, stg, vf, sf, sort, vMap, nf, minD, locF, profiles, effectiveRecs, showNoBundleCores, activeBundleCores, spikeThr, ov]);
+  
   const venBundles = useMemo(() => (data.bundles || []).filter(b => {
     if (bA === "yes" && b.active !== "Yes") return false;
     if (bA === "no" && b.active === "Yes") return false;
@@ -457,8 +463,8 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
       const cogpOv = gCogP(b.j);
       const vendorsRaw = (b.vendors || "").trim();
       let vendorName = vendorsRaw;
-      if (!vendorRecs[vendorName]) {
-        const firstChunk = vendorsRaw.split(',').map(s => s.trim()).find(v => v && vendorRecs[v]) || "";
+      if (!effectiveRecs[vendorName]) {
+        const firstChunk = vendorsRaw.split(',').map(s => s.trim()).find(v => v && effectiveRecs[v]) || "";
         if (firstChunk) vendorName = firstChunk;
       }
       const vendorPrice = getVendorPrice(vendorName, b.j, f?.aicogs || b.aicogs || 0);
@@ -470,6 +476,44 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
 
   const autoPO = (vendorCode) => { if (poN) return poN; const d = new Date(); const serial = Math.floor((d - new Date(1899, 11, 30)) / 86400000); return 'PO-' + serial + '-' + (vendorCode || 'XXX') };
 
+  // Apply MOQ overrides for a specific vendor — recalculates with bundle MOQ
+  const applyMoqOverride = useCallback((vendorName) => {
+    const vendor = vMap[vendorName];
+    if (!vendor) return;
+    const ov = moqOverrides[vendorName] || {};
+    const rec = calcVendorRecommendation({
+      vendor,
+      cores: data.cores || [],
+      bundles: data.bundles || [],
+      bundleSales: data._bundleSales || [],
+      receivingFull: data.receivingFull || [],
+      replenMap,
+      missingMap,
+      priceCompFull: (data.priceCompFull?.length ? data.priceCompFull : data.priceComp) || [],
+      settings: stg,
+      purchFreqSafety: purchFreqMap[vendorName]?.safetyMultiplier || 1.0,
+      bundleMoqOverride: ov.bundleMoq || 0,
+      moqExtraDocThreshold: stg.moqExtraDocThreshold || 30,
+    });
+    if (rec) {
+      setOverrideRecs(prev => ({ ...prev, [vendorName]: rec }));
+      setToast(`MOQ override applied for ${vendorName}`);
+    }
+  }, [moqOverrides, vMap, data, replenMap, missingMap, stg, purchFreqMap]);
+
+  const resetMoqOverride = useCallback((vendorName) => {
+    setMoqOverrides(prev => { const n = { ...prev }; delete n[vendorName]; return n; });
+    setOverrideRecs(prev => { const n = { ...prev }; delete n[vendorName]; return n; });
+    setToast(`MOQ override cleared for ${vendorName}`);
+  }, []);
+
+  const getMoqOv = (vendorName) => moqOverrides[vendorName] || {};
+  const setMoqOv = (vendorName, field, value) => {
+    setMoqOverrides(prev => ({
+      ...prev,
+      [vendorName]: { ...(prev[vendorName] || {}), [field]: value }
+    }));
+  };
   const fillR = (cores, bundles, mode, vendorName) => {
     const vendor = vMap[vendorName];
     if (!vendor) return;
@@ -488,7 +532,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
           purchFreqSafety: purchFreqMap[vendorName]?.safetyMultiplier || 1.0,
           forceMode,
         })
-      : vendorRecs[vendorName];
+      : effectiveRecs[vendorName];
     if (!rec || !rec.items?.length) { setToast("Nothing to fill"); return; }
     const u = { ...ov };
     for (const item of rec.items) {
@@ -511,8 +555,8 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
       const cogpOv = gCogP(b.j);
       const vendorsRaw = (b.vendors || "").trim();
       let vendorName = vendorsRaw;
-      if (!vendorRecs[vendorName]) {
-        const firstChunk = vendorsRaw.split(',').map(s => s.trim()).find(v => v && vendorRecs[v]) || "";
+      if (!effectiveRecs[vendorName]) {
+        const firstChunk = vendorsRaw.split(',').map(s => s.trim()).find(v => v && effectiveRecs[v]) || "";
         if (firstChunk) vendorName = firstChunk;
       }
       const vendorPrice = getVendorPrice(vendorName, b.j, f?.aicogs || 0);
@@ -674,8 +718,8 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
     const cogpOverride = gCogP(b.j);
     const vendorsRaw = (b.vendors || "").trim();
     let vendorName = vendorsRaw;
-    if (!vendorRecs[vendorName]) {
-      const firstChunk = vendorsRaw.split(',').map(s => s.trim()).find(v => v && vendorRecs[v]) || "";
+    if (!effectiveRecs[vendorName]) {
+      const firstChunk = vendorsRaw.split(',').map(s => s.trim()).find(v => v && effectiveRecs[v]) || "";
       if (firstChunk) vendorName = firstChunk;
     }
     const vendorPrice = getVendorPrice(vendorName, b.j, f?.aicogs || 0);
@@ -704,6 +748,9 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
         <span className="pl-3">↳ {b.t}</span>
         {b.asin && <a href={`https://sellercentral.amazon.com/myinventory/inventory?fulfilledBy=all&page=1&pageSize=25&searchField=all&searchTerm=${b.asin}&sort=date_created_desc&status=all`} target="_blank" rel="noopener noreferrer" className="ml-1 text-gray-500 hover:text-blue-400 text-[9px] font-mono">{b.asin}</a>}
         {urgentBundle && <Flag type="OOS" />}
+        {bd?.bundleMoqStatus === 'wait' && <span className="ml-1 text-[10px] font-semibold text-sky-300 bg-sky-500/20 border border-sky-500/40 px-1.5 py-0.5 rounded" title={`Below Bundle MOQ. Need ${bd.bundleMoqOriginalNeed} but MOQ requires more. Would add ${bd.bundleMoqExtraDOC}d extra stock. Waiting to accumulate.`}>⏸ Wait</span>}
+        {bd?.bundleMoqStatus === 'inflated_urgent' && <span className="ml-1 text-[10px] font-semibold text-red-300 bg-red-500/20 border border-red-500/40 px-1.5 py-0.5 rounded" title={`MOQ inflated (urgent) — needed ${bd.bundleMoqOriginalNeed}, buying MOQ to avoid stockout. +${bd.bundleMoqExtraDOC}d extra.`}>⚠ MOQ urgent</span>}
+        {bd?.bundleMoqStatus === 'inflated_ok' && <span className="ml-1 text-[10px] font-semibold text-orange-300 bg-orange-500/20 border border-orange-500/40 px-1.5 py-0.5 rounded" title={`MOQ inflated — needed ${bd.bundleMoqOriginalNeed}, buying MOQ. +${bd.bundleMoqExtraDOC}d extra (acceptable).`}>$ Inflated</span>}
         {aged && aged.fbaHealth !== "Healthy" && <span className={`ml-1 text-xs ${aged.fbaHealth === "At Risk" ? "text-amber-400" : "text-red-400"}`}>{aged.fbaHealth}</span>}
         {aged && aged.storageLtsf > 0 && <span className="ml-1 text-xs text-red-300">${aged.storageLtsf.toFixed(0)}</span>}
         {kill && kill.latestEval && kill.latestEval.toLowerCase().includes('kill') && <span className="ml-1 text-xs text-red-400 font-bold">KILL</span>}
@@ -800,7 +847,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
   </tr>;
 
   return <div className="p-4">{toast && <Toast msg={toast} onClose={() => { setToast(null); setToastPersist(false); }} persist={toastPersist} />}
-    {breakdownCore && <CalcBreakdownV2 core={breakdownCore} vendor={vMap[breakdownCore.ven]} vendorRec={vendorRecs[breakdownCore.ven]} profile={profiles[breakdownCore.id]} stg={stg} onClose={() => setBreakdownCore(null)} />}
+    {breakdownCore && <CalcBreakdownV2 core={breakdownCore} vendor={vMap[breakdownCore.ven]} vendorRec={effectiveRecs[breakdownCore.ven]} profile={profiles[breakdownCore.id]} stg={stg} onClose={() => setBreakdownCore(null)} />}
     <div className="flex flex-wrap gap-2 items-center mb-4">
       <div className="flex bg-gray-800 rounded-lg p-0.5">{["core", "vendor"].map(m => <button key={m} onClick={() => setVm(m)} className={`px-3 py-1.5 rounded-md text-sm font-medium ${vm === m ? "bg-blue-600 text-white" : "text-gray-400"}`}>{m === "core" ? "By Core" : "By Vendor"}</button>)}</div>
       <SS value={vf} onChange={setVf} options={vNames} />
@@ -861,7 +908,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
       const vendorPO = autoPO(v.code);
       const moqGap = (v.moqDollar || 0) - poT;
       const pf = purchFreqMap[v.name];
-      const vRec = vendorRecs[v.name];
+      const vRec = effectiveRecs[v.name];
 
       const bundlesInBundleMode = vRec?.bundleItems?.length || 0;
       const bundlesInCoreMode = (vRec?.bundleDetails || []).filter(bd => bd.buyMode === 'core' && bd.buyNeed > 0).length;
@@ -907,6 +954,32 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
             </div>
           )}
           <div className="flex flex-wrap gap-2 items-center">
+            {/* MOQ Override inputs (session-only) */}
+            <div className="flex items-center gap-1.5 mr-2">
+              <span className="text-[10px] text-gray-500">MOQ$:</span>
+              <input
+                type="number"
+                value={getMoqOv(v.name).dollarMoq || ''}
+                onChange={e => setMoqOv(v.name, 'dollarMoq', +e.target.value)}
+                placeholder={v.moqDollar > 0 ? String(v.moqDollar) : "0"}
+                className="bg-gray-800 border border-gray-600 text-white rounded px-1.5 py-0.5 w-16 text-[10px] text-center"
+              />
+              <span className="text-[10px] text-gray-500">BdlMOQ:</span>
+              <input
+                type="number"
+                value={getMoqOv(v.name).bundleMoq || ''}
+                onChange={e => setMoqOv(v.name, 'bundleMoq', +e.target.value)}
+                placeholder="0"
+                className="bg-gray-800 border border-gray-600 text-white rounded px-1.5 py-0.5 w-14 text-[10px] text-center"
+              />
+              <button
+                onClick={() => applyMoqOverride(v.name)}
+                disabled={!getMoqOv(v.name).dollarMoq && !getMoqOv(v.name).bundleMoq}
+                className={`text-[10px] px-2 py-0.5 rounded font-medium ${(getMoqOv(v.name).dollarMoq || getMoqOv(v.name).bundleMoq) ? "bg-blue-600 text-white" : "bg-gray-700 text-gray-500 cursor-not-allowed"}`}
+              >Apply</button>
+              {overrideRecs[v.name] && <button onClick={() => resetMoqOverride(v.name)} className="text-[10px] text-gray-400 hover:text-white" title="Reset MOQ overrides">↺</button>}
+              {overrideRecs[v.name] && <span className="text-[10px] text-blue-400 font-medium">Override ✓</span>}
+            </div>
             <button onClick={() => fillR(grp.cores, grp.bundles, vendorSub, v.name)} className={`text-xs px-2.5 py-1 rounded ${data._coreInv?.length ? "bg-blue-600/80 text-white" : "bg-yellow-600 text-white animate-pulse"}`}>{data._coreInv?.length ? "Fill Rec" : "Fill Rec ⏳"}</button>
             <button onClick={() => doFillMOQ(grp.cores, grp.bundles, v.moqDollar || 0)} disabled={!v.moqDollar || poT >= v.moqDollar || poI.length === 0} className={`text-xs px-2.5 py-1 rounded font-medium ${v.moqDollar && poT < v.moqDollar && poI.length > 0 ? "bg-orange-600 text-white" : "bg-gray-700 text-gray-500 cursor-not-allowed"}`}>Fill MOQ{moqGap > 0 && poI.length > 0 ? ` (+${$(moqGap)})` : ""}</button>
             <button onClick={() => clrV(grp.cores, grp.bundles)} className="text-xs bg-gray-700 text-gray-300 px-2.5 py-1 rounded">Clear</button>
