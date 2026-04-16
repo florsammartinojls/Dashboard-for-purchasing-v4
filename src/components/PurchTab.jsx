@@ -405,11 +405,18 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
       return true;
     }).sort((a, b) => {
       const so = { critical: 0, warning: 1, healthy: 2 };
-      if (sort === "status") return so[a.status] - so[b.status];
+      if (sort === "status") {
+        const aN = a.needQty > 0 ? 0 : 1;
+        const bN = b.needQty > 0 ? 0 : 1;
+        if (aN !== bN) return aN - bN;
+        if (so[a.status] !== so[b.status]) return so[a.status] - so[b.status];
+        return b.needDollar - a.needDollar;
+      }
       if (sort === "doc") return a.doc - b.doc;
       if (sort === "dsr") return b.dsr - a.dsr;
       if (sort === "need$") return b.needDollar - a.needDollar;
       return 0;
+    })
     }), [data, stg, vf, sf, sort, vMap, nf, minD, locF, profiles, vendorRecs, showNoBundleCores, activeBundleCores, spikeThr, ov]);
 
   const venBundles = useMemo(() => (data.bundles || []).filter(b => {
