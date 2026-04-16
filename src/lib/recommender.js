@@ -559,6 +559,24 @@ export function calcVendorRecommendation({
     }
   }
 
+// Step 7.5: Sanity check — if the core's TOTAL inventory (all-in) already
+  // covers the target DOC, don't buy. The bundles might look "short" individually
+  // because of how PPRC is assigned, but the physical inventory is there —
+  // it just needs to be redistributed/processed, not purchased.
+  for (const coreId of Object.keys(coreNeedMap)) {
+    const core = vCoreById[coreId];
+    if (!core) continue;
+    const allIn = num(core.raw) + num(core.pp) + num(core.inb) + num(core.fba);
+    const coreDSR = num(core.dsr);
+    if (coreDSR <= 0) continue;
+    const coreDOC = allIn / coreDSR;
+    if (coreDOC > targetDoc * 1.2) {
+      coreNeedMap[coreId] = 0;
+      if (!coreBundlesMap[coreId]) coreBundlesMap[coreId] = [];
+      coreBundlesMap[coreId]._redistributeFlag = true;
+    }
+  }
+  
   // Step 8: MOQ + casepack per core -> coreItems
 
   // Price per piece comes from 7g (last material cost vendor charged for this
