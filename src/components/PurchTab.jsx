@@ -396,9 +396,23 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
       if (vf && c.ven !== vf) return false;
       if (sf && c.status !== sf) return false;
       if (minD > 0 && c.doc < minD) return false;
+      if (nf === "needsbuy") {
+        const hasCoreBuy = c.needQty > 0;
+        const hasBundleBuy = (effectiveRecs[c.ven]?.bundleDetails || []).some(
+          bd => bd.buyNeed > 0 && (bd.coresUsed || []).some(cu => cu.coreId === c.id)
+        );
+        const hasOrder = ov[c.id]?.pcs > 0 || ov[c.id]?.cas > 0;
+        if (!hasCoreBuy && !hasBundleBuy && !hasOrder) return false;
+      }
       if (nf === "inorder" && !(ov[c.id]?.pcs > 0 || ov[c.id]?.cas > 0)) return false;
-      if (nf === "rec" && c.needQty <= 0) return false;
-      if (nf === "ok" && (ov[c.id]?.pcs > 0 || ov[c.id]?.cas > 0 || c.needQty > 0)) return false;
+      if (nf === "ok") {
+        const hasCoreBuy = c.needQty > 0;
+        const hasBundleBuy = (effectiveRecs[c.ven]?.bundleDetails || []).some(
+          bd => bd.buyNeed > 0 && (bd.coresUsed || []).some(cu => cu.coreId === c.id)
+        );
+        const hasOrder = ov[c.id]?.pcs > 0 || ov[c.id]?.cas > 0;
+        if (hasCoreBuy || hasBundleBuy || hasOrder) return false;
+      }
       if (locF === "us" && !c.isDom) return false;
       if (locF === "intl" && c.isDom) return false;
       return true;
@@ -853,7 +867,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
       <SS value={vf} onChange={setVf} options={vNames} />
       <select value={sf} onChange={e => setSf(e.target.value)} className="bg-gray-800 border border-gray-700 text-gray-300 text-sm rounded-lg px-2 py-1.5"><option value="">All Status</option><option value="critical">Critical</option><option value="warning">Warning</option><option value="healthy">Healthy</option></select>
       {!vf && <select value={locF} onChange={e => setLocF(e.target.value)} className="bg-gray-800 border border-gray-700 text-gray-300 text-sm rounded-lg px-2 py-1.5"><option value="all">All</option><option value="us">US Only</option><option value="intl">International</option></select>}
-      <select value={nf} onChange={e => setNf(e.target.value)} className="bg-gray-800 border border-gray-700 text-gray-300 text-sm rounded-lg px-2 py-1.5"><option value="all">All</option><option value="inorder">In Order</option><option value="rec">Rec &gt; 0</option><option value="ok">Nothing Loaded</option></select>
+      <select value={nf} onChange={e => setNf(e.target.value)} className="bg-gray-800 border border-gray-700 text-gray-300 text-sm rounded-lg px-2 py-1.5"><option value="all">All</option><option value="needsbuy">Needs Buy</option><option value="inorder">In Order</option><option value="ok">No Action</option></select>
       {vm === "core" && <><select value={sort} onChange={e => setSort(e.target.value)} className="bg-gray-800 border border-gray-700 text-gray-300 text-sm rounded-lg px-2 py-1.5"><option value="status">Priority</option><option value="doc">DOC</option><option value="dsr">DSR</option><option value="need$">$</option></select><span className="text-gray-500 text-xs">Min:</span><input type="number" value={minD} onChange={e => setMinD(+e.target.value)} className="bg-gray-800 border border-gray-700 text-white text-sm rounded px-2 py-1 w-14" /></>}
       {vm === "vendor" && <div className="flex bg-gray-800 rounded-lg p-0.5">{[["mix", "Mix (auto)"], ["cores", "Force Cores"], ["bundles", "Force Bundles"]].map(([k, l]) => <button key={k} onClick={() => setVendorSub(k)} className={`px-2.5 py-1 rounded-md text-xs font-medium ${vendorSub === k ? "bg-indigo-600 text-white" : "text-gray-400"}`}>{l}</button>)}</div>}
       <div className="flex gap-2 ml-auto text-xs"><span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-500" />{sc.critical}</span><span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-500" />{sc.warning}</span><span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500" />{sc.healthy}</span><span className="text-gray-500">|</span><span className="text-gray-300 font-semibold">{enr.length}</span>
