@@ -417,7 +417,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
       if (sort === "need$") return b.needDollar - a.needDollar;
       return 0;
     })
-    }), [data, stg, vf, sf, sort, vMap, nf, minD, locF, profiles, vendorRecs, showNoBundleCores, activeBundleCores, spikeThr, ov]);
+    , [data, stg, vf, sf, sort, vMap, nf, minD, locF, profiles, vendorRecs, showNoBundleCores, activeBundleCores, spikeThr, ov]);
 
   const venBundles = useMemo(() => (data.bundles || []).filter(b => {
     if (bA === "yes" && b.active !== "Yes") return false;
