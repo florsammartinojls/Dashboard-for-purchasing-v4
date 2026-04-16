@@ -355,6 +355,40 @@ export function CalcBreakdown({ data: d, onClose }) {
         <p className="text-gray-400 text-xs mb-2">{d.windowStart} → {d.windowEnd}. How much total inventory do I need to cover {d.targetDOC} days? Safety ×{d.safetyMultiplier}.</p>
         {d.covMonths.length > 0 && <MTab rows={d.covMonths} />}
       </div>
+      {/* Summary — total need and proposed split */}
+        {bundlesForThisCore.some(b => b.buyNeed > 0) && (
+          <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-4 mb-4">
+            <h3 className="text-sm font-semibold text-white mb-2">Recommendation Summary</h3>
+            {(() => {
+              const corePcs = coreModeBundles.reduce((s, b) => s + b.buyNeed * b.qtyPerBundle, 0);
+              const bundleTotal = bundleModeBundles.reduce((s, b) => s + b.buyNeed, 0);
+              const totalPcs = corePcs + bundleModeBundles.reduce((s, b) => s + b.buyNeed * b.qtyPerBundle, 0);
+              return (
+                <div className="space-y-2 text-sm">
+                  <div className="text-gray-300">
+                    Total need for this core's bundles: <span className="text-white font-bold">{fmtN(totalPcs)} pcs</span>
+                  </div>
+                  <div className="text-gray-300">Proposed purchase:</div>
+                  {corePcs > 0 && (
+                    <div className="ml-3 text-purple-300">
+                      → <span className="font-semibold">{fmtN(corePcs)} pcs as raw core</span>
+                      <span className="text-gray-500 ml-1">({coreModeBundles.length} bundle{coreModeBundles.length !== 1 ? "s" : ""}: {coreModeBundles.map(b => b.bundleId + " ×" + fmtN(b.buyNeed)).join(", ")})</span>
+                    </div>
+                  )}
+                  {bundleTotal > 0 && bundleModeBundles.map(b => (
+                    <div key={b.bundleId} className="ml-3 text-cyan-300">
+                      → <span className="font-semibold">{fmtN(b.buyNeed)} assembled bundles of {b.bundleId}</span>
+                      <span className="text-gray-500 ml-1">({fmtN(b.buyNeed * b.qtyPerBundle)} pcs equivalent)</span>
+                    </div>
+                  ))}
+                  {corePcs === 0 && bundleTotal === 0 && (
+                    <div className="ml-3 text-emerald-400">No purchase needed — current stock covers target DOC.</div>
+                  )}
+                </div>
+              );
+            })()}
+          </div>
+        )}
 
       {/* Step 3: Final Need */}
       <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-4">
