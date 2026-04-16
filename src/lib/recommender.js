@@ -288,9 +288,6 @@ function applyBundleGive(b, give, corePools) {
   }
 }
 function distributeRawToBundles(prepped, corePools, targetDoc, replenFloor) {
-  // DEBUG — quitar después de validar
-  
-  // ... resto de la función sin tocar por ahora
   // Helper: seasonal-aware DSR for waterfall targets. Falls back to plain dsr
   // if seasonalDSR isn't set (shouldn't happen, but defensive).
   const effDSR = (b) => (b.seasonalDSR && b.seasonalDSR > 0) ? b.seasonalDSR : b.dsr;
@@ -357,6 +354,7 @@ function distributeRawToBundles(prepped, corePools, targetDoc, replenFloor) {
     if (!any) break;
     level += LEVELING_STEP_DAYS;
   }
+}
  
 // ────────────────────────────────────────────────────────────
 // MOQ + casepack for a core
