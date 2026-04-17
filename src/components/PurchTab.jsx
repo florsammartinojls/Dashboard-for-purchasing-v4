@@ -68,6 +68,7 @@ function SC({ v, children, className }) {
 }
 
 export default function PurchTab({ data, stg, vendorRecs, goCore, goBundle, goVendor, ov, setOv, initV, clearIV, saveWorkflow, deleteWorkflow, saveVendorComment, activeBundleCores }) {
+if (!vendorRecs || !Object.keys(vendorRecs).length) vendorRecs = {};
   const initVendorFromURL = new URLSearchParams(window.location.search).get('vendor');
   const [vm, setVm] = useState(initV || initVendorFromURL ? "vendor" : "core");
   const [vf, setVf] = useState(initV || initVendorFromURL || "");
