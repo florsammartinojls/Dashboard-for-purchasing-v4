@@ -8,6 +8,8 @@ import CoreTab from "./components/CoreTab";
 import BundleTab from "./components/BundleTab";
 import OrdersTab from "./components/OrdersTab";
 import PerformanceTab from "./components/PerformanceTab";
+import { batchVendorRecommendations } from "./lib/recommender";
+import { calcPurchaseFrequency } from "./lib/seasonal";
 
 // === Vendors Tab ===
 function VendorsTab({ data, stg, goVendor, workflow, saveWorkflow, deleteWorkflow, vendorComments, saveVendorComment }) {
@@ -255,6 +257,45 @@ const loadLive = useCallback(async ({ forceRefresh = false } = {}) => {
     return set;
   }, [data.bundles, data.cores, stg]);
 
+  // === CENTRALIZED RECOMMENDER — computed once, shared by Dashboard + PurchTab ===
+  const replenMap = useMemo(() => {
+    const m = {};
+    (data.replenRec || []).forEach(r => { m[r.j] = r });
+    return m;
+  }, [data.replenRec]);
+
+  const missingMap = useMemo(() => {
+    const m = {};
+    (data.receiving || []).forEach(r => {
+      if (r.piecesMissing > 0) {
+        const k = (r.core || "").trim();
+        m[k] = (m[k] || 0) + r.piecesMissing;
+      }
+    });
+    return m;
+  }, [data.receiving]);
+
+  const purchFreqMap = useMemo(() => {
+    const m = {};
+    (data.vendors || []).forEach(v => { m[v.name] = calcPurchaseFrequency(v.name, data.receivingFull || []) });
+    return m;
+  }, [data.vendors, data.receivingFull]);
+
+  const vendorRecs = useMemo(() => {
+    if (!data.vendors?.length) return {};
+    return batchVendorRecommendations({
+      vendors: data.vendors,
+      cores: data.cores || [],
+      bundles: data.bundles || [],
+      bundleSales: data.bundleSales || [],
+      receivingFull: data.receivingFull || [],
+      replenMap,
+      missingMap,
+      priceCompFull: (data.priceCompFull?.length ? data.priceCompFull : data.priceComp) || [],
+      settings: stg,
+      purchFreqMap,
+    });
+  }, [data.vendors, data.cores, data.bundles, data.bundleSales, data.receivingFull, data.priceCompFull, data.priceComp, replenMap, missingMap, stg, purchFreqMap]);
   const sc = useMemo(() => {
     const c = { critical: 0, warning: 0, healthy: 0 };
     (data.cores || []).forEach(x => {
@@ -378,8 +419,8 @@ const loadLive = useCallback(async ({ forceRefresh = false } = {}) => {
       </nav>
 
       <main className="max-w-7xl mx-auto">
-        {tab === "dashboard" && <DashboardSummary data={dataH} stg={stg} goVendor={goVendor} workflow={data.workflow} saveWorkflow={saveWorkflow} deleteWorkflow={deleteWorkflow} vendorComments={data.vendorComments} saveVendorComment={saveVendorComment} onEnterPurchasing={() => setTab("purchasing")} activeBundleCores={activeBundleCores} />}
-        {tab === "purchasing" && <PurchTab data={dataH} stg={stg} goCore={goCore} goBundle={goBundle} goVendor={goVendor} ov={ov} setOv={setOv} initV={initV} clearIV={clearIV} saveWorkflow={saveWorkflow} deleteWorkflow={deleteWorkflow} saveVendorComment={saveVendorComment} activeBundleCores={activeBundleCores} />}
+        {tab === "dashboard" && <DashboardSummary data={dataH} stg={stg} vendorRecs={vendorRecs} goVendor={goVendor} workflow={data.workflow} saveWorkflow={saveWorkflow} deleteWorkflow={deleteWorkflow} vendorComments={data.vendorComments} saveVendorComment={saveVendorComment} onEnterPurchasing={() => setTab("purchasing")} activeBundleCores={activeBundleCores} />} goVendor={goVendor} workflow={data.workflow} saveWorkflow={saveWorkflow} deleteWorkflow={deleteWorkflow} vendorComments={data.vendorComments} saveVendorComment={saveVendorComment} onEnterPurchasing={() => setTab("purchasing")} activeBundleCores={activeBundleCores} />}
+        {tab === "purchasing" && <PurchTab data={dataH} stg={stg} vendorRecs={vendorRecs} goCore={goCore} goBundle={goBundle} goVendor={goVendor} ov={ov} setOv={setOv} initV={initV} clearIV={clearIV} saveWorkflow={saveWorkflow} deleteWorkflow={deleteWorkflow} saveVendorComment={saveVendorComment} activeBundleCores={activeBundleCores} />} goCore={goCore} goBundle={goBundle} goVendor={goVendor} ov={ov} setOv={setOv} initV={initV} clearIV={clearIV} saveWorkflow={saveWorkflow} deleteWorkflow={deleteWorkflow} saveVendorComment={saveVendorComment} activeBundleCores={activeBundleCores} />}
         {tab === "core" && <CoreTab data={data} stg={stg} hist={{ coreInv: data.coreInv, bundleSales: data.bundleSales, priceHist: data.priceHist }} daily={{ coreDays: data.coreDays, bundleDays: data.bundleDays }} coreId={coreId} onBack={handleBackFromCore} goBundle={goBundle} />}
         {tab === "bundle" && <BundleTab data={data} stg={stg} hist={{ coreInv: data.coreInv, bundleSales: data.bundleSales, bundleInv: data.bundleInv, priceHist: data.priceHist }} daily={{ coreDays: data.coreDays, bundleDays: data.bundleDays }} bundleId={bundleId} onBack={handleBackFromBundle} goCore={goCore} />}
         {tab === "orders" && <OrdersTab data={data} />}
