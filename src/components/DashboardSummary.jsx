@@ -5,7 +5,7 @@ import { calcPurchaseFrequency } from "../lib/seasonal";
 import { batchVendorRecommendations } from "../lib/recommender";
 import { Dot, WorkflowChip } from "./Shared";
 
-export default function DashboardSummary({ data, stg, goVendor, workflow, saveWorkflow, deleteWorkflow, vendorComments, saveVendorComment, onEnterPurchasing, activeBundleCores }) {
+export default function DashboardSummary({ data, stg, vendorRecs, goVendor, workflow, saveWorkflow, deleteWorkflow, vendorComments, saveVendorComment, onEnterPurchasing, activeBundleCores }) {
   const [originF, setOriginF] = useState("all");
   const [statusF, setStatusF] = useState("untriaged");
   const [needsBuyOnly, setNeedsBuyOnly] = useState(true);
@@ -39,45 +39,7 @@ export default function DashboardSummary({ data, stg, goVendor, workflow, saveWo
   const hasAnyStatus = (id) => !!getWfStatus(id);
   const wfColor = { Buy: "bg-emerald-500/20 text-emerald-400", Reviewing: "bg-amber-500/20 text-amber-400", Ignore: "bg-red-500/20 text-red-400", Done: "bg-blue-500/20 text-blue-400" };
 
-  // ── V2 Recommender (same engine as PurchTab) ──
-  const replenMap = useMemo(() => {
-    const m = {};
-    (data.replenRec || []).forEach(r => { m[r.j] = r });
-    return m;
-  }, [data.replenRec]);
-
-  const missingMap = useMemo(() => {
-    const m = {};
-    (data.receiving || []).forEach(r => {
-      if (r.piecesMissing > 0) {
-        const k = (r.core || "").trim();
-        m[k] = (m[k] || 0) + r.piecesMissing;
-      }
-    });
-    return m;
-  }, [data.receiving]);
-
-  const purchFreqMap = useMemo(() => {
-    const m = {};
-    (data.vendors || []).forEach(v => { m[v.name] = calcPurchaseFrequency(v.name, data.receivingFull || []) });
-    return m;
-  }, [data.vendors, data.receivingFull]);
-
-  const vendorRecs = useMemo(() => {
-    if (!data.vendors?.length) return {};
-    return batchVendorRecommendations({
-      vendors: data.vendors,
-      cores: data.cores || [],
-      bundles: data.bundles || [],
-      bundleSales: data._bundleSales || [],
-      receivingFull: data.receivingFull || [],
-      replenMap,
-      missingMap,
-      priceCompFull: (data.priceCompFull?.length ? data.priceCompFull : data.priceComp) || [],
-      settings: stg,
-      purchFreqMap,
-    });
-  }, [data.vendors, data.cores, data.bundles, data._bundleSales, data.receivingFull, data.priceCompFull, data.priceComp, replenMap, missingMap, stg, purchFreqMap]);
+ 
 
   // ── Cleanup lists ──
   const noBundleCores = useMemo(() =>
