@@ -2,10 +2,10 @@
 import React, { useState, useMemo } from "react";
 import { R, D1, $, gS, cAI, isD, gTD } from "../lib/utils";
 import { calcPurchaseFrequency } from "../lib/seasonal";
-import { batchVendorRecommendations } from "../lib/recommender";
 import { Dot, WorkflowChip } from "./Shared";
 
 export default function DashboardSummary({ data, stg, vendorRecs, goVendor, workflow, saveWorkflow, deleteWorkflow, vendorComments, saveVendorComment, onEnterPurchasing, activeBundleCores }) {
+if (!vendorRecs || !Object.keys(vendorRecs).length) vendorRecs = {};
   const [originF, setOriginF] = useState("all");
   const [statusF, setStatusF] = useState("untriaged");
   const [needsBuyOnly, setNeedsBuyOnly] = useState(true);
