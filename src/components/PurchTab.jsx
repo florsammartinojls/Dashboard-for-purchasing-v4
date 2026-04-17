@@ -67,7 +67,7 @@ function SC({ v, children, className }) {
   return <td className={`${className || ''} ${sel ? "bg-blue-500/20 ring-1 ring-blue-500" : ""} ${ok ? "cursor-pointer select-none" : ""}`} onClick={tog}>{children}</td>;
 }
 
-export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, setOv, initV, clearIV, saveWorkflow, deleteWorkflow, saveVendorComment, activeBundleCores }) {
+export default function PurchTab({ data, stg, vendorRecs, goCore, goBundle, goVendor, ov, setOv, initV, clearIV, saveWorkflow, deleteWorkflow, saveVendorComment, activeBundleCores }) {
   const initVendorFromURL = new URLSearchParams(window.location.search).get('vendor');
   const [vm, setVm] = useState(initV || initVendorFromURL ? "vendor" : "core");
   const [vf, setVf] = useState(initV || initVendorFromURL || "");
@@ -173,22 +173,7 @@ export default function PurchTab({ data, stg, goCore, goBundle, goVendor, ov, se
     return m;
   }, [data.vendors, data.receivingFull]);
 
-  // === V2 RECOMMENDER — one pass for all vendors ===
-  const vendorRecs = useMemo(() => {
-    if (!data.vendors?.length) return {};
-    return batchVendorRecommendations({
-      vendors: data.vendors,
-      cores: data.cores || [],
-      bundles: data.bundles || [],
-      bundleSales: data._bundleSales || [],
-      receivingFull: data.receivingFull || [],
-      replenMap,
-      missingMap,
-      priceCompFull: (data.priceCompFull?.length ? data.priceCompFull : data.priceComp) || [],
-      settings: stg,
-      purchFreqMap,
-    });
-  }, [data.vendors, data.cores, data.bundles, data._bundleSales, data.receivingFull, data.priceCompFull, replenMap, missingMap, stg, purchFreqMap]);
+ 
 
 // Merge batch recs with any per-vendor overrides (from Apply button)
   const effectiveRecs = useMemo(() => ({ ...vendorRecs, ...overrideRecs }), [vendorRecs, overrideRecs]);
