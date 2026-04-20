@@ -134,14 +134,12 @@ if (!vendorRecs || !Object.keys(vendorRecs).length) vendorRecs = {};
   const [moqOverrides, setMoqOverrides] = useState({});
   const [overrideRecs, setOverrideRecs] = useState({});
   const moqDebounceTimers = useRef({});
-  const [overrideRecs, setOverrideRecs] = useState({});
-const moqDebounceTimers = useRef({});
 
-useEffect(() => {
-  return () => {
-    Object.values(moqDebounceTimers.current).forEach(t => clearTimeout(t));
-  };
-}, []);
+    useEffect(() => {
+      return () => {
+        Object.values(moqDebounceTimers.current).forEach(t => clearTimeout(t));
+      };
+    }, []);
 
   useEffect(() => { if (initV) { setVm("vendor"); setVf(initV); clearIV() } }, [initV, clearIV]);
 
