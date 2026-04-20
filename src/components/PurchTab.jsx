@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useCallback, useEffect, useContext, Fragment } from "react";
+import React, { useState, useMemo, useCallback, useEffect, useContext, useRef, Fragment } from "react";
 import { R, D1, $, $2, $4, P, gS, cAI, cNQ, cOQ, cDA, bNQ, isD, gTD, dc, cSeas, fSl, fMY, fE, fDateUS, effectiveDSR, roundToCasePack, genPO, genRFQ, cp7f, cp7g } from "../lib/utils";
 import { Dot, Toast, TH, SS, WorkflowChip, NumInput, SumCtx, VendorNotes, CalcBreakdownV2 } from "./Shared";
 import { batchProfiles, batchBundleProfiles, calcCoverageNeed, calcPurchaseFrequency, DEFAULT_PROFILE } from "../lib/seasonal";
@@ -133,6 +133,15 @@ if (!vendorRecs || !Object.keys(vendorRecs).length) vendorRecs = {};
   // MOQ override inputs (session-only, not persisted)
   const [moqOverrides, setMoqOverrides] = useState({});
   const [overrideRecs, setOverrideRecs] = useState({});
+  const moqDebounceTimers = useRef({});
+  const [overrideRecs, setOverrideRecs] = useState({});
+const moqDebounceTimers = useRef({});
+
+useEffect(() => {
+  return () => {
+    Object.values(moqDebounceTimers.current).forEach(t => clearTimeout(t));
+  };
+}, []);
 
   useEffect(() => { if (initV) { setVm("vendor"); setVf(initV); clearIV() } }, [initV, clearIV]);
 
@@ -501,6 +510,38 @@ if (!vendorRecs || !Object.keys(vendorRecs).length) vendorRecs = {};
     }
   }, [moqOverrides, vMap, data, replenMap, missingMap, stg, purchFreqMap]);
 
+  const applyMoqOverrideSilent = useCallback((vendorName, bundleMoqValue) => {
+  const vendor = vMap[vendorName];
+  if (!vendor) return;
+  // Si el BdlMOQ es 0 o vacío, limpiar el override para ese vendor
+  if (!bundleMoqValue || bundleMoqValue <= 0) {
+    setOverrideRecs(prev => {
+      if (!prev[vendorName]) return prev;
+      const n = { ...prev };
+      delete n[vendorName];
+      return n;
+    });
+    return;
+  }
+  const rec = calcVendorRecommendation({
+    vendor,
+    cores: data.cores || [],
+    bundles: data.bundles || [],
+    bundleSales: data._bundleSales || [],
+    receivingFull: data.receivingFull || [],
+    replenMap,
+    missingMap,
+    priceCompFull: (data.priceCompFull?.length ? data.priceCompFull : data.priceComp) || [],
+    settings: stg,
+    purchFreqSafety: purchFreqMap[vendorName]?.safetyMultiplier || 1.0,
+    bundleMoqOverride: bundleMoqValue,
+    moqExtraDocThreshold: stg.moqExtraDocThreshold || 30,
+  });
+  if (rec) {
+    setOverrideRecs(prev => ({ ...prev, [vendorName]: rec }));
+  }
+}, [vMap, data, replenMap, missingMap, stg, purchFreqMap]);
+  
   const resetMoqOverride = useCallback((vendorName) => {
     setMoqOverrides(prev => { const n = { ...prev }; delete n[vendorName]; return n; });
     setOverrideRecs(prev => { const n = { ...prev }; delete n[vendorName]; return n; });
@@ -508,12 +549,22 @@ if (!vendorRecs || !Object.keys(vendorRecs).length) vendorRecs = {};
   }, []);
 
   const getMoqOv = (vendorName) => moqOverrides[vendorName] || {};
-  const setMoqOv = (vendorName, field, value) => {
-    setMoqOverrides(prev => ({
-      ...prev,
-      [vendorName]: { ...(prev[vendorName] || {}), [field]: value }
-    }));
-  };
+ const setMoqOv = (vendorName, field, value) => {
+  setMoqOverrides(prev => ({
+    ...prev,
+    [vendorName]: { ...(prev[vendorName] || {}), [field]: value }
+  }));
+  // dollarMoq solo afecta UI (badge + Fill MOQ) → no hace falta recalcular
+  // bundleMoq SÍ afecta el recommender → debounce + auto-apply
+  if (field === 'bundleMoq') {
+    if (moqDebounceTimers.current[vendorName]) {
+      clearTimeout(moqDebounceTimers.current[vendorName]);
+    }
+    moqDebounceTimers.current[vendorName] = setTimeout(() => {
+      applyMoqOverrideSilent(vendorName, value);
+    }, 600);
+  }
+};
   const fillR = (cores, bundles, mode, vendorName) => {
     const vendor = vMap[vendorName];
     if (!vendor) return;
@@ -903,10 +954,11 @@ if (!vendorRecs || !Object.keys(vendorRecs).length) vendorRecs = {};
       const poI = getPOI(grp.cores, vendorSub !== "cores" ? grp.bundles : []);
       const poT = poI.reduce((s, i) => s + i.qty * i.cost, 0);
       const poC = poI.reduce((s, i) => s + (v.vou === 'Cases' && i.isCoreItem ? Math.ceil(i.qty / (i.cp || 1)) : 0), 0);
-      const meets = v.moqDollar > 0 ? poT >= v.moqDollar : true;
+      const effectiveVendorMoq = getMoqOv(v.name).dollarMoq || v.moqDollar || 0;
+      const meets = effectiveVendorMoq > 0 ? poT >= effectiveVendorMoq : true;
       const anyCol = Object.values(collapsed).some(Boolean);
       const vendorPO = autoPO(v.code);
-      const moqGap = (v.moqDollar || 0) - poT;
+      const moqGap = effectiveVendorMoq - poT;
       const pf = purchFreqMap[v.name];
       const vRec = effectiveRecs[v.name];
 
@@ -964,24 +1016,34 @@ if (!vendorRecs || !Object.keys(vendorRecs).length) vendorRecs = {};
                 placeholder={v.moqDollar > 0 ? String(v.moqDollar) : "0"}
                 className="bg-gray-800 border border-gray-600 text-white rounded px-1.5 py-0.5 w-16 text-[10px] text-center"
               />
-              <span className="text-[10px] text-gray-500">BdlMOQ:</span>
-              <input
-                type="number"
-                value={getMoqOv(v.name).bundleMoq || ''}
-                onChange={e => setMoqOv(v.name, 'bundleMoq', +e.target.value)}
-                placeholder="0"
-                className="bg-gray-800 border border-gray-600 text-white rounded px-1.5 py-0.5 w-14 text-[10px] text-center"
-              />
-              <button
-                onClick={() => applyMoqOverride(v.name)}
-                disabled={!getMoqOv(v.name).dollarMoq && !getMoqOv(v.name).bundleMoq}
-                className={`text-[10px] px-2 py-0.5 rounded font-medium ${(getMoqOv(v.name).dollarMoq || getMoqOv(v.name).bundleMoq) ? "bg-blue-600 text-white" : "bg-gray-700 text-gray-500 cursor-not-allowed"}`}
-              >Apply</button>
-              {overrideRecs[v.name] && <button onClick={() => resetMoqOverride(v.name)} className="text-[10px] text-gray-400 hover:text-white" title="Reset MOQ overrides">↺</button>}
-              {overrideRecs[v.name] && <span className="text-[10px] text-blue-400 font-medium">Override ✓</span>}
-            </div>
+             <span className="text-[10px] text-gray-500">BdlMOQ:</span>
+            <input
+              type="number"
+              value={getMoqOv(v.name).bundleMoq || ''}
+              onChange={e => setMoqOv(v.name, 'bundleMoq', +e.target.value)}
+              placeholder="0"
+              className="bg-gray-800 border border-gray-600 text-white rounded px-1.5 py-0.5 w-14 text-[10px] text-center"
+              title="Bundle MOQ: auto-applies after you stop typing"
+            />
+            {overrideRecs[v.name] && <button onClick={() => resetMoqOverride(v.name)} className="text-[10px] text-gray-400 hover:text-white" title="Reset MOQ overrides">↺</button>}
+            {overrideRecs[v.name] && <span className="text-[10px] text-blue-400 font-medium" title="Bundle MOQ override active — recalculated bundles">Live ✓</span>}
+              </div>
             <button onClick={() => fillR(grp.cores, grp.bundles, vendorSub, v.name)} className={`text-xs px-2.5 py-1 rounded ${data._coreInv?.length ? "bg-blue-600/80 text-white" : "bg-yellow-600 text-white animate-pulse"}`}>{data._coreInv?.length ? "Fill Rec" : "Fill Rec ⏳"}</button>
-            <button onClick={() => doFillMOQ(grp.cores, grp.bundles, v.moqDollar || 0)} disabled={!v.moqDollar || poT >= v.moqDollar || poI.length === 0} className={`text-xs px-2.5 py-1 rounded font-medium ${v.moqDollar && poT < v.moqDollar && poI.length > 0 ? "bg-orange-600 text-white" : "bg-gray-700 text-gray-500 cursor-not-allowed"}`}>Fill MOQ{moqGap > 0 && poI.length > 0 ? ` (+${$(moqGap)})` : ""}</button>
+            {(() => {
+  const effectiveMoq = getMoqOv(v.name).dollarMoq || v.moqDollar || 0;
+  const effectiveGap = effectiveMoq - poT;
+  const canFillMoq = effectiveMoq > 0 && poT < effectiveMoq && poI.length > 0;
+  return (
+    <button
+      onClick={() => doFillMOQ(grp.cores, grp.bundles, effectiveMoq)}
+      disabled={!canFillMoq}
+      className={`text-xs px-2.5 py-1 rounded font-medium ${canFillMoq ? "bg-orange-600 text-white" : "bg-gray-700 text-gray-500 cursor-not-allowed"}`}
+      title={effectiveMoq === 0 ? "Set a MOQ$ override above or configure vendor MOQ" : canFillMoq ? `Fill to reach $${effectiveMoq}` : "Already meets MOQ"}
+    >
+      Fill MOQ{effectiveGap > 0 && poI.length > 0 ? ` (+${$(effectiveGap)})` : ""}
+    </button>
+  );
+})()}
             <button onClick={() => clrV(grp.cores, grp.bundles)} className="text-xs bg-gray-700 text-gray-300 px-2.5 py-1 rounded">Clear</button>
             <button onClick={() => setDismissed({})} className="text-xs bg-gray-700 text-gray-300 px-2 py-1 rounded">Show All</button>
             <div className="ml-auto flex gap-2">
