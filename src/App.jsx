@@ -217,17 +217,7 @@ export default function App() {
         coreDaysForecast: history.coreDaysForecast || [],
         bundleDaysForecast: history.bundleDaysForecast || []
       }));
-      setHistoryStatus({
-        loading: false,
-        error: null,
-        version: history.version || null,
-        fromCache: !!history._cachedAt && !forceRefresh
-      });
-    } catch (e) {
-      console.error('History load failed:', e);
-      setHistoryStatus({ loading: false, error: e.message, version: null, fromCache: false });
-    }
-  }, []);
+      
       setHistoryStatus({
         loading: false,
         error: null,
