@@ -1,26 +1,29 @@
 // src/lib/forecast.js
 // ============================================================
-// Demand Forecasting Engine — v3.1 (FIXED)
+// Demand Forecasting Engine — v3.2
 // ============================================================
-// FIXES from v3:
-//   [FIX-1] Damped trend integration (φ^t decay) — prevents runaway
-//           linear trend projection over long horizons.
-//   [FIX-2] Trend cap as fraction of level (MAX_TREND_RATIO × level/day).
-//           A level=9 with trend=0.136 passes (1.5%). A level=9 with
-//           trend=0.5 would get capped to 0.18.
-//   [FIX-3] Trend gated by Tracking Signal: when |TS| > 4 the model is
-//           biased, so trend is forced to 0 and forecast falls back to
-//           level-only. Safest behavior when model is demonstrably wrong.
-//   [FIX-4] Holt initialization hardened against series with OOS gaps:
-//           uses first 14 NON-ZERO observations, not first 14 positions.
-//   [FIX-5] New helper calcHistoricSamePeriod() for YoY sanity check
-//           (used by recommender.js, not here — kept here for colocation).
+// NEW in v3.2:
+//   [FIX-REGIME-FAST] Recent regime check threshold 0.6 → 0.75.
+//                     Triggers when last 30d avg < 75% of Holt level.
+//   [FIX-REGIME-SLOW] NEW slow regime check (YoY-style).
+//                     Compares last 90d vs prior 90d. If drop >20%,
+//                     scales Holt level down proportionally.
+//                     Catches gradual multi-month declines that the
+//                     fast check (30d window) misses.
+//
+// FIXES from v3 (unchanged):
+//   [FIX-1] Damped trend integration (φ^t decay)
+//   [FIX-2] Trend cap as fraction of level (2%)
+//   [FIX-3] Trend gated by Tracking Signal |TS| > 4
+//   [FIX-4] Holt init hardened against OOS gaps
+//   [FIX-5] calcHistoricSamePeriod helper for YoY
 //
 // Pipeline (unchanged ordering):
-//   1. Hampel filter cleans historical outliers (OOS days, spikes)
+//   1. Hampel filter cleans historical outliers
 //   2. Holt linear method captures level + trend
-//   3. Seasonal factor (from existing seasonal profile) adjusts by month
-//   4. σ_LT + Z (service level) gives statistically grounded safety stock
+//   2.5. Regime checks adjust level if model is demonstrably stale
+//   3. Seasonal factor adjusts by month
+//   4. σ_LT + Z safety stock
 // ============================================================
 
 export const DEFAULT_HOLT_ALPHA = 0.2;
@@ -29,8 +32,16 @@ export const DEFAULT_HAMPEL_WINDOW = 7;
 export const DEFAULT_HAMPEL_THRESHOLD = 3;
 export const DEFAULT_SERVICE_LEVEL_A = 97;
 export const DEFAULT_SERVICE_LEVEL_OTHER = 95;
+
+// [FIX-REGIME-FAST] Recent regime check tuning
 export const RECENT_REGIME_WINDOW = 30;
-export const RECENT_REGIME_THRESHOLD = 0.6;
+export const RECENT_REGIME_THRESHOLD = 0.75; // ↑ de 0.6 a 0.75
+
+// [FIX-REGIME-SLOW] Slow regime check tuning (YoY-style, catches gradual decline)
+export const SLOW_REGIME_WINDOW = 90;       // days in each block
+export const SLOW_REGIME_DROP_THRESHOLD = 0.20; // if current 90d is 20%+ less than prior 90d
+export const SLOW_REGIME_MIN_PRIOR = 30;    // need 30 non-zero days in prior block for signal
+
 export const MIN_HISTORY_FOR_HOLT = 30;
 export const MIN_HISTORY_FOR_SIGMA = 2; // min lead-times worth of history
 export const FALLBACK_CV = 0.3;         // used when σ_LT can't be computed
@@ -285,7 +296,7 @@ export function calcBundleForecast({
   const raw = (bundleDays || [])
     .filter(d => d && d.j === bundleId)
     .sort((a, b) => (a.date || '').localeCompare(b.date || ''));
-  const series = raw.slice(-180); // last 180 days is enough
+  const series = raw.slice(-365); // last 365 days to support slow regime check
 
   if (series.length === 0) {
     return {
@@ -297,6 +308,8 @@ export function calcBundleForecast({
         safetyStockFallback: true, outliersRemoved: 0,
         trackingSignal: 0, trackingSignalExceeded: false,
         trendGatedByTS: false, noData: true,
+        recentRegimeApplied: false, recentRegimeInfo: null,
+        slowRegimeApplied: false, slowRegimeInfo: null,
       },
       effectiveDSR: 0,
     };
@@ -313,17 +326,13 @@ export function calcBundleForecast({
     alpha: num(settings?.holtAlpha, DEFAULT_HOLT_ALPHA),
     beta: num(settings?.holtBeta, DEFAULT_HOLT_BETA),
   });
- // [FIX-REGIME] Recent regime check
-  // If the last 30 days of real sales average is much lower than the Holt
-  // level, the model is lagging a decline in the demand regime. Holt with
-  // α=0.2 takes 6+ months to adapt, which is too slow for products going
-  // into sustained decline.
-  //
-  // When the ratio recent/level < RECENT_REGIME_THRESHOLD, we override
-  // level with recent avg and drop trend — the model is demonstrably wrong.
-  const RECENT_REGIME_WINDOW = 30;
-  const RECENT_REGIME_THRESHOLD = 0.6; // if recent < 60% of Holt level
 
+  // ───────────────────────────────────────────────────────────
+  // [FIX-REGIME-FAST] Recent regime check (last 30 days)
+  // ───────────────────────────────────────────────────────────
+  // If the last 30 days of real sales average is much lower than the Holt
+  // level, the model is lagging a sharp decline in demand. Override level
+  // with recent avg and drop trend.
   const recentVals = clean.slice(-RECENT_REGIME_WINDOW)
     .map(p => num(p.dsrClean != null ? p.dsrClean : p.dsr))
     .filter(v => v > 0);
@@ -347,6 +356,55 @@ export function calcBundleForecast({
     }
   }
 
+  // ───────────────────────────────────────────────────────────
+  // [FIX-REGIME-SLOW] Slow regime check (last 90d vs prior 90d)
+  // ───────────────────────────────────────────────────────────
+  // Catches gradual multi-month declines that the fast check misses.
+  // Example: JLS-1241 sells 5/day for months, but YoY is -30%. Fast
+  // check doesn't trigger (recent avg ≈ Holt level). Slow check compares
+  // last 90d avg vs prior 90d avg — if the drop is >20%, scale level.
+  //
+  // Only runs if fast check didn't already fire (they shouldn't stack).
+  let slowRegimeApplied = false;
+  let slowRegimeInfo = null;
+  if (!recentRegimeApplied && holt.level > 0 && holt.usedHolt) {
+    // Need at least 180 non-zero days to compare two 90d blocks
+    const allVals = clean
+      .map(p => num(p.dsrClean != null ? p.dsrClean : p.dsr))
+      .filter(v => v > 0);
+
+    if (allVals.length >= SLOW_REGIME_WINDOW + SLOW_REGIME_MIN_PRIOR) {
+      const recent90 = allVals.slice(-SLOW_REGIME_WINDOW);
+      const prior90 = allVals.slice(
+        Math.max(0, allVals.length - 2 * SLOW_REGIME_WINDOW),
+        allVals.length - SLOW_REGIME_WINDOW
+      );
+
+      if (prior90.length >= SLOW_REGIME_MIN_PRIOR) {
+        const recentAvg = mean(recent90);
+        const priorAvg = mean(prior90);
+        const drop = priorAvg > 0 ? (priorAvg - recentAvg) / priorAvg : 0;
+
+        if (drop > SLOW_REGIME_DROP_THRESHOLD) {
+          slowRegimeInfo = {
+            holtLevelBefore: holt.level,
+            holtTrendBefore: holt.trend,
+            recentAvg,
+            priorAvg,
+            drop,
+            recent90Days: recent90.length,
+            prior90Days: prior90.length,
+          };
+          // Override level to the recent 90d average (more responsive than Holt).
+          // Drop trend too — we don't trust projection direction during a decline.
+          holt.level = recentAvg;
+          holt.trend = 0;
+          slowRegimeApplied = true;
+        }
+      }
+    }
+  }
+
   // [FIX-3] Tracking signal gate: if |TS| > 4, trust level only, drop trend.
   // This is the single most important fix for cases like JLS-1265 where the
   // Holt is systematically biased and compensates by inflating trend.
@@ -366,16 +424,7 @@ export function calcBundleForecast({
     const mi = date.getMonth();
     const baseLevel = holt.level;
 
-    // [FIX-1] Damped trend: contribution at day d is trend × (1 + φ + φ² + ... + φ^(d-1))
-    // Equivalently, for any day d the cumulative trend effect is:
-    //   trend × φ × (1 - φ^d) / (1 - φ)
-    // But we're computing point forecasts per day, so at day d:
-    //   trend_at_d = trend × (1 - φ^d) / (1 - φ)    // saturating toward trend/(1-φ)
-    // Wait — that's wrong. The damped Holt formula for point forecast at horizon h is:
-    //   y_hat(h) = level + Σ(i=1 to h) φ^i × trend
-    //            = level + trend × φ × (1 - φ^h) / (1 - φ)
-    // So the TREND CONTRIBUTION ALONE at day d (0-indexed, so horizon = d+1) is:
-    //   trend × φ × (1 - φ^(d+1)) / (1 - φ)
+    // [FIX-1] Damped trend
     const phi = TREND_DAMPING_PHI;
     const horizon = d + 1;
     const dampedTrendContrib = effectiveTrend === 0
@@ -428,13 +477,14 @@ export function calcBundleForecast({
       outliersRemoved: outlierIndices.length,
       trackingSignal: ts.ts,
       trackingSignalExceeded: ts.exceeded,
-      trendGatedByTS,              // [FIX-3] new flag — true when trend dropped to 0 due to TS
+      trendGatedByTS,
       noData: false,
       recentRegimeApplied,
-      recentRegimeInfo,   
+      recentRegimeInfo,
+      slowRegimeApplied,         // [FIX-REGIME-SLOW]
+      slowRegimeInfo,            // [FIX-REGIME-SLOW]
     },
     effectiveDSR: holt.level, // for backwards compat
-
   };
 }
 
