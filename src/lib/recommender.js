@@ -1,21 +1,25 @@
 // src/lib/recommender.js
 // ============================================================
-// v3.1 Purchase Recommendation Engine (FIXED)
+// v3.2 Purchase Recommendation Engine
 // ============================================================
-// NEW in v3.1:
+// NEW in v3.2:
+//   [STEP-8.5] Simplified core sanity check. With forecast improvements
+//              in v3.2 (fast + slow regime checks), the core cap is now
+//              a last-line safety net only: cap to 0 when core DOC is
+//              already > target × 1.1 (10% buffer above target).
+//              If forecast is realistic, bundle-level recommendations
+//              should already be reasonable.
+//
+// From v3.1 (unchanged):
 //   [FIX-YoY] After calcBundleForecast returns, compare total demand
 //             (coverageDemand + safetyStock) against the same calendar
-//             window one year ago. If today's forecast is more than
-//             MAX_YOY_RATIO × historic, cap it at that ratio and flag.
-//             This is a model-agnostic guardrail: it catches the JLS-1265
-//             case (forecast 4,911 when LY same period was ~2,200) even
-//             if Holt+TS gate somehow miss it.
+//             window one year ago.
 //
 // v3 principles (unchanged):
-//   9.  Baseline forecast uses Hampel + Holt (not raw DSR). Industry-standard.
+//   9.  Baseline forecast uses Hampel + Holt (not raw DSR).
 //   10. Safety stock = Z × σ_LT with Z from service-level-by-ABC.
 //   11. Inventory anomalies are detected and corrected before waterfall.
-//   12. Spike detection is visual-only; cálculo nunca oscila.
+//   12. Spike detection is visual-only.
 // ============================================================
 
 import { calcBundleSeasonalProfile, DEFAULT_PROFILE } from './seasonal.js';
@@ -24,14 +28,16 @@ import { detectVendorAnomalies } from './anomalyDetector.js';
 
 // [FIX-YoY] If forecast > MAX_YOY_RATIO × historic LY same-period sales,
 // cap it at that ratio. 1.5 means "we'll forecast up to 50% more than LY
-// but never more than that without manual review". Set high enough to allow
-// genuine growth, low enough to catch runaway models.
+// but never more than that without manual review".
 export const MAX_YOY_RATIO = 1.5;
 
 // Minimum LY sales to trust the sanity check. If LY same-period was < 30
-// units total, YoY ratios are noise (e.g. going from 5 → 25 is +400% but
-// meaningless). Skip the check entirely in that case.
+// units total, YoY ratios are noise. Skip the check entirely in that case.
 export const MIN_HISTORIC_FOR_YOY = 30;
+
+// [STEP-8.5] Core-level sanity cap. If core's all-in already covers this
+// multiple of target DOC, recommend 0. 1.1 = 10% buffer above target.
+export const CORE_CAP_MULTIPLIER = 1.1;
 
 // ────────────────────────────────────────────────────────────
 // 7g vendor-specific material cost lookup (unchanged from v2)
@@ -151,10 +157,7 @@ function isSpikeVisual(b, threshold) {
   return d7 > 0 && cd > 0 && d7 >= t * cd;
 }
 
-// [FIX-YoY] Apply YoY sanity check to a bundle forecast. Mutates the
-// forecast object's coverageDemand and flags; returns info about the cap
-// for logging/UI. Returns null if check was not applicable (not enough
-// history), so we know to skip the flag.
+// [FIX-YoY] Apply YoY sanity check to a bundle forecast.
 function applyYoYSanityCheck(forecast, bundleId, bundleDays, targetDoc) {
   if (!forecast || forecast.flags.noData) return null;
 
@@ -164,7 +167,7 @@ function applyYoYSanityCheck(forecast, bundleId, bundleDays, targetDoc) {
     return { applied: false, reason: 'historic_too_small', historic: historic.total };
   }
 
-  const forecastTotal = forecast.coverageDemand; // before safety stock
+  const forecastTotal = forecast.coverageDemand;
   const maxAllowed = historic.total * MAX_YOY_RATIO;
 
   if (forecastTotal <= maxAllowed) {
@@ -177,8 +180,6 @@ function applyYoYSanityCheck(forecast, bundleId, bundleDays, targetDoc) {
     };
   }
 
-  // Cap the forecast. Preserve the structure: scale down coverageDemand
-  // proportionally and recompute demandBreakdown for transparency.
   const scale = maxAllowed / forecastTotal;
   const cappedTotal = maxAllowed;
   const originalTotal = forecastTotal;
@@ -206,7 +207,7 @@ function applyYoYSanityCheck(forecast, bundleId, bundleDays, targetDoc) {
 }
 
 // ────────────────────────────────────────────────────────────
-// Waterfall helpers (unchanged math, but uses rawEffective per core)
+// Waterfall helpers (unchanged)
 // ────────────────────────────────────────────────────────────
 function maxBundleUnitsFromPools(b, corePools) {
   let max = Infinity;
@@ -316,6 +317,14 @@ function buildAbcMap(abcA) {
   return m;
 }
 
+// ────────────────────────────────────────────────────────────
+// Helper: full all-in definition matching the UI
+// ────────────────────────────────────────────────────────────
+function computeCoreAllIn(c) {
+  return num(c.raw) + num(c.inb) + num(c.pp) + num(c.jfn) +
+         num(c.pq)  + num(c.ji)  + num(c.fba);
+}
+
 // ============================================================
 // MAIN ENTRY POINT
 // ============================================================
@@ -370,14 +379,12 @@ export function calcVendorRecommendation({
   // Steps 1-3: forecast + profile + assigned inv per bundle
   // ──────────────────────────────────────────────────────────
   const prepped = vendorBundles.map(b => {
-    // Seasonal profile (cached from batch if provided, else compute now)
     let profile = b._profile;
     if (!profile) {
       try { profile = calcBundleSeasonalProfile(b.j, bundleSales); }
       catch { profile = DEFAULT_PROFILE; }
     }
 
-    // Forecast (Holt + seasonal + safety)
     const forecast = calcBundleForecast({
       bundleId: b.j,
       bundleDays,
@@ -388,8 +395,6 @@ export function calcVendorRecommendation({
       settings,
     });
 
-    // [FIX-YoY] Apply YoY sanity check. Mutates `forecast` in place when a
-    // cap is applied. Info object is stored for debugging / UI.
     const yoyInfo = applyYoYSanityCheck(forecast, b.j, bundleDays, targetDoc);
 
     const ai = bundleAssignedInv(b, replenMap, missingMap);
@@ -412,11 +417,9 @@ export function calcVendorRecommendation({
       buyNeed: 0,
       buyMode: 'core',
       urgent: false,
-      // forecast outputs
       forecast,
-      yoyInfo,                     // [FIX-YoY] for debugging / UI
+      yoyInfo,
       forecastLevel: forecast.flags.noData ? fallbackDsr : (forecast.level || fallbackDsr),
-      // dsr kept for back-compat (urgency, DOC displays)
       dsr: forecast.flags.noData ? fallbackDsr : Math.max(forecast.level, fallbackDsr * 0.01),
       spikeVisual: isSpikeVisual(b, spikeThreshold),
       profABC: abcMap[b.j] || null,
@@ -429,7 +432,6 @@ export function calcVendorRecommendation({
   for (const b of prepped) {
     b.coverageDemand = Math.round(b.forecast.coverageDemand + b.forecast.safetyStock);
     b.flatDemand = Math.round(b.forecast.flatDemand);
-    // LT demand: simple projection using level only (for urgency flag)
     b.ltDemand = Math.max(0, Math.round(b.forecastLevel * lt));
     b.seasonalDSR = targetDoc > 0 ? b.forecast.coverageDemand / targetDoc : b.forecastLevel;
   }
@@ -513,28 +515,22 @@ export function calcVendorRecommendation({
   }
 
   // ──────────────────────────────────────────────────────────
-  // Step 8.5: core-level sanity check — HARD CAP at target DOC
+  // [STEP-8.5] Core sanity cap — last-line safety net
   // ──────────────────────────────────────────────────────────
-  // If the core as a whole already has ≥ target DOC worth of stock,
-  // recommend 0. No buffer — strict rule. A core at 201 DOC with
-  // target 180 will recommend 0, period.
+  // With forecast regime checks in v3.2, bundle-level recommendations
+  // should already be realistic. This step is now a last-line defense:
+  // if the core as a whole has already > CORE_CAP_MULTIPLIER × target DOC
+  // worth of stock, don't buy (there's no physical shortage).
   //
-  // This overrides the bundle-level forecast even if individual
-  // bundles appear short. Rationale: cores are fungible inventory —
-  // the waterfall will redistribute raw across bundles as they sell.
-  // If total core DOC ≥ target, all bundles can be serviced by the
-  // existing pool until the next replen cycle.
+  // 1.1 = target + 10% buffer. A core at 200 DOC with target 180 has
+  // 111% of target → CAP fires → rec = 0.
+  // A core at 190 DOC with target 180 has 105% of target → does NOT cap.
   //
-  // Note: we use the SAME all-in definition as the UI (C.DSR and
-  // "All-In Own Pcs" on the Core Detail page), which includes ALL
-  // intermediate states — not just raw+pp+inb+fba.
-  const coreSanityLog = {}; // for coreDetails output
+  // This works alongside (not instead of) the forecast improvements.
+  // If forecast was realistic (not inflated), bundle recs are reasonable
+  // and we rarely reach this cap. It mainly catches corner cases.
+  const coreSanityLog = {};
 
-  const computeCoreAllIn = (c) =>
-    num(c.raw) + num(c.inb) + num(c.pp) + num(c.jfn) +
-    num(c.pq)  + num(c.ji)  + num(c.fba);
-
-  // Apply to CORE-mode items
   for (const coreId of Object.keys(coreNeedMap)) {
     const core = vCoreById[coreId];
     if (!core) continue;
@@ -543,7 +539,7 @@ export function calcVendorRecommendation({
     if (coreDSR <= 0) continue;
     const coreDOC = allIn / coreDSR;
 
-    if (coreDOC >= targetDoc) {
+    if (coreDOC >= targetDoc * CORE_CAP_MULTIPLIER) {
       const originalNeed = coreNeedMap[coreId];
       coreNeedMap[coreId] = 0;
       if (!coreBundlesMap[coreId]) coreBundlesMap[coreId] = [];
@@ -552,6 +548,7 @@ export function calcVendorRecommendation({
         capped: true,
         coreDOC: Math.round(coreDOC),
         targetDoc,
+        capMultiplier: CORE_CAP_MULTIPLIER,
         allIn,
         coreDSR,
         originalNeed,
@@ -559,9 +556,8 @@ export function calcVendorRecommendation({
     }
   }
 
-  // Apply to BUNDLE-mode items: zero out buyNeed for bundles whose
-  // underlying cores are ALL above target DOC. If any core is short,
-  // the bundle still needs buying (no free lunch).
+  // Apply to BUNDLE-mode items as well: zero out if all underlying cores
+  // are already above target × multiplier.
   for (const b of prepped) {
     if (b.buyNeed <= 0 || b.buyMode !== 'bundle') continue;
     const allCoresHealthy = b.coresUsed.every(({ coreId }) => {
@@ -570,7 +566,7 @@ export function calcVendorRecommendation({
       const allIn = computeCoreAllIn(core);
       const coreDSR = num(core.dsr);
       if (coreDSR <= 0) return false;
-      return (allIn / coreDSR) >= targetDoc;
+      return (allIn / coreDSR) >= targetDoc * CORE_CAP_MULTIPLIER;
     });
     if (allCoresHealthy) {
       b.bundleMoqStatus = 'core_level_capped';
@@ -578,6 +574,7 @@ export function calcVendorRecommendation({
       b.buyNeed = 0;
     }
   }
+
   // ──────────────────────────────────────────────────────────
   // Step 9: MOQ + casepack per core -> coreItems
   // ──────────────────────────────────────────────────────────
@@ -649,7 +646,7 @@ export function calcVendorRecommendation({
   const meetsVendorMoq = vendorMoqDollar <= 0 || totalCost >= vendorMoqDollar;
   const vendorMoqGap = Math.max(0, vendorMoqDollar - totalCost);
 
-  // Price map (unchanged from v2)
+  // Price map
   const priceMap = {};
   for (const c of vendorCores) {
     const histUnitCost = getVendorCoreUnitCost(c.id, vendor, priceCompFull);
@@ -668,7 +665,7 @@ export function calcVendorRecommendation({
   }
 
   // ──────────────────────────────────────────────────────────
-  // Bundle details (extended with forecast + safety stock + YoY info)
+  // Bundle details
   // ──────────────────────────────────────────────────────────
   const bundleDetails = prepped.map(b => ({
     bundleId: b.id,
@@ -693,7 +690,7 @@ export function calcVendorRecommendation({
     forecast: {
       level: b.forecast.level,
       trend: b.forecast.trend,
-      effectiveTrend: b.forecast.effectiveTrend,    // [FIX-3] trend actually used
+      effectiveTrend: b.forecast.effectiveTrend,
       usedHolt: b.forecast.flags.usedHolt,
       outliersRemoved: b.forecast.flags.outliersRemoved,
     },
@@ -706,23 +703,27 @@ export function calcVendorRecommendation({
     },
     demandBreakdown: b.forecast.demandBreakdown,
     spikeVisual: b.spikeVisual,
-    yoyInfo: b.yoyInfo,          // [FIX-YoY] null or { applied, historic, ... }
+    yoyInfo: b.yoyInfo,
     flags: {
       trackingSignalExceeded: b.forecast.flags.trackingSignalExceeded,
       trackingSignal: b.forecast.flags.trackingSignal,
-      trendGatedByTS: b.forecast.flags.trendGatedByTS,  // [FIX-3] new
+      trendGatedByTS: b.forecast.flags.trendGatedByTS,
       shortHistory: b.forecast.flags.shortHistory,
       trendCapped: b.forecast.flags.trendCapped,
       safetyStockFallback: b.forecast.flags.safetyStockFallback,
       outliersRemoved: b.forecast.flags.outliersRemoved,
-      yoyCapApplied: b.forecast.flags.yoyCapApplied || false,    // [FIX-YoY]
+      yoyCapApplied: b.forecast.flags.yoyCapApplied || false,
       yoyHistoric: b.forecast.flags.yoyHistoric,
       yoyOriginalForecast: b.forecast.flags.yoyOriginalForecast,
+      recentRegimeApplied: b.forecast.flags.recentRegimeApplied || false,
+      recentRegimeInfo: b.forecast.flags.recentRegimeInfo || null,
+      slowRegimeApplied: b.forecast.flags.slowRegimeApplied || false,
+      slowRegimeInfo: b.forecast.flags.slowRegimeInfo || null,
     },
   }));
 
   // ──────────────────────────────────────────────────────────
-  // Core details (extended with anomaly info)
+  // Core details
   // ──────────────────────────────────────────────────────────
   const coreDetails = vendorCores.map(c => {
     const item = coreItems.find(i => i.id === c.id);
@@ -815,7 +816,7 @@ export function batchVendorRecommendations({
       missingMap,
       priceCompFull,
       settings,
-      purchFreqSafety: safety, // kept for UI metadata only
+      purchFreqSafety: safety,
       bundleMoqOverride: 0,
       moqExtraDocThreshold: num(settings?.moqExtraDocThreshold, 30),
     });
