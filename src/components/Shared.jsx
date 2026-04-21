@@ -1,3 +1,4 @@
+// src/components/Shared.jsx
 import { createPortal } from "react-dom";
 import React, { useState, useEffect, useRef, createContext, useContext } from "react";
 import { dotCls, MN } from "../lib/utils";
@@ -62,7 +63,7 @@ export function SS({ value, onChange, options, placeholder }) {
 export function Stg({ s, setS, onClose }) {
   const [l, setL] = useState({ ...s });
   return <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center" onClick={onClose}>
-    <div className="bg-gray-900 border border-gray-700 rounded-xl p-6 w-full max-w-md max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+    <div className="bg-gray-900 border border-gray-700 rounded-xl p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
       <h2 className="text-lg font-semibold text-white mb-4">Settings</h2>
       <div className="space-y-4">
         <div><label className="text-sm text-gray-400 block mb-1">Buyer Initials</label><input type="text" value={l.buyer || ''} onChange={e => setL({ ...l, buyer: e.target.value })} placeholder="e.g. FS" className="bg-gray-800 border border-gray-600 text-white rounded px-3 py-2 w-full" /></div>
@@ -72,29 +73,116 @@ export function Stg({ s, setS, onClose }) {
           <div><label className="text-sm text-gray-400 block mb-1" title="Floor DOC for replen waterfall (Phase 1 minimum)">Replen Floor</label><input type="number" value={l.replenFloorDoc || 80} onChange={e => setL({ ...l, replenFloorDoc: +e.target.value })} className="bg-gray-800 border border-gray-600 text-white rounded px-3 py-2 w-full" /></div>
         </div>
 
+        {/* ─── v3 FORECASTING ENGINE ─── */}
         <div className="border-t border-gray-700 pt-4">
-          <h3 className="text-sm font-semibold text-amber-400 mb-3">Recommender v2 Tunables</h3>
-          <div className="grid grid-cols-2 gap-3">
+          <h3 className="text-sm font-semibold text-emerald-400 mb-1">v3 Forecasting Engine</h3>
+          <p className="text-[10px] text-gray-500 mb-3">Industry-standard: Hampel filter → Holt linear → Z × σ_LT safety stock.</p>
+
+          <div className="grid grid-cols-2 gap-3 mb-3">
             <div>
-              <label className="text-sm text-gray-400 block mb-1" title="d7/cd ratio above which we consider a bundle is in a demand spike, and use d7 as effective DSR instead of cd. Higher = less sensitive (fewer spikes). Default 1.25">
-                Spike Threshold
+              <label className="text-sm text-gray-400 block mb-1" title="Service level for ABC-class A bundles (top revenue/profit). Higher = less chance of stockout but more capital tied up. Default 97% (Z=1.88).">
+                Service Level — A bundles
               </label>
-              <input type="number" step="0.05" min="1" value={l.spikeThreshold ?? 1.25} onChange={e => setL({ ...l, spikeThreshold: +e.target.value })} className="bg-gray-800 border border-gray-600 text-white rounded px-3 py-2 w-full" />
-              <p className="text-[10px] text-gray-500 mt-1">Default 1.25 · &gt;1 triggers spike DSR</p>
+              <div className="flex gap-2">
+                <input type="number" step="0.5" min="85" max="99.9" value={l.serviceLevelA ?? 97} onChange={e => setL({ ...l, serviceLevelA: +e.target.value })} className="bg-gray-800 border border-gray-600 text-white rounded px-3 py-2 w-full" />
+                <span className="text-gray-500 text-xs self-center">%</span>
+              </div>
+              <p className="text-[10px] text-gray-500 mt-1">Default 97% · Z≈1.88</p>
             </div>
             <div>
-              <label className="text-sm text-gray-400 block mb-1" title="finalQty/need ratio at or above which the ⚠MOQ badge fires. Lower = more warnings. Default 1.5 (i.e. warn if you're buying ≥150% of what you actually need)">
+              <label className="text-sm text-gray-400 block mb-1" title="Service level for all non-A bundles (B, C, unclassified). Default 95% (Z=1.65).">
+                Service Level — B/C/other
+              </label>
+              <div className="flex gap-2">
+                <input type="number" step="0.5" min="85" max="99.9" value={l.serviceLevelOther ?? 95} onChange={e => setL({ ...l, serviceLevelOther: +e.target.value })} className="bg-gray-800 border border-gray-600 text-white rounded px-3 py-2 w-full" />
+                <span className="text-gray-500 text-xs self-center">%</span>
+              </div>
+              <p className="text-[10px] text-gray-500 mt-1">Default 95% · Z≈1.65</p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3 mb-3">
+            <div>
+              <label className="text-sm text-gray-400 block mb-1" title="Holt α: how quickly the level adapts to new data. 0 = never changes (trusts history). 1 = ignores history (jumpy). Default 0.2 — conservative, industry-standard for daily sales.">
+                Holt α (level)
+              </label>
+              <input type="number" step="0.05" min="0.05" max="0.9" value={l.holtAlpha ?? 0.2} onChange={e => setL({ ...l, holtAlpha: +e.target.value })} className="bg-gray-800 border border-gray-600 text-white rounded px-3 py-2 w-full" />
+              <p className="text-[10px] text-gray-500 mt-1">Default 0.2 · lower = smoother</p>
+            </div>
+            <div>
+              <label className="text-sm text-gray-400 block mb-1" title="Holt β: how quickly the trend adapts. Lower = more stable trend. Default 0.1.">
+                Holt β (trend)
+              </label>
+              <input type="number" step="0.05" min="0.05" max="0.9" value={l.holtBeta ?? 0.1} onChange={e => setL({ ...l, holtBeta: +e.target.value })} className="bg-gray-800 border border-gray-600 text-white rounded px-3 py-2 w-full" />
+              <p className="text-[10px] text-gray-500 mt-1">Default 0.1 · lower = smoother trend</p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-sm text-gray-400 block mb-1" title="Hampel filter window (days to each side). Detects outliers by comparing each day to its neighbors. Default 7 (14-day total window).">
+                Hampel Window (±days)
+              </label>
+              <input type="number" step="1" min="3" max="14" value={l.hampelWindow ?? 7} onChange={e => setL({ ...l, hampelWindow: +e.target.value })} className="bg-gray-800 border border-gray-600 text-white rounded px-3 py-2 w-full" />
+              <p className="text-[10px] text-gray-500 mt-1">Default 7 · wider = fewer outliers caught</p>
+            </div>
+            <div>
+              <label className="text-sm text-gray-400 block mb-1" title="Hampel threshold in MAD units. 3 is standard. Lower = aggressive outlier removal.">
+                Hampel Threshold (×MAD)
+              </label>
+              <input type="number" step="0.5" min="1" max="6" value={l.hampelThreshold ?? 3} onChange={e => setL({ ...l, hampelThreshold: +e.target.value })} className="bg-gray-800 border border-gray-600 text-white rounded px-3 py-2 w-full" />
+              <p className="text-[10px] text-gray-500 mt-1">Default 3 · lower = stricter</p>
+            </div>
+          </div>
+        </div>
+
+        {/* ─── v3 ANOMALY DETECTION ─── */}
+        <div className="border-t border-gray-700 pt-4">
+          <h3 className="text-sm font-semibold text-orange-400 mb-1">Inventory Anomaly Detection</h3>
+          <p className="text-[10px] text-gray-500 mb-3">Flags cores with unexplained inventory drops and uses a reconstructed value for recommendations.</p>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-sm text-gray-400 block mb-1" title="Drop is flagged when |today - expected| > multiplier × DSR. Default 3 (anything larger than 3 days of sales counts as anomaly).">
+                Anomaly Multiplier (× DSR)
+              </label>
+              <input type="number" step="0.5" min="1" max="10" value={l.inventoryAnomalyMultiplier ?? 3} onChange={e => setL({ ...l, inventoryAnomalyMultiplier: +e.target.value })} className="bg-gray-800 border border-gray-600 text-white rounded px-3 py-2 w-full" />
+              <p className="text-[10px] text-gray-500 mt-1">Default 3 · lower = more sensitive</p>
+            </div>
+            <div>
+              <label className="text-sm text-gray-400 block mb-1" title="How many days back to scan for anomalies. Default 7.">
+                Lookback (days)
+              </label>
+              <input type="number" step="1" min="2" max="30" value={l.anomalyLookbackDays ?? 7} onChange={e => setL({ ...l, anomalyLookbackDays: +e.target.value })} className="bg-gray-800 border border-gray-600 text-white rounded px-3 py-2 w-full" />
+              <p className="text-[10px] text-gray-500 mt-1">Default 7</p>
+            </div>
+          </div>
+        </div>
+
+        {/* ─── LEGACY / UI TUNABLES ─── */}
+        <div className="border-t border-gray-700 pt-4">
+          <h3 className="text-sm font-semibold text-amber-400 mb-3">UI & MOQ Tunables</h3>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-sm text-gray-400 block mb-1" title="d7/cd ratio above which the ⚡ spike badge is shown. UI-only — no longer affects forecast calculations.">
+                Spike Badge Threshold
+              </label>
+              <input type="number" step="0.05" min="1" value={l.spikeThreshold ?? 1.25} onChange={e => setL({ ...l, spikeThreshold: +e.target.value })} className="bg-gray-800 border border-gray-600 text-white rounded px-3 py-2 w-full" />
+              <p className="text-[10px] text-gray-500 mt-1">Default 1.25 · visual only in v3</p>
+            </div>
+            <div>
+              <label className="text-sm text-gray-400 block mb-1" title="finalQty/need ratio at or above which the ⚠MOQ badge fires. Default 1.5.">
                 MOQ Inflation Warn
               </label>
               <input type="number" step="0.1" min="1" value={l.moqInflationThreshold ?? 1.5} onChange={e => setL({ ...l, moqInflationThreshold: +e.target.value })} className="bg-gray-800 border border-gray-600 text-white rounded px-3 py-2 w-full" />
-              <p className="text-[10px] text-gray-500 mt-1">Default 1.5 · ≥ this triggers ⚠MOQ badge</p>
+              <p className="text-[10px] text-gray-500 mt-1">Default 1.5 · ≥ triggers ⚠MOQ</p>
             </div>
             <div>
-              <label className="text-sm text-gray-400 block mb-1" title="When Bundle MOQ forces buying more than needed, how many extra DOC days are acceptable before the system suggests waiting. Lower = more conservative (waits more). Default 30.">
+              <label className="text-sm text-gray-400 block mb-1" title="When Bundle MOQ forces more than needed, max extra DOC days before suggesting 'wait'. Default 30.">
                 MOQ Extra DOC Threshold
               </label>
               <input type="number" step="5" min="0" value={l.moqExtraDocThreshold ?? 30} onChange={e => setL({ ...l, moqExtraDocThreshold: +e.target.value })} className="bg-gray-800 border border-gray-600 text-white rounded px-3 py-2 w-full" />
-              <p className="text-[10px] text-gray-500 mt-1">Default 30 · extra days of cover before "wait"</p>
+              <p className="text-[10px] text-gray-500 mt-1">Default 30</p>
             </div>
           </div>
         </div>
@@ -124,18 +212,17 @@ export function SlidePanel({ open, onClose, children }) {
 
 const WF_STATUSES = ["Buy", "Reviewing", "Ignore", "Done", ""];
 const WF_COLORS = { Buy: "bg-emerald-500/20 text-emerald-400", Reviewing: "bg-amber-500/20 text-amber-400", Ignore: "bg-red-500/20 text-red-400", Done: "bg-blue-500/20 text-blue-400" };
+const VC_CATS = ["Quality","Pricing","Lead Time","Reliability","Relationship","Other"];
+const VC_COLORS = { Quality: "text-orange-400", Pricing: "text-amber-400", "Lead Time": "text-blue-400", Reliability: "text-red-400", Relationship: "text-emerald-400", Other: "text-gray-400" };
 
-// Parse dates that might come as yyyy-mm-dd, mm/dd/yyyy, or dd/mm/yyyy
 function parseDate(s) {
   if (!s) return null;
-  // Already yyyy-mm-dd (from date input)
   if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return new Date(s + 'T00:00:00');
-  // mm/dd/yyyy or dd/mm/yyyy — if first part > 12, it must be dd/mm/yyyy
   const parts = s.split('/');
   if (parts.length === 3) {
     const [a, b, c] = parts.map(Number);
-    if (a > 12) return new Date(c, b - 1, a); // dd/mm/yyyy
-    return new Date(c, a - 1, b); // mm/dd/yyyy
+    if (a > 12) return new Date(c, b - 1, a);
+    return new Date(c, a - 1, b);
   }
   const d = new Date(s);
   return isNaN(d.getTime()) ? null : d;
@@ -146,7 +233,6 @@ function fmtDateUS(s) {
   if (!d) return s || "";
   return (d.getMonth() + 1).toString().padStart(2, '0') + '/' + d.getDate().toString().padStart(2, '0') + '/' + d.getFullYear();
 }
-
 
 export function WorkflowChip({ id, type, workflow, onSave, onDelete, buyer, country }) {
   const [open, setOpen] = useState(false);
@@ -286,422 +372,4 @@ export function VendorNotes({ vendor, comments, onSave, buyer }) {
   const count = notes.length;
   const save = () => { if (!text.trim()) return; onSave({ vendor, author: buyer || "", category: cat, comment: text.trim() }); setText(""); setAdding(false) };
   if (!open) return <button onClick={() => setOpen(true)} className={`text-xs px-1.5 py-0.5 rounded ${count > 0 ? "bg-blue-500/20 text-blue-400" : "bg-gray-800 text-gray-500 hover:text-gray-300"}`}>💬{count > 0 ? " " + count : ""}</button>;
-  return <div className="absolute z-50 mt-1 right-0 bg-gray-900 border border-gray-700 rounded-lg shadow-xl w-80 max-h-96 overflow-hidden" onClick={e => e.stopPropagation()}>
-    <div className="flex items-center justify-between px-3 py-2 border-b border-gray-700"><span className="text-white text-sm font-semibold">Notes — {vendor}</span><div className="flex gap-2"><button onClick={() => setAdding(!adding)} className="text-xs bg-blue-600 text-white px-2 py-0.5 rounded">+ Add</button><button onClick={() => setOpen(false)} className="text-gray-400 hover:text-white text-xs">✕</button></div></div>
-    {adding && <div className="px-3 py-2 border-b border-gray-700 space-y-2"><div className="flex gap-1 flex-wrap">{VC_CATS.map(c => <button key={c} onClick={() => setCat(c)} className={`text-[10px] px-1.5 py-0.5 rounded ${cat === c ? "bg-blue-600 text-white" : "bg-gray-800 text-gray-400"}`}>{c}</button>)}</div><textarea value={text} onChange={e => setText(e.target.value)} placeholder="Add a note..." rows={2} className="w-full bg-gray-800 border border-gray-600 text-white rounded px-2 py-1 text-xs resize-none" /><div className="flex gap-2"><button onClick={save} className="text-xs bg-emerald-600 text-white px-3 py-1 rounded">Save</button><button onClick={() => { setAdding(false); setText("") }} className="text-xs bg-gray-700 text-gray-300 px-2 py-1 rounded">Cancel</button></div></div>}
-    <div className="overflow-y-auto max-h-60">{notes.length > 0 ? notes.map((n, i) => <div key={i} className={`px-3 py-2 ${i > 0 ? "border-t border-gray-800/50" : ""}`}><div className="flex items-center gap-2 mb-0.5"><span className={`text-[10px] font-semibold ${VC_COLORS[n.category] || "text-gray-400"}`}>{n.category}</span><span className="text-gray-500 text-[10px]">{n.date}</span>{n.author && <span className="text-gray-600 text-[10px]">— {n.author}</span>}</div><p className="text-gray-300 text-xs">{n.comment}</p></div>) : <p className="text-gray-500 text-xs text-center py-4">No notes yet</p>}</div>
-  </div>;
-}
-
-// === CALC BREAKDOWN MODAL (v2 — 5 steps) ===
-export function CalcBreakdown({ data: d, onClose }) {
-  if (!d) return null;
-  const shC = v => v > 1.3 ? "bg-emerald-500/20 text-emerald-400" : v > 1.1 ? "bg-blue-500/20 text-blue-300" : v < 0.7 ? "bg-red-500/20 text-red-400" : v < 0.9 ? "bg-amber-500/20 text-amber-400" : "bg-gray-700 text-gray-400";
-  const MTab = ({ rows }) => <table className="w-full text-xs"><thead><tr className="text-gray-500 uppercase border-b border-gray-700"><th className="py-1.5 text-left">Month</th><th className="py-1.5 text-right">Days</th><th className="py-1.5 text-right">Shape</th><th className="py-1.5 text-right">÷ Now</th><th className="py-1.5 text-right">Damped</th><th className="py-1.5 text-right">Proj DSR</th><th className="py-1.5 text-right">Units</th></tr></thead>
-    <tbody>{rows.map((m, i) => <tr key={i} className={`${i % 2 === 0 ? "bg-gray-800/30" : ""} border-t border-gray-800/30`}><td className="py-1.5 text-gray-300">{m.label}</td><td className="py-1.5 text-right text-gray-400">{m.days}d</td><td className={`py-1.5 text-right ${m.shapeFactor > 1.2 ? "text-emerald-400" : m.shapeFactor < 0.8 ? "text-red-400" : "text-gray-300"}`}>{m.shapeFactor}x</td><td className="py-1.5 text-right text-gray-500">{m.normFactor}x</td><td className={`py-1.5 text-right ${m.dampedNorm > 1.15 ? "text-emerald-400" : m.dampedNorm < 0.85 ? "text-red-400" : "text-blue-300"}`}>{m.dampedNorm}x</td><td className="py-1.5 text-right text-white font-semibold">{m.projDsr}</td><td className="py-1.5 text-right text-white">{m.units.toLocaleString()}</td></tr>)}</tbody>
-    <tfoot><tr className="border-t-2 border-gray-600 font-semibold"><td className="py-2 text-gray-300">Total</td><td className="py-2 text-right">{rows.reduce((s, m) => s + m.days, 0)}d</td><td colSpan={4} /><td className="py-2 text-right text-white text-sm">{rows.reduce((s, m) => s + m.units, 0).toLocaleString()}</td></tr></tfoot>
-  </table>;
-
-  return <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center overflow-auto p-4" onClick={onClose}>
-    <div className="bg-gray-900 border border-gray-700 rounded-xl p-5 w-full max-w-3xl max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
-      <div className="flex justify-between items-start mb-3">
-        <div><h2 className="text-lg font-bold text-white">{d.coreId} — Seasonal Forecast v2</h2><p className="text-gray-400 text-sm">{d.title} · {d.vendor}</p></div>
-        <button onClick={onClose} className="text-gray-400 hover:text-white text-xl">✕</button>
-      </div>
-
-      {/* Summary */}
-      <div className={`rounded-lg p-3 mb-4 text-sm leading-relaxed ${d.urgent ? "bg-red-500/10 border border-red-500/30 text-red-200" : "bg-gray-800/60 text-gray-300"}`}>{d.summaryText}</div>
-
-      {/* KPIs */}
-      <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 mb-4">
-        {[{ l: "DSR", v: d.currentDSR.toFixed(1) }, { l: "DOC", v: Math.round(d.currentDOC) }, { l: "Inventory", v: d.inventory.toLocaleString() }, { l: "Lead Time", v: d.leadTime + "d" }, { l: "Target DOC", v: d.targetDOC + "d" }, { l: "Safety", v: "×" + d.safetyMultiplier }].map(k =>
-          <div key={k.l} className="bg-gray-800 rounded-lg p-2 text-center"><div className="text-gray-500 text-[10px] uppercase">{k.l}</div><div className={`font-bold text-sm ${k.c || "text-white"}`}>{k.v}</div></div>
-        )}
-      </div>
-
-      {/* Step 4: Seasonal Shape */}
-      <div className="bg-gray-800/50 rounded-lg p-4 mb-4">
-        <h3 className="text-sm font-semibold text-white mb-2">Step 4: Last-Year Shape (from {d.shapeYear})</h3>
-        {!d.hasHistory && <p className="text-amber-400 text-xs mb-2">⚠ Not enough history. Using flat shape (1.0).</p>}
-        <div className="grid grid-cols-2 gap-3 mb-3 text-sm">
-          <div><div className="text-gray-500 text-xs">CV</div><div className="text-white">{d.cv} — <span className={d.cv > 0.35 ? "text-purple-400" : "text-gray-400"}>{d.cvLabel}</span></div></div>
-          {d.purchFreq && <div><div className="text-gray-500 text-xs">Purchase Freq</div><div className="text-gray-300">{d.purchFreq.label} ({d.purchFreq.ordersPerYear}/yr){d.purchFreq.comment && <span className="text-amber-400 ml-1 text-xs">{d.purchFreq.comment}</span>}</div></div>}
-        </div>
-        <div className="text-xs text-gray-500 mb-2">Monthly shape factors (last year's curve normalized):</div>
-        <div className="grid grid-cols-12 gap-1 text-center text-[10px]">
-          {d.seasonalShape.map((s, i) => <div key={i} className={`rounded py-1.5 ${shC(s.shape)}`}><div className="font-semibold">{s.month.substring(0, 3)}</div><div className="font-bold text-sm">{s.shape}</div><div className="text-[8px] opacity-70">{s.interpretation}</div></div>)}
-        </div>
-        {Object.keys(d.yearlyTotals).length > 0 && <div className="mt-2 text-xs text-gray-500">Yearly DSR totals: {Object.entries(d.yearlyTotals).map(([y, t]) => `${y}: ${t.toLocaleString()}`).join(' · ')}</div>}
-        <div className="mt-1 text-xs text-gray-600">Formula: projectedDSR = currentDSR × damped(shape[m]/shape[now], 50%) × safety({d.safetyMultiplier})</div>
-      </div>
-
-      {/* Step 1: Lead Time Urgency Check */}
-      <div className={`rounded-lg p-4 mb-4 ${d.urgent ? "bg-red-500/10 border border-red-500/30" : "bg-gray-800/50"}`}>
-        <h3 className="text-sm font-semibold text-white mb-2">Step 1: Lead Time Urgency Check ({d.leadTime}d)</h3>
-        <p className="text-gray-400 text-xs mb-2">Will current inventory last until the order arrives ({d.arrivalDate})? This does NOT affect how much to order — only flags urgency.</p>
-        {d.ltMonths.length > 0 && <MTab rows={d.ltMonths} />}
-        <div className="mt-2 grid grid-cols-3 gap-3 text-center">
-          <div><div className="text-gray-500 text-xs">Current Inventory</div><div className="text-white font-bold">{d.inventory.toLocaleString()}</div></div>
-          <div><div className="text-gray-500 text-xs">LT Consumption</div><div className="text-red-400 font-bold">− {d.ltConsumption.toLocaleString()}</div></div>
-          <div><div className="text-gray-500 text-xs">Inv at Arrival</div><div className={`font-bold ${d.inventoryAtArrival < 0 ? "text-red-400" : "text-emerald-400"}`}>{d.inventoryAtArrival.toLocaleString()}</div></div>
-        </div>
-        {d.urgent && <p className="text-red-400 text-xs font-semibold mt-2">⚠ STOCKOUT RISK: inventory may run out before order arrives!</p>}
-        {!d.urgent && <p className="text-emerald-400 text-xs mt-2">✓ Inventory covers lead time</p>}
-      </div>
-
-      {/* Step 2: Target Coverage (from today) */}
-      <div className="bg-gray-800/50 rounded-lg p-4 mb-4">
-        <h3 className="text-sm font-semibold text-white mb-2">Step 2: Target Coverage ({d.targetDOC}d from today)</h3>
-        <p className="text-gray-400 text-xs mb-2">{d.windowStart} → {d.windowEnd}. How much total inventory do I need to cover {d.targetDOC} days? Safety ×{d.safetyMultiplier}.</p>
-        {d.covMonths.length > 0 && <MTab rows={d.covMonths} />}
-      </div>
-      
-      {/* Step 3: Final Need */}
-      <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-4">
-        <h3 className="text-sm font-semibold text-white mb-3">Step 3: Final Need</h3>
-        <div className="grid grid-cols-3 gap-4 text-center mb-3">
-          <div><div className="text-gray-400 text-xs">Target Coverage ({d.targetDOC}d)</div><div className="text-white font-bold text-xl">{d.coverageNeed.toLocaleString()}</div></div>
-          <div><div className="text-gray-400 text-xs">Current Inventory</div><div className="text-white font-bold text-xl">− {d.inventory.toLocaleString()}</div></div>
-          <div><div className="text-gray-400 text-xs">Need to Order</div><div className="text-emerald-400 font-bold text-xl">= {d.need.toLocaleString()}</div></div>
-        </div>
-        <div className="pt-3 border-t border-gray-700 flex flex-wrap gap-4 text-xs justify-center">
-          <span className="text-gray-500">Old flat: <span className="text-gray-300 font-semibold">{d.targetDOC}d × {d.currentDSR.toFixed(1)} − {d.inventory.toLocaleString()} = {d.flatNeed.toLocaleString()}</span></span>
-          <span className={`font-semibold ${d.difference > 0 ? "text-amber-400" : d.difference < 0 ? "text-emerald-400" : "text-gray-400"}`}>{d.differenceLabel}</span>
-        </div>
-      </div>
-    </div>
-  </div>;
-}
-
-
-// === CALC BREAKDOWN V2 (consistent with recommender v2 — no legacy) ===
-export function CalcBreakdownV2({ core, vendor, vendorRec, profile, stg, onClose }) {
-  if (!core || !vendor || !vendorRec) return null;
-
-  const fmtN = (n) => (n == null || isNaN(n)) ? "—" : Math.round(n).toLocaleString("en-US");
-  const fmt$ = (n) => (n == null || isNaN(n)) ? "—" : "$" + Math.round(n).toLocaleString("en-US");
-  const fmt1 = (n) => (n == null || isNaN(n)) ? "—" : Number(n).toFixed(1);
-
-  // Bundles that depend on this core
-  const bundlesForThisCore = (vendorRec.bundleDetails || [])
-    .filter(bd => (bd.coresUsed || []).some(cu => cu.coreId === core.id))
-    .map(bd => {
-      const cu = (bd.coresUsed || []).find(c => c.coreId === core.id);
-      const qtyPerBundle = cu?.qty || 1;
-      const initialDOC = bd.effectiveDSR > 0 ? bd.assignedInv / bd.effectiveDSR : null;
-      const rawUsedFromThisCore = (bd.rawAssignedFromWaterfall || 0) * qtyPerBundle;
-      return { ...bd, qtyPerBundle, initialDOC, rawUsedFromThisCore };
-    });
-
-  const coreDetail = (vendorRec.coreDetails || []).find(cd => cd.coreId === core.id);
-  const rawOnHand = Number(coreDetail?.rawOnHand ?? core.raw ?? 0);
-  const pendingInbound = Number(coreDetail?.pendingInbound || 0);
-  const initialPool = rawOnHand + pendingInbound;
-  const consumedFromWaterfall = bundlesForThisCore.reduce((s, b) => s + b.rawUsedFromThisCore, 0);
-  const remainingAfterWaterfall = initialPool - consumedFromWaterfall;
-  
-  const coreModeBundles = bundlesForThisCore.filter(b => b.buyMode === 'core' && b.buyNeed > 0);
-  const bundleModeBundles = bundlesForThisCore.filter(b => b.buyMode === 'bundle' && b.buyNeed > 0);
-  const coreNeedPieces = coreDetail?.needPieces || 0;
-  const coreFinalQty = coreDetail?.finalQty || 0;
-  const coreCost = coreDetail?.cost || 0;
-  
-  // Bundle-mode purchases for bundles that use this core
-  const bundleBuyTotal = bundleModeBundles.reduce((s, b) => s + b.buyNeed, 0);
-  const bundlePcsEquiv = bundleModeBundles.reduce((s, b) => s + b.buyNeed * b.qtyPerBundle, 0);
-  const bundleCostTotal = bundleModeBundles.reduce((s, b) => {
-    const price = vendorRec.priceMap?.[b.bundleId] || 0;
-    return s + b.buyNeed * price;
-  }, 0);
-  
-  // Combined totals for the header
-  const needPieces = coreNeedPieces + bundlePcsEquiv;
-  const finalQty = coreFinalQty + bundlePcsEquiv;
-  const cost = coreCost + bundleCostTotal;
-  const moqInflated = coreDetail?.moqInflated || false;
-  const moqRatio = coreDetail?.moqInflationRatio || 1;
-  const excessFromMoq = coreDetail?.excessFromMoq || 0;
-  const excessCostFromMoq = coreDetail?.excessCostFromMoq || 0;
-
-
-  return (
-    <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center overflow-auto p-4" onClick={onClose}>
-      <div className="bg-gray-900 border border-gray-700 rounded-xl p-5 w-full max-w-4xl max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
-        <div className="flex justify-between items-start mb-3">
-          <div>
-            <h2 className="text-lg font-bold text-white">{core.id} — Why buy?</h2>
-            <p className="text-gray-400 text-sm">{core.ti} · {vendor.name} · ${Number(core.cost || 0).toFixed(3)}/pc · LT {vendor.lt}d · Target DOC {vendorRec.targetDoc}d</p>
-          </div>
-          <button onClick={onClose} className="text-gray-400 hover:text-white text-xl">✕</button>
-        </div>
-
-        {/* Summary */}
-        <div className={`rounded-lg p-3 mb-4 ${needPieces > 0 ? "bg-blue-500/10 border border-blue-500/30" : "bg-gray-800/60"}`}>
-          <div className="grid grid-cols-4 gap-3 text-center">
-            <div>
-              <div className="text-gray-500 text-[10px] uppercase">Real need</div>
-              <div className="text-white font-bold text-xl">{fmtN(needPieces)}</div>
-            </div>
-            <div>
-              <div className="text-gray-500 text-[10px] uppercase">Order (w/ MOQ)</div>
-              <div className={`font-bold text-xl ${moqInflated ? "text-orange-300" : "text-white"}`}>{fmtN(finalQty)}</div>
-            </div>
-            <div>
-              <div className="text-gray-500 text-[10px] uppercase">Cost</div>
-              <div className="text-amber-300 font-bold text-xl">{fmt$(cost)}</div>
-            </div>
-            <div>
-              <div className="text-gray-500 text-[10px] uppercase">Bundles involved</div>
-              <div className="text-white font-bold text-xl">{bundlesForThisCore.length}</div>
-            </div>
-          </div>
-          {moqInflated && (
-            <div className="mt-2 pt-2 border-t border-gray-700 text-xs text-orange-300">
-              ⚠ MOQ inflation: {Math.round(moqRatio * 100)}% of real need · excess: {fmtN(excessFromMoq)} pcs ({fmt$(excessCostFromMoq)})
-            </div>
-          )}
-        </div>
-
-{/* Seasonal Shape Heatmap */}
-        {profile?.hasHistory && Array.isArray(profile.lastYearShape) && (
-          <div className="bg-gray-800/40 rounded-lg p-3 mb-4">
-            <div className="flex items-center justify-between mb-2">
-              <div>
-                <h3 className="text-sm font-semibold text-white">Core seasonal shape (last year)</h3>
-                <p className="text-[10px] text-gray-500">Normalized monthly demand. 1.0x = average. Green = above avg, red = below.</p>
-              </div>
-              {profile.cv != null && (
-                <div className="text-right">
-                  <div className="text-[9px] text-gray-500 uppercase">CV</div>
-                  <div className={`text-xs font-bold ${profile.cv > 0.35 ? "text-purple-400" : "text-gray-400"}`}>
-                    {profile.cv.toFixed(2)} <span className="text-[9px] font-normal">{profile.cv > 0.35 ? "seasonal" : "flat"}</span>
-                  </div>
-                </div>
-              )}
-            </div>
-            <div className="grid grid-cols-12 gap-1 text-center">
-              {profile.lastYearShape.map((shape, i) => {
-                const s = Number(shape) || 1;
-                const bg = s > 1.3 ? "bg-emerald-500/40 text-emerald-100 border-emerald-400/40"
-                         : s > 1.1 ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/20"
-                         : s < 0.7 ? "bg-red-500/40 text-red-100 border-red-400/40"
-                         : s < 0.9 ? "bg-red-500/20 text-red-300 border-red-500/20"
-                         : "bg-gray-700/60 text-gray-300 border-gray-600/40";
-                const isCurMonth = i === new Date().getMonth();
-                return (
-                  <div key={i} className={`rounded border py-1 ${bg} ${isCurMonth ? "ring-2 ring-blue-400" : ""}`} title={isCurMonth ? "Current month" : ""}>
-                    <div className="text-[9px] font-semibold opacity-80">{MN[i].substring(0, 3)}</div>
-                    <div className="text-xs font-bold">{s.toFixed(2)}x</div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
-        {profile && !profile.hasHistory && (
-          <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-2 mb-4 text-[11px] text-amber-300">
-            ⚠ No seasonal history for this core — using flat shape (all months = 1.0x)
-          </div>
-        )}
-
-        
-       {/* Step 1: Core raw pool */}
-        <div className="bg-gray-800/50 rounded-lg p-4 mb-4">
-          <h3 className="text-sm font-semibold text-white mb-2">Step 1: Core raw pool (waterfall input)</h3>
-          <p className="text-gray-400 text-xs mb-3">
-            The waterfall pool = raw on hand in JLS warehouse + 7f inbound in transit to JLS.
-            <span className="text-gray-500"> Inbound to Amazon (FBA) is NOT in the pool — that's committed to direct-to-Amazon flow, not available to assemble bundles.</span>
-          </p>
-          <div className="grid grid-cols-5 gap-2 text-center">
-            <div className="bg-gray-900 rounded p-2">
-              <div className="text-gray-500 text-[10px] uppercase">Raw on hand</div>
-              <div className="text-white font-bold">{fmtN(rawOnHand)}</div>
-            </div>
-            <div className="bg-gray-900 rounded p-2">
-              <div className="text-gray-500 text-[10px] uppercase">+ 7f Inbound</div>
-              <div className={`font-bold ${pendingInbound > 0 ? "text-blue-300" : "text-gray-600"}`}>{pendingInbound > 0 ? "+" + fmtN(pendingInbound) : "—"}</div>
-            </div>
-            <div className="bg-gray-900 rounded p-2 border border-gray-700">
-              <div className="text-gray-500 text-[10px] uppercase">= Total Pool</div>
-              <div className="text-white font-bold">{fmtN(initialPool)}</div>
-            </div>
-            <div className="bg-gray-900 rounded p-2">
-              <div className="text-gray-500 text-[10px] uppercase">− Waterfall Used</div>
-              <div className="text-cyan-300 font-bold">{fmtN(consumedFromWaterfall)}</div>
-            </div>
-            <div className="bg-gray-900 rounded p-2">
-              <div className="text-gray-500 text-[10px] uppercase">Remaining</div>
-              <div className={`font-bold ${remainingAfterWaterfall > 0 ? "text-emerald-400" : "text-gray-500"}`}>{fmtN(remainingAfterWaterfall)}</div>
-            </div>
-          </div>
-          <p className="text-[10px] text-gray-500 mt-2">
-            Waterfall Used = Σ (raw assigned to bundle × qty per bundle). Remaining stays in stock — no need to buy it.
-          </p>
-        </div>
-
-        {/* Step 2: Bundles depending on this core */}
-        <div className="bg-gray-800/50 rounded-lg p-4 mb-4">
-          <h3 className="text-sm font-semibold text-white mb-2">Step 2: Bundles depending on this core ({bundlesForThisCore.length})</h3>
-          <p className="text-gray-400 text-xs mb-2">
-            DOC₀ = before waterfall (only assigned bundle inventory). DOC₁ = after waterfall (includes raw distributed in bundle units). Buy = what's still short of the coverage demand.
-          </p>
-          {bundlesForThisCore.length === 0 ? (
-            <p className="text-gray-500 text-xs">No active bundles depend on this core.</p>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs">
-               <thead>
-                  <tr className="text-gray-500 uppercase border-b border-gray-700">
-                    <th className="py-1.5 text-left">Bundle</th>
-                    <th className="py-1.5 text-right" title="Effective DSR (spike-adjusted)">Eff DSR</th>
-                    <th className="py-1.5 text-right" title="Qty of this core per bundle unit">Qty</th>
-                    <th className="py-1.5 text-right" title="Assigned bundle inventory (not fungible)">Inv</th>
-                    <th className="py-1.5 text-right" title="DOC using only assigned inv">DOC₀</th>
-                    <th className="py-1.5 text-right" title="Raw added by waterfall (in bundle units)">+Raw</th>
-                    <th className="py-1.5 text-right" title="DOC after waterfall">DOC₁</th>
-                    <th className="py-1.5 text-right" title="Seasonal demand (what the v2 actually uses as buyNeed base)">Seas</th>
-                    <th className="py-1.5 text-right" title="Seasonal impact vs flat. Positive = bundle is in peak season (we buy more). Negative = in valley (we buy less). — = no seasonal history, flat fallback.">Δ Seas</th>
-                    <th className="py-1.5 text-right" title="Still needs buying (in bundle units)">Buy</th>
-                    <th className="py-1.5 text-center">Mode</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {bundlesForThisCore
-                    .slice()
-                    .sort((a, b) => (a.currentCoverDOC || 0) - (b.currentCoverDOC || 0))
-                 .map(b => {
-                      const docBefore = b.initialDOC;
-                      const docAfter = b.currentCoverDOC;
-                      const docColor = docAfter <= 30 ? "text-red-400" : docAfter <= 60 ? "text-amber-400" : "text-emerald-400";
-                      const flat = b.flatDemand || 0;
-                      const seas = b.coverageDemand || 0;
-                      const seasDiff = flat > 0 ? ((seas - flat) / flat) * 100 : 0;
-                      const hasSeas = b.hasSeasonalHistory;
-                      const seasColor = !hasSeas ? "text-gray-600"
-                                      : seasDiff > 10 ? "text-orange-300"
-                                      : seasDiff > 3 ? "text-amber-300"
-                                      : seasDiff < -10 ? "text-cyan-400"
-                                      : seasDiff < -3 ? "text-sky-400"
-                                      : "text-gray-500";
-                      return (
-                        <tr key={b.bundleId} className={`border-t border-gray-800/40 ${b.urgent ? "bg-red-900/10" : ""}`}>
-                          <td className="py-1.5 text-blue-300 font-mono">
-                            {b.bundleId}
-                            {b.urgent && <span className="ml-1 text-red-400 text-[9px]" title="Will stockout before LT">⚠</span>}
-                          </td>
-                          <td className="py-1.5 text-right text-gray-300">{fmt1(b.effectiveDSR)}</td>
-                          <td className="py-1.5 text-right text-gray-500">×{b.qtyPerBundle}</td>
-                          <td className="py-1.5 text-right text-gray-300">{fmtN(b.assignedInv)}</td>
-                          <td className="py-1.5 text-right text-gray-400">{docBefore != null ? fmtN(docBefore) : "—"}</td>
-                          <td className="py-1.5 text-right text-cyan-300">{b.rawAssignedFromWaterfall > 0 ? "+" + fmtN(b.rawAssignedFromWaterfall) : "—"}</td>
-                          <td className={`py-1.5 text-right font-semibold ${docColor}`}>{fmtN(docAfter)}</td>
-                          <td className="py-1.5 text-right text-gray-300 font-semibold">{fmtN(seas)}</td>
-                          <td className={`py-1.5 text-right font-semibold ${seasColor}`} title={hasSeas ? `Flat: ${fmtN(flat)} · Seasonal: ${fmtN(seas)}` : "No seasonal history — using flat"}>
-                            {hasSeas ? (seasDiff > 0 ? "+" : "") + seasDiff.toFixed(0) + "%" : "—"}
-                          </td>
-                          <td className={`py-1.5 text-right font-semibold ${b.buyNeed > 0 ? "text-amber-300" : "text-gray-600"}`}>{b.buyNeed > 0 ? fmtN(b.buyNeed) : "—"}</td>
-                          <td className={`py-1.5 text-center text-[10px] font-semibold ${b.buyMode === 'bundle' ? "text-cyan-400" : "text-purple-400"}`}>{b.buyMode}</td>
-                        </tr>
-                      );
-                    })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-{/* Recommendation Summary */}
-        {bundlesForThisCore.some(b => b.buyNeed > 0) && (
-          <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-4 mb-4">
-            <h3 className="text-sm font-semibold text-white mb-2">Recommendation Summary</h3>
-            {(() => {
-              const corePcs = coreModeBundles.reduce((s, b) => s + b.buyNeed * b.qtyPerBundle, 0);
-              const bundlePcsEquiv = bundleModeBundles.reduce((s, b) => s + b.buyNeed * b.qtyPerBundle, 0);
-              const totalPcs = corePcs + bundlePcsEquiv;
-              return (
-                <div className="space-y-2 text-sm">
-                  <div className="text-gray-300">
-                    Total need across all bundles: <span className="text-white font-bold">{fmtN(totalPcs)} pcs</span>
-                  </div>
-                  <div className="text-gray-300">Proposed purchase:</div>
-                  {corePcs > 0 && (
-                    <div className="ml-3 text-purple-300">
-                      → <span className="font-semibold">{fmtN(corePcs)} pcs as raw core</span>
-                      <span className="text-gray-500 ml-1">({coreModeBundles.map(b => b.bundleId + " ×" + fmtN(b.buyNeed)).join(", ")})</span>
-                    </div>
-                  )}
-                  {bundleModeBundles.map(b => (
-                    <div key={b.bundleId} className="ml-3 text-cyan-300">
-                      → <span className="font-semibold">{fmtN(b.buyNeed)} assembled bundles of {b.bundleId}</span>
-                      <span className="text-gray-500 ml-1">({fmtN(b.buyNeed * b.qtyPerBundle)} pcs equivalent)</span>
-                    </div>
-                  ))}
-                  {corePcs === 0 && bundleModeBundles.length === 0 && (
-                    <div className="ml-3 text-emerald-400">No purchase needed — current stock covers target DOC.</div>
-                  )}
-                </div>
-              );
-            })()}
-          </div>
-        )}
-        {/* Step 3: Aggregate to core */}
-        <div className="bg-gray-800/50 rounded-lg p-4 mb-4">
-          <h3 className="text-sm font-semibold text-white mb-2">Step 3: Aggregate to core need</h3>
-          <p className="text-gray-400 text-xs mb-3">
-            Only bundles in <span className="text-purple-400 font-semibold">core mode</span> contribute to this core's raw need. Bundle-mode bundles are bought pre-assembled and don't draw from this core's pool.
-          </p>
-          {coreModeBundles.length > 0 ? (
-            <div className="space-y-1 text-xs">
-              {coreModeBundles.map(b => (
-                <div key={b.bundleId} className="flex items-center gap-2 bg-gray-900/50 rounded px-2 py-1">
-                  <span className="text-blue-300 font-mono min-w-[80px]">{b.bundleId}</span>
-                  <span className="text-gray-400">buy {fmtN(b.buyNeed)} × {b.qtyPerBundle} pc/bundle =</span>
-                  <span className="text-white font-semibold ml-auto">{fmtN(b.buyNeed * b.qtyPerBundle)} pcs</span>
-                </div>
-              ))}
-              <div className="flex items-center gap-2 border-t border-gray-700 pt-2 mt-2">
-                <span className="text-gray-400 text-xs">Total raw need for this core</span>
-                <span className="text-white font-bold ml-auto">{fmtN(needPieces)} pcs</span>
-              </div>
-            </div>
-          ) : (
-            <p className="text-gray-500 text-xs">No core-mode bundles need this core right now.</p>
-          )}
-          {bundleModeBundles.length > 0 && (
-            <p className="text-[10px] text-cyan-400 mt-2">
-              + {bundleModeBundles.length} bundle(s) in bundle mode ({bundleModeBundles.map(b => b.bundleId).join(", ")}) — bought as finished bundles, not drawing from this core.
-            </p>
-          )}
-        </div>
-
-        {/* Step 4: MOQ & casepack */}
-        <div className={`rounded-lg p-4 ${moqInflated ? "bg-orange-500/10 border border-orange-500/30" : "bg-gray-800/50"}`}>
-          <h3 className="text-sm font-semibold text-white mb-2">Step 4: Apply MOQ & casepack</h3>
-          <div className="grid grid-cols-4 gap-3 text-center text-xs">
-            <div>
-              <div className="text-gray-500 text-[10px] uppercase">Raw need</div>
-              <div className="text-white font-bold text-base">{fmtN(needPieces)}</div>
-            </div>
-            <div>
-              <div className="text-gray-500 text-[10px] uppercase">MOQ</div>
-              <div className="text-gray-300 font-bold text-base">{fmtN(core.moq || 0)}</div>
-            </div>
-            <div>
-              <div className="text-gray-500 text-[10px] uppercase">Casepack</div>
-              <div className="text-gray-300 font-bold text-base">{fmtN(core.casePack || 1)}</div>
-            </div>
-            <div>
-              <div className="text-gray-500 text-[10px] uppercase">Final order</div>
-              <div className={`font-bold text-base ${moqInflated ? "text-orange-300" : "text-emerald-400"}`}>{fmtN(finalQty)}</div>
-            </div>
-          </div>
-          {moqInflated && (
-            <div className="mt-3 pt-3 border-t border-orange-500/30 text-xs text-orange-200">
-              ⚠ MOQ/casepack forces buying {Math.round(moqRatio * 100)}% of real need.
-              Excess inventory: <span className="font-bold">{fmtN(excessFromMoq)}</span> pcs · Excess cost: <span className="font-bold">{fmt$(excessCostFromMoq)}</span>
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
+  return <div className="absolute z-50 mt-1
