@@ -1,5 +1,5 @@
 // src/App.jsx
-import React, { useState, useMemo, useCallback, useEffect, useTransition } from "react";
+import React, { useState, useMemo, useCallback, useEffect, useTransition, useRef } from "react";
 import { fetchLive, fetchHistory, refreshHistoryOnServer, fetchInfo, apiPost } from "./lib/api";
 import { R, D1, gS, fTs, gTD, isD, cAI, cNQ } from "./lib/utils";
 import { Loader, Stg, QuickSum, SumCtx, SlidePanel, Dot, WorkflowChip, VendorNotes } from "./components/Shared";
@@ -81,6 +81,7 @@ const DEFAULT_GL = [
   { term: "Z", desc: "Service-level multiplier. 95% = 1.65 (buffer 1.65 × σ_LT), 97% = 1.88, 99% = 2.33." },
   { term: "Safety Stock", desc: "Z × σ_LT. Statistical buffer that grows with volatility, shrinks when demand is stable." },
   { term: "Tracking Signal", desc: "Sum of forecast errors ÷ MAD. |TS| > 4 means forecast is biased — review." },
+  { term: "Confidence", desc: "Forecast reliability. LOW = majority of bundles have biased forecast (TS > 4) or detected demand regime shift — recommendation may be inflated." },
 ];
 
 function GlossTab() {
@@ -120,7 +121,6 @@ const EMPTY_DATA = {
   bundleSales: [], priceHist: [], coreDays: [], bundleDays: [], coreDaysForecast: [], bundleDaysForecast: []
 };
 
-// v3 defaults — service level, forecasting params, anomaly detection
 const DEFAULT_SETTINGS = {
   buyer: '',
   domesticDoc: 90,
@@ -130,7 +130,6 @@ const DEFAULT_SETTINGS = {
   moqInflationThreshold: 1.5,
   moqExtraDocThreshold: 30,
   fA: "yes", fI: "blank", fV: "yes",
-  // v3 forecasting
   holtAlpha: 0.2,
   holtBeta: 0.1,
   hampelWindow: 7,
@@ -148,7 +147,6 @@ export default function App() {
   const initVendorParam = urlParams.get('vendor');
   const initTab = urlParams.get('tab');
 
-  // [FIX] useTransition hook — required for startTransition() calls below
   const [, startTransition] = useTransition();
 
   const [tab, setTab] = useState(initCore ? "core" : initBundle ? "bundle" : initVendorParam ? "purchasing" : initTab || "dashboard");
@@ -183,6 +181,57 @@ export default function App() {
   const addCell = useCallback((v, remove) => { if (remove) setSumCells(p => p.filter(x => x !== v)); else setSumCells(p => [...p, v]) }, []);
   const clearSum = useCallback(() => setSumCells([]), []);
 
+  // [SCROLL-FIX] Save scroll position when opening a panel, restore when closing.
+  // Stores per-tab scroll positions so that navigating between tabs doesn't lose context.
+  const scrollPositions = useRef({});
+  const savedScrollBeforePanel = useRef(null);
+
+  // Save scroll when panel opens
+  const openPanelCore = useCallback((id) => {
+    savedScrollBeforePanel.current = window.scrollY;
+    setPanelCoreId(id);
+    setPanelBundleId(null);
+    clearSum();
+  }, [clearSum]);
+
+  const openPanelBundle = useCallback((id) => {
+    if (savedScrollBeforePanel.current === null) {
+      savedScrollBeforePanel.current = window.scrollY;
+    }
+    setPanelBundleId(id);
+    clearSum();
+  }, [clearSum]);
+
+  const closePanel = useCallback(() => {
+    setPanelCoreId(null);
+    setPanelBundleId(null);
+    clearSum();
+    // Restore scroll position after React re-renders
+    const target = savedScrollBeforePanel.current;
+    savedScrollBeforePanel.current = null;
+    if (target !== null && target !== undefined) {
+      requestAnimationFrame(() => {
+        window.scrollTo({ top: target, behavior: 'instant' });
+      });
+    }
+  }, [clearSum]);
+
+  // Save scroll per tab on tab change
+  const changeTab = useCallback((newTab) => {
+    scrollPositions.current[tab] = window.scrollY;
+    startTransition(() => {
+      setPrevTab(tab);
+      setTab(newTab);
+      if (newTab !== "core") setCoreId(null);
+      if (newTab !== "bundle") setBundleId(null);
+      clearSum();
+    });
+    requestAnimationFrame(() => {
+      const saved = scrollPositions.current[newTab] || 0;
+      window.scrollTo({ top: saved, behavior: 'instant' });
+    });
+  }, [tab, clearSum]);
+
   const loadLive = useCallback(async ({ forceRefresh = false } = {}) => {
     setLiveStatus({ loading: true, error: null, version: null });
     try {
@@ -208,7 +257,6 @@ export default function App() {
         vendorComments: live.vendorComments || [],
         coreDays: live.coreDays || [],
         bundleDays: live.bundleDays || []
-
       }));
       setLiveStatus({ loading: false, error: null, version: live.version || null, partial: live.partial || false });
     } catch (e) {
@@ -232,7 +280,6 @@ export default function App() {
         coreDaysForecast: history.coreDaysForecast || [],
         bundleDaysForecast: history.bundleDaysForecast || []
       }));
-      
       setHistoryStatus({
         loading: false,
         error: null,
@@ -316,12 +363,6 @@ export default function App() {
     return m;
   }, [data.vendors, data.receivingFull]);
 
-  // [PERF-FIX] Pre-compute seasonal profiles ONCE here.
-  // Deps: only bundles and bundleSales. This means when you change settings
-  // (stg), filters, or anything else, this cache is NOT rebuilt — it's reused.
-  // Before this fix: profileCache rebuilt inside batchVendorRecommendations every time
-  // -> O(bundles × bundleSales) = ~40M ops × every re-render = 12 seconds.
-  // After: cache built once per data load, then reused across all recalculations.
   const seasonalProfiles = useMemo(() => {
     if (!data.bundles?.length) return {};
     const t0 = performance.now();
@@ -353,7 +394,7 @@ export default function App() {
       priceCompFull: (data.priceCompFull?.length ? data.priceCompFull : data.priceComp) || [],
       settings: stg,
       purchFreqMap,
-      seasonalProfiles,  // [PERF-FIX] pass pre-computed cache
+      seasonalProfiles,
     });
     const t1 = performance.now();
     console.log(`[PERF] vendorRecs took ${(t1-t0).toFixed(0)}ms for ${Object.keys(result).length} vendors`);
@@ -375,8 +416,16 @@ export default function App() {
     return c;
   }, [data, stg]);
 
-  const goCore = useCallback(id => { if (tab === "purchasing") { setPanelCoreId(id); setPanelBundleId(null); clearSum() } else { setPrevTab(tab); setCoreId(id); setTab("core"); clearSum() } }, [tab]);
-  const goBundle = useCallback(id => { if (tab === "purchasing" || panelCoreId) { setPanelBundleId(id); clearSum() } else { setPrevTab(tab); setBundleId(id); setTab("bundle"); clearSum() } }, [tab, panelCoreId]);
+  const goCore = useCallback(id => {
+    if (tab === "purchasing") { openPanelCore(id); }
+    else { setPrevTab(tab); setCoreId(id); setTab("core"); clearSum(); }
+  }, [tab, openPanelCore, clearSum]);
+
+  const goBundle = useCallback(id => {
+    if (tab === "purchasing" || panelCoreId) { openPanelBundle(id); }
+    else { setPrevTab(tab); setBundleId(id); setTab("bundle"); clearSum(); }
+  }, [tab, panelCoreId, openPanelBundle, clearSum]);
+
   const goVendor = useCallback(n => { window.open(window.location.pathname + '?vendor=' + encodeURIComponent(n), '_blank') }, []);
   const clearIV = useCallback(() => setInitV(null), []);
   const handleBackFromCore = useCallback(() => setTab("purchasing"), []);
@@ -485,13 +534,7 @@ export default function App() {
                   window.open(window.location.pathname + '?tab=' + t.id, '_blank');
                   return;
                 }
-                startTransition(() => {
-                  setPrevTab(tab);
-                  setTab(t.id);
-                  if (t.id !== "core") setCoreId(null);
-                  if (t.id !== "bundle") setBundleId(null);
-                  clearSum();
-                });
+                changeTab(t.id);
               }}
               className={`px-4 py-2.5 text-sm font-medium border-b-2 whitespace-nowrap ${tab === t.id ? "border-blue-500 text-blue-400" : "border-transparent text-gray-500 hover:text-gray-300"}`}
             >
@@ -517,9 +560,9 @@ export default function App() {
       </main>
 
       {showS && <Stg s={stg} setS={setStg} onClose={() => setShowS(false)} />}
-      <SlidePanel open={!!(panelCoreId || panelBundleId)} onClose={() => { setPanelCoreId(null); setPanelBundleId(null); clearSum() }}>
-        {panelBundleId ? <BundleTab data={data} stg={stg} hist={{ coreInv: data.coreInv, bundleSales: data.bundleSales, bundleInv: data.bundleInv, priceHist: data.priceHist }} daily={{ coreDays: data.coreDays, bundleDays: data.bundleDays }} bundleId={panelBundleId} onBack={() => { setPanelBundleId(null); if (!panelCoreId) setPanelCoreId(null) }} goCore={id => { setPanelBundleId(null); setPanelCoreId(id) }} />
-        : panelCoreId ? <CoreTab data={data} stg={stg} hist={{ coreInv: data.coreInv, bundleSales: data.bundleSales, priceHist: data.priceHist }} daily={{ coreDays: data.coreDays, bundleDays: data.bundleDays }} coreId={panelCoreId} onBack={() => setPanelCoreId(null)} goBundle={id => setPanelBundleId(id)} />
+      <SlidePanel open={!!(panelCoreId || panelBundleId)} onClose={closePanel}>
+        {panelBundleId ? <BundleTab data={data} stg={stg} hist={{ coreInv: data.coreInv, bundleSales: data.bundleSales, bundleInv: data.bundleInv, priceHist: data.priceHist }} daily={{ coreDays: data.coreDays, bundleDays: data.bundleDays }} bundleId={panelBundleId} onBack={() => { setPanelBundleId(null); if (!panelCoreId) closePanel(); }} goCore={id => { setPanelBundleId(null); setPanelCoreId(id) }} />
+        : panelCoreId ? <CoreTab data={data} stg={stg} hist={{ coreInv: data.coreInv, bundleSales: data.bundleSales, priceHist: data.priceHist }} daily={{ coreDays: data.coreDays, bundleDays: data.bundleDays }} coreId={panelCoreId} onBack={closePanel} goBundle={id => setPanelBundleId(id)} />
         : null}
       </SlidePanel>
       <QuickSum cells={sumCells} onClear={clearSum} />
