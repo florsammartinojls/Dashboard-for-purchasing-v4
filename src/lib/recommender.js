@@ -1,8 +1,17 @@
 // src/lib/recommender.js
 // ============================================================
-// v3 Purchase Recommendation Engine
+// v3.1 Purchase Recommendation Engine (FIXED)
 // ============================================================
-// Core principles (v2 kept) PLUS:
+// NEW in v3.1:
+//   [FIX-YoY] After calcBundleForecast returns, compare total demand
+//             (coverageDemand + safetyStock) against the same calendar
+//             window one year ago. If today's forecast is more than
+//             MAX_YOY_RATIO × historic, cap it at that ratio and flag.
+//             This is a model-agnostic guardrail: it catches the JLS-1265
+//             case (forecast 4,911 when LY same period was ~2,200) even
+//             if Holt+TS gate somehow miss it.
+//
+// v3 principles (unchanged):
 //   9.  Baseline forecast uses Hampel + Holt (not raw DSR). Industry-standard.
 //   10. Safety stock = Z × σ_LT with Z from service-level-by-ABC.
 //   11. Inventory anomalies are detected and corrected before waterfall.
@@ -10,8 +19,19 @@
 // ============================================================
 
 import { calcBundleSeasonalProfile, DEFAULT_PROFILE } from './seasonal.js';
-import { calcBundleForecast } from './forecast.js';
+import { calcBundleForecast, calcHistoricSamePeriod } from './forecast.js';
 import { detectVendorAnomalies } from './anomalyDetector.js';
+
+// [FIX-YoY] If forecast > MAX_YOY_RATIO × historic LY same-period sales,
+// cap it at that ratio. 1.5 means "we'll forecast up to 50% more than LY
+// but never more than that without manual review". Set high enough to allow
+// genuine growth, low enough to catch runaway models.
+export const MAX_YOY_RATIO = 1.5;
+
+// Minimum LY sales to trust the sanity check. If LY same-period was < 30
+// units total, YoY ratios are noise (e.g. going from 5 → 25 is +400% but
+// meaningless). Skip the check entirely in that case.
+export const MIN_HISTORIC_FOR_YOY = 30;
 
 // ────────────────────────────────────────────────────────────
 // 7g vendor-specific material cost lookup (unchanged from v2)
@@ -129,6 +149,60 @@ function isSpikeVisual(b, threshold) {
   const d7 = num(b.d7comp);
   const t = num(threshold, DEFAULT_SPIKE_THRESHOLD);
   return d7 > 0 && cd > 0 && d7 >= t * cd;
+}
+
+// [FIX-YoY] Apply YoY sanity check to a bundle forecast. Mutates the
+// forecast object's coverageDemand and flags; returns info about the cap
+// for logging/UI. Returns null if check was not applicable (not enough
+// history), so we know to skip the flag.
+function applyYoYSanityCheck(forecast, bundleId, bundleDays, targetDoc) {
+  if (!forecast || forecast.flags.noData) return null;
+
+  const historic = calcHistoricSamePeriod(bundleDays, bundleId, targetDoc);
+  if (!historic) return { applied: false, reason: 'no_history' };
+  if (historic.total < MIN_HISTORIC_FOR_YOY) {
+    return { applied: false, reason: 'historic_too_small', historic: historic.total };
+  }
+
+  const forecastTotal = forecast.coverageDemand; // before safety stock
+  const maxAllowed = historic.total * MAX_YOY_RATIO;
+
+  if (forecastTotal <= maxAllowed) {
+    return {
+      applied: false,
+      reason: 'within_bounds',
+      historic: historic.total,
+      forecast: forecastTotal,
+      ratio: forecastTotal / historic.total,
+    };
+  }
+
+  // Cap the forecast. Preserve the structure: scale down coverageDemand
+  // proportionally and recompute demandBreakdown for transparency.
+  const scale = maxAllowed / forecastTotal;
+  const cappedTotal = maxAllowed;
+  const originalTotal = forecastTotal;
+
+  forecast.coverageDemand = cappedTotal;
+  forecast.demandBreakdown = {
+    fromLevel: Math.round(forecast.demandBreakdown.fromLevel * scale),
+    fromTrend: Math.round(forecast.demandBreakdown.fromTrend * scale),
+    fromSeasonal: Math.round(forecast.demandBreakdown.fromSeasonal * scale),
+    total: Math.round(cappedTotal),
+  };
+  forecast.flags.yoyCapApplied = true;
+  forecast.flags.yoyHistoric = Math.round(historic.total);
+  forecast.flags.yoyOriginalForecast = Math.round(originalTotal);
+  forecast.flags.yoyScale = scale;
+
+  return {
+    applied: true,
+    historic: historic.total,
+    originalForecast: originalTotal,
+    cappedForecast: cappedTotal,
+    ratio: originalTotal / historic.total,
+    scale,
+  };
 }
 
 // ────────────────────────────────────────────────────────────
@@ -314,6 +388,10 @@ export function calcVendorRecommendation({
       settings,
     });
 
+    // [FIX-YoY] Apply YoY sanity check. Mutates `forecast` in place when a
+    // cap is applied. Info object is stored for debugging / UI.
+    const yoyInfo = applyYoYSanityCheck(forecast, b.j, bundleDays, targetDoc);
+
     const ai = bundleAssignedInv(b, replenMap, missingMap);
     const fallbackDsr = num(b.cd);
 
@@ -336,6 +414,7 @@ export function calcVendorRecommendation({
       urgent: false,
       // forecast outputs
       forecast,
+      yoyInfo,                     // [FIX-YoY] for debugging / UI
       forecastLevel: forecast.flags.noData ? fallbackDsr : (forecast.level || fallbackDsr),
       // dsr kept for back-compat (urgency, DOC displays)
       dsr: forecast.flags.noData ? fallbackDsr : Math.max(forecast.level, fallbackDsr * 0.01),
@@ -538,7 +617,7 @@ export function calcVendorRecommendation({
   }
 
   // ──────────────────────────────────────────────────────────
-  // Bundle details (extended with forecast + safety stock)
+  // Bundle details (extended with forecast + safety stock + YoY info)
   // ──────────────────────────────────────────────────────────
   const bundleDetails = prepped.map(b => ({
     bundleId: b.id,
@@ -560,10 +639,10 @@ export function calcVendorRecommendation({
     bundleMoqStatus: b.bundleMoqStatus || null,
     bundleMoqExtraDOC: b.bundleMoqExtraDOC || 0,
     bundleMoqOriginalNeed: b.bundleMoqOriginalNeed ?? b.buyNeed,
-    // NEW v3 fields
     forecast: {
       level: b.forecast.level,
       trend: b.forecast.trend,
+      effectiveTrend: b.forecast.effectiveTrend,    // [FIX-3] trend actually used
       usedHolt: b.forecast.flags.usedHolt,
       outliersRemoved: b.forecast.flags.outliersRemoved,
     },
@@ -576,13 +655,18 @@ export function calcVendorRecommendation({
     },
     demandBreakdown: b.forecast.demandBreakdown,
     spikeVisual: b.spikeVisual,
+    yoyInfo: b.yoyInfo,          // [FIX-YoY] null or { applied, historic, ... }
     flags: {
       trackingSignalExceeded: b.forecast.flags.trackingSignalExceeded,
       trackingSignal: b.forecast.flags.trackingSignal,
+      trendGatedByTS: b.forecast.flags.trendGatedByTS,  // [FIX-3] new
       shortHistory: b.forecast.flags.shortHistory,
       trendCapped: b.forecast.flags.trendCapped,
       safetyStockFallback: b.forecast.flags.safetyStockFallback,
       outliersRemoved: b.forecast.flags.outliersRemoved,
+      yoyCapApplied: b.forecast.flags.yoyCapApplied || false,    // [FIX-YoY]
+      yoyHistoric: b.forecast.flags.yoyHistoric,
+      yoyOriginalForecast: b.forecast.flags.yoyOriginalForecast,
     },
   }));
 
