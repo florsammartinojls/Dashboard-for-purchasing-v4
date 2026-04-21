@@ -325,13 +325,7 @@ export default function CoreTab({ data, stg, hist, daily, coreId, onBack, goBund
 
   const etaT = useMemo(() => inbS.filter(s => s.eta).map(s => fE(s.eta)).join(", "), [inbS]);
   const cDays = useMemo(() => (daily?.coreDays || []).filter(d => d.core === sel).sort((a, b) => b.date.localeCompare(a.date)).slice(0, 14), [daily, sel]);
-  useEffect(() => {
-  if (cDays.length > 0) {
-    console.log('=== cDays[0] ===', cDays[0]);
-    console.log('=== keys ===', Object.keys(cDays[0]));
-    console.log('=== fba value ===', cDays[0].fba, typeof cDays[0].fba);
-  }
-}, [cDays]);
+
 
   // === SEARCH VIEW ===
   if (!core) return (
