@@ -512,21 +512,72 @@ export function calcVendorRecommendation({
     }
   }
 
-  // Step 8.5: sanity — if core's all-in already covers target DOC, don't buy
+  // ──────────────────────────────────────────────────────────
+  // Step 8.5: core-level sanity check — HARD CAP at target DOC
+  // ──────────────────────────────────────────────────────────
+  // If the core as a whole already has ≥ target DOC worth of stock,
+  // recommend 0. No buffer — strict rule. A core at 201 DOC with
+  // target 180 will recommend 0, period.
+  //
+  // This overrides the bundle-level forecast even if individual
+  // bundles appear short. Rationale: cores are fungible inventory —
+  // the waterfall will redistribute raw across bundles as they sell.
+  // If total core DOC ≥ target, all bundles can be serviced by the
+  // existing pool until the next replen cycle.
+  //
+  // Note: we use the SAME all-in definition as the UI (C.DSR and
+  // "All-In Own Pcs" on the Core Detail page), which includes ALL
+  // intermediate states — not just raw+pp+inb+fba.
+  const coreSanityLog = {}; // for coreDetails output
+
+  const computeCoreAllIn = (c) =>
+    num(c.raw) + num(c.inb) + num(c.pp) + num(c.jfn) +
+    num(c.pq)  + num(c.ji)  + num(c.fba);
+
+  // Apply to CORE-mode items
   for (const coreId of Object.keys(coreNeedMap)) {
     const core = vCoreById[coreId];
     if (!core) continue;
-    const allIn = num(core.raw) + num(core.pp) + num(core.inb) + num(core.fba);
+    const allIn = computeCoreAllIn(core);
     const coreDSR = num(core.dsr);
     if (coreDSR <= 0) continue;
     const coreDOC = allIn / coreDSR;
-    if (coreDOC > targetDoc * 1.2) {
+
+    if (coreDOC >= targetDoc) {
+      const originalNeed = coreNeedMap[coreId];
       coreNeedMap[coreId] = 0;
       if (!coreBundlesMap[coreId]) coreBundlesMap[coreId] = [];
       coreBundlesMap[coreId]._redistributeFlag = true;
+      coreSanityLog[coreId] = {
+        capped: true,
+        coreDOC: Math.round(coreDOC),
+        targetDoc,
+        allIn,
+        coreDSR,
+        originalNeed,
+      };
     }
   }
 
+  // Apply to BUNDLE-mode items: zero out buyNeed for bundles whose
+  // underlying cores are ALL above target DOC. If any core is short,
+  // the bundle still needs buying (no free lunch).
+  for (const b of prepped) {
+    if (b.buyNeed <= 0 || b.buyMode !== 'bundle') continue;
+    const allCoresHealthy = b.coresUsed.every(({ coreId }) => {
+      const core = vCoreById[coreId];
+      if (!core) return false;
+      const allIn = computeCoreAllIn(core);
+      const coreDSR = num(core.dsr);
+      if (coreDSR <= 0) return false;
+      return (allIn / coreDSR) >= targetDoc;
+    });
+    if (allCoresHealthy) {
+      b.bundleMoqStatus = 'core_level_capped';
+      b.bundleMoqOriginalNeed = b.buyNeed;
+      b.buyNeed = 0;
+    }
+  }
   // ──────────────────────────────────────────────────────────
   // Step 9: MOQ + casepack per core -> coreItems
   // ──────────────────────────────────────────────────────────
@@ -679,6 +730,7 @@ export function calcVendorRecommendation({
     const rawOnHand = num(c.raw);
     const rawEff = coreRawEffective[c.id];
     const anomaly = anomalyMap[c.id];
+    const sanityInfo = coreSanityLog[c.id] || null;
     return {
       coreId: c.id,
       needPieces: item?.needPieces || 0,
@@ -697,6 +749,7 @@ export function calcVendorRecommendation({
       totalPool: rawEff + pending,
       anomalyDetected: !!anomaly,
       anomalyInfo: anomaly || null,
+      coreSanityCap: sanityInfo,
     };
   });
 
