@@ -1,15 +1,15 @@
 // src/lib/recommender.js
 // ============================================================
-// v3.4 Purchase Recommendation Engine
+// v3.5 Purchase Recommendation Engine
 // ============================================================
-// NEW in v3.4:
-//   [CORE-TS-GUARD] Core-level tracking signal check. If ≥60% of bundles
-//                   for a core have |TS| > 4 (biased forecast), we flag
-//                   the core as LOW CONFIDENCE and cap its recommendation
-//                   at the core-level target (not bundle-level).
-//   [CONFIDENCE]    Each recommendation now returns a `confidence` score
-//                   (high/medium/low) + a `suggestedAction` with a plain
-//                   language recommendation. UI uses these for badges.
+// NEW in v3.5:
+//   [HARD-CAP] Final recommendation can NEVER exceed
+//              core_target_need × CORE_HARD_CAP_MULTIPLIER.
+//              This is the last-line enforcement: no matter what
+//              bundle-level forecasts say, the core purchase cannot
+//              push total inventory beyond 1.2× target DOC worth.
+//              This catches all cases where safety stock or bundle
+//              coverage demand is inflated relative to actual core need.
 // ============================================================
 
 import { calcBundleSeasonalProfile, DEFAULT_PROFILE } from './seasonal.js';
@@ -19,10 +19,12 @@ import { detectVendorAnomalies } from './anomalyDetector.js';
 export const MAX_YOY_RATIO = 1.5;
 export const MIN_HISTORIC_FOR_YOY = 30;
 export const CORE_CAP_MULTIPLIER = 1.1;
-
-// [CORE-TS-GUARD] If this fraction of bundles (or more) have |TS| > 4,
-// we consider the core's forecast unreliable.
 export const CORE_TS_BIAS_THRESHOLD = 0.6;
+
+// [HARD-CAP] Maximum recommendation as a multiple of core-target need.
+// 1.2 = rec can be at most 20% more than what core needs to hit target DOC.
+// This is a hard enforcement regardless of bundle-level calculations.
+export const CORE_HARD_CAP_MULTIPLIER = 1.2;
 
 function parseNoteVendor(note) {
   if (!note) return { kind: 'unknown', name: null };
@@ -279,8 +281,18 @@ function computeCoreAllIn(c) {
          num(c.pq)  + num(c.ji)  + num(c.fba);
 }
 
-// [CONFIDENCE] Evaluates how much we trust a core's recommendation.
-// Returns { confidence: 'high'|'medium'|'low', reasons: [], suggestedAction: string }
+// [HARD-CAP] Compute the maximum recommendation we will allow for a core.
+// This is: (target_doc × core_dsr - core_all_in) × CORE_HARD_CAP_MULTIPLIER
+// If core is already at/above target, returns 0.
+function computeCoreHardCap(core, targetDoc) {
+  const allIn = computeCoreAllIn(core);
+  const coreDSR = num(core.dsr);
+  if (coreDSR <= 0) return Infinity; // can't evaluate, don't cap
+  const targetInv = targetDoc * coreDSR;
+  const rawNeed = Math.max(0, targetInv - allIn);
+  return Math.ceil(rawNeed * CORE_HARD_CAP_MULTIPLIER);
+}
+
 function evaluateCoreConfidence(coreId, coreDetail, coreBundles, core, targetDoc) {
   const reasons = [];
 
@@ -288,33 +300,27 @@ function evaluateCoreConfidence(coreId, coreDetail, coreBundles, core, targetDoc
     return { confidence: 'high', reasons: [], suggestedAction: null, tsBiasedPct: 0, anyRegimeShift: false };
   }
 
-  // How many bundles have biased forecast?
-  const biased = coreBundles.filter(b =>
-    b.forecast?.flags?.trackingSignalExceeded
-  );
+  const biased = coreBundles.filter(b => b.forecast?.flags?.trackingSignalExceeded);
   const tsBiasedPct = biased.length / coreBundles.length;
 
-  // Any bundle with regime shift detected?
   const anyRegimeShift = coreBundles.some(b =>
     b.forecast?.flags?.recentRegimeApplied || b.forecast?.flags?.slowRegimeApplied
   );
 
-  // Core-level health
   const allIn = computeCoreAllIn(core);
   const coreDSR = num(core.dsr);
   const coreDOC = coreDSR > 0 ? allIn / coreDSR : 9999;
 
   if (tsBiasedPct >= CORE_TS_BIAS_THRESHOLD) {
-    reasons.push(`${Math.round(tsBiasedPct * 100)}% of bundles have biased forecast (TS > 4)`);
+    reasons.push(`${Math.round(tsBiasedPct * 100)}% of bundles have biased forecast`);
   }
   if (anyRegimeShift) {
-    reasons.push('Demand regime shift detected (declining sales)');
+    reasons.push('Demand regime shift detected');
   }
   if (coreDOC >= targetDoc) {
-    reasons.push(`Core already at ${Math.round(coreDOC)} DOC (target ${targetDoc})`);
+    reasons.push(`Core at ${Math.round(coreDOC)} DOC (target ${targetDoc})`);
   }
 
-  // Decide confidence
   let confidence = 'high';
   if (tsBiasedPct >= CORE_TS_BIAS_THRESHOLD || anyRegimeShift) {
     confidence = 'low';
@@ -322,19 +328,17 @@ function evaluateCoreConfidence(coreId, coreDetail, coreBundles, core, targetDoc
     confidence = 'medium';
   }
 
-  // Build a plain-language suggestion
   let suggestedAction = null;
-  const needPieces = coreDetail?.needPieces || 0;
   const finalQty = coreDetail?.finalQty || 0;
 
   if (finalQty === 0) {
-    suggestedAction = '✓ No action needed — inventory sufficient';
+    suggestedAction = '✓ No action needed';
   } else if (confidence === 'low' && coreDOC >= targetDoc * 0.9) {
-    suggestedAction = `⚠ Forecast unreliable + core near target. Consider waiting 30d before buying.`;
+    suggestedAction = `⚠ Forecast unreliable + core near target. Consider waiting 30d.`;
   } else if (confidence === 'low') {
-    suggestedAction = `⚠ Forecast unreliable. System recommends ${finalQty.toLocaleString()}, but review manually before ordering.`;
+    suggestedAction = `⚠ Forecast unreliable. Review before ordering ${finalQty.toLocaleString()}.`;
   } else if (confidence === 'medium') {
-    suggestedAction = `Order ${finalQty.toLocaleString()} pcs. Some forecast uncertainty — verify trend.`;
+    suggestedAction = `Order ${finalQty.toLocaleString()} pcs. Verify trend.`;
   } else {
     suggestedAction = `Order ${finalQty.toLocaleString()} pcs.`;
   }
@@ -506,9 +510,6 @@ export function calcVendorRecommendation({
 
   const coreSanityLog = {};
 
-  // ────────────────────────────────────────────
-  // [STEP-8.5 + CORE-TS-GUARD] Sanity checks
-  // ────────────────────────────────────────────
   for (const coreId of Object.keys(coreNeedMap)) {
     const core = vCoreById[coreId];
     if (!core) continue;
@@ -517,7 +518,7 @@ export function calcVendorRecommendation({
     if (coreDSR <= 0) continue;
     const coreDOC = allIn / coreDSR;
 
-    // (1) Core healthy: cap to 0
+    // Soft cap: core already healthy → 0
     if (coreDOC >= targetDoc * CORE_CAP_MULTIPLIER) {
       const originalNeed = coreNeedMap[coreId];
       coreNeedMap[coreId] = 0;
@@ -536,44 +537,29 @@ export function calcVendorRecommendation({
       continue;
     }
 
-    // (2) Core-level TS bias guard: if majority of bundles for this core have
-    // biased forecast, cap recommendation to only what the core needs at
-    // target DOC (don't trust bundle-level need projections).
-    const coreBundleIds = coreBundlesMap[coreId] || [];
-    const coreBundlesData = prepped.filter(b => coreBundleIds.includes(b.id));
-    const biasedCount = coreBundlesData.filter(b =>
-      b.forecast?.flags?.trackingSignalExceeded
-    ).length;
-    const biasedPct = coreBundlesData.length > 0
-      ? biasedCount / coreBundlesData.length
-      : 0;
-
-    if (biasedPct >= CORE_TS_BIAS_THRESHOLD && coreBundlesData.length >= 3) {
-      // Cap to core-level need only (no bundle-level inflation)
-      const coreTargetInv = coreDSR * targetDoc;
-      const coreLevelNeed = Math.max(0, Math.ceil(coreTargetInv - allIn));
-      const originalNeed = coreNeedMap[coreId];
-
-      if (coreLevelNeed < originalNeed) {
-        coreNeedMap[coreId] = coreLevelNeed;
-        coreSanityLog[coreId] = {
-          capped: true,
-          reason: 'ts_bias',
-          coreDOC: Math.round(coreDOC),
-          targetDoc,
-          biasedPct: Math.round(biasedPct * 100),
-          biasedCount,
-          totalBundles: coreBundlesData.length,
-          originalNeed,
-          cappedNeed: coreLevelNeed,
-        };
-      }
+    // [HARD-CAP] Always enforce: rec ≤ core_target_need × CORE_HARD_CAP_MULTIPLIER
+    const hardCap = computeCoreHardCap(core, targetDoc);
+    const currentNeed = coreNeedMap[coreId];
+    if (currentNeed > hardCap) {
+      coreNeedMap[coreId] = hardCap;
+      coreSanityLog[coreId] = {
+        capped: true,
+        reason: 'hard_cap_core_target',
+        coreDOC: Math.round(coreDOC),
+        targetDoc,
+        hardCapMultiplier: CORE_HARD_CAP_MULTIPLIER,
+        allIn,
+        coreDSR,
+        originalNeed: currentNeed,
+        cappedNeed: hardCap,
+      };
     }
   }
 
-  // Bundle-mode cap
+  // Bundle-mode: apply hard cap there too
   for (const b of prepped) {
     if (b.buyNeed <= 0 || b.buyMode !== 'bundle') continue;
+
     const allCoresHealthy = b.coresUsed.every(({ coreId }) => {
       const core = vCoreById[coreId];
       if (!core) return false;
@@ -586,6 +572,29 @@ export function calcVendorRecommendation({
       b.bundleMoqStatus = 'core_level_capped';
       b.bundleMoqOriginalNeed = b.buyNeed;
       b.buyNeed = 0;
+      continue;
+    }
+
+    // [HARD-CAP] For bundle mode, the bundle's buyNeed (in bundle units)
+    // translates to core pieces. Check that total pieces consumed don't exceed
+    // hard cap per core.
+    let capRatio = 1;
+    for (const { coreId, qty } of b.coresUsed) {
+      const core = vCoreById[coreId];
+      if (!core) continue;
+      const hardCap = computeCoreHardCap(core, targetDoc);
+      const piecesForThisCore = b.buyNeed * qty;
+      if (piecesForThisCore > hardCap && hardCap > 0) {
+        const ratio = hardCap / piecesForThisCore;
+        if (ratio < capRatio) capRatio = ratio;
+      } else if (hardCap === 0) {
+        capRatio = 0;
+      }
+    }
+    if (capRatio < 1) {
+      b.bundleMoqOriginalNeed = b.buyNeed;
+      b.buyNeed = Math.floor(b.buyNeed * capRatio);
+      b.bundleMoqStatus = capRatio === 0 ? 'core_level_capped' : 'hard_capped';
     }
   }
 
@@ -736,7 +745,6 @@ export function calcVendorRecommendation({
     const anomaly = anomalyMap[c.id];
     const sanityInfo = coreSanityLog[c.id] || null;
 
-    // [CONFIDENCE] evaluate confidence for this core
     const coreBundleIds = coreBundlesMap[c.id] || [];
     const coreBundlesData = prepped.filter(b => coreBundleIds.includes(b.id));
     const coreDetailTemp = { needPieces: item?.needPieces || 0, finalQty: item?.finalQty || 0 };
@@ -761,7 +769,6 @@ export function calcVendorRecommendation({
       anomalyDetected: !!anomaly,
       anomalyInfo: anomaly || null,
       coreSanityCap: sanityInfo,
-      // [CONFIDENCE] new fields
       confidence: confidenceResult.confidence,
       confidenceReasons: confidenceResult.reasons,
       suggestedAction: confidenceResult.suggestedAction,
