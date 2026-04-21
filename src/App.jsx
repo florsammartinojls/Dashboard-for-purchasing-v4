@@ -1,3 +1,4 @@
+// src/App.jsx
 import React, { useState, useMemo, useCallback, useEffect } from "react";
 import { fetchLive, fetchHistory, refreshHistoryOnServer, fetchInfo, apiPost } from "./lib/api";
 import { R, D1, gS, fTs, gTD, isD, cAI, cNQ } from "./lib/utils";
@@ -73,6 +74,12 @@ const DEFAULT_GL = [
   { term: "Critical", desc: "DOC ≤ Lead Time. Needs immediate action." },
   { term: "Warning", desc: "DOC ≤ Lead Time + Buffer Days. Monitor closely." },
   { term: "Healthy", desc: "DOC > Lead Time + Buffer. Sufficient inventory." },
+  { term: "Forecast Level", desc: "Holt-smoothed baseline DSR. Replaces raw DSR for calculations — more stable than a 7-day or 30-day average." },
+  { term: "Trend", desc: "Holt-estimated change in DSR per day. Positive = demand rising." },
+  { term: "σ_LT (sigma LT)", desc: "Standard deviation of demand during lead time. Measures volatility." },
+  { term: "Z", desc: "Service-level multiplier. 95% = 1.65 (buffer 1.65 × σ_LT), 97% = 1.88, 99% = 2.33." },
+  { term: "Safety Stock", desc: "Z × σ_LT. Statistical buffer that grows with volatility, shrinks when demand is stable." },
+  { term: "Tracking Signal", desc: "Sum of forecast errors ÷ MAD. |TS| > 4 means forecast is biased — review." },
 ];
 
 function GlossTab() {
@@ -93,7 +100,6 @@ function GlossTab() {
   </div>;
 }
 
-// === MAIN APP ===
 const TABS = [
   { id: "dashboard", l: "Dashboard" },
   { id: "purchasing", l: "Purchasing" },
@@ -105,13 +111,33 @@ const TABS = [
   { id: "glossary", l: "Glossary" }
 ];
 
-// Empty data shape — used as initial state and as fallback if a load fails
 const EMPTY_DATA = {
   cores: [], bundles: [], vendors: [], sales: [], fees: [], inbound: [],
   abcA: [], abcT: [], abcSub: '', restock: [], priceComp: [], agedInv: [],
   killMgmt: [], workflow: [], receiving: [], replenRec: [], receivingFull: [],
   vendorComments: [], priceCompFull: [], coreInv: [], bundleInv: [],
   bundleSales: [], priceHist: [], coreDays: [], bundleDays: []
+};
+
+// v3 defaults — service level, forecasting params, anomaly detection
+const DEFAULT_SETTINGS = {
+  buyer: '',
+  domesticDoc: 90,
+  intlDoc: 180,
+  replenFloorDoc: 80,
+  spikeThreshold: 1.25,
+  moqInflationThreshold: 1.5,
+  moqExtraDocThreshold: 30,
+  fA: "yes", fI: "blank", fV: "yes",
+  // v3 forecasting
+  holtAlpha: 0.2,
+  holtBeta: 0.1,
+  hampelWindow: 7,
+  hampelThreshold: 3,
+  serviceLevelA: 97,
+  serviceLevelOther: 95,
+  inventoryAnomalyMultiplier: 3,
+  anomalyLookbackDays: 7,
 };
 
 export default function App() {
@@ -123,14 +149,12 @@ export default function App() {
 
   const [tab, setTab] = useState(initCore ? "core" : initBundle ? "bundle" : initVendorParam ? "purchasing" : initTab || "dashboard");
   const [showS, setShowS] = useState(false);
-  const [stg, setStg] = useState({ buyer: '', domesticDoc: 90, intlDoc: 180, replenFloorDoc: 80, spikeThreshold: 1.25, moqInflationThreshold: 1.5, fA: "yes", fI: "blank", fV: "yes" });
+  const [stg, setStg] = useState(DEFAULT_SETTINGS);
   const [coreId, setCoreId] = useState(initCore || null);
   const [bundleId, setBundleId] = useState(initBundle || null);
 
-  // Data state — combined from live + history
   const [data, setData] = useState(EMPTY_DATA);
 
-  // Load status — separate flags so we can show partial UI
   const [liveStatus, setLiveStatus] = useState({ loading: true, error: null, version: null });
   const [historyStatus, setHistoryStatus] = useState({ loading: true, error: null, version: null, fromCache: false });
   const [refreshingHistory, setRefreshingHistory] = useState(false);
@@ -144,11 +168,10 @@ export default function App() {
   const addCell = useCallback((v, remove) => { if (remove) setSumCells(p => p.filter(x => x !== v)); else setSumCells(p => [...p, v]) }, []);
   const clearSum = useCallback(() => setSumCells([]), []);
 
-  // ─── LOAD LIVE DATA ───
-const loadLive = useCallback(async ({ forceRefresh = false } = {}) => {
-  setLiveStatus({ loading: true, error: null, version: null });
-  try {
-    const live = await fetchLive(null, { forceRefresh });
+  const loadLive = useCallback(async ({ forceRefresh = false } = {}) => {
+    setLiveStatus({ loading: true, error: null, version: null });
+    try {
+      const live = await fetchLive(null, { forceRefresh });
       setData(prev => ({
         ...prev,
         cores: live.cores || [],
@@ -178,7 +201,6 @@ const loadLive = useCallback(async ({ forceRefresh = false } = {}) => {
     }
   }, []);
 
-  // ─── LOAD HISTORY DATA ───
   const loadHistory = useCallback(async ({ forceRefresh = false } = {}) => {
     setHistoryStatus(prev => ({ ...prev, loading: true, error: null }));
     try {
@@ -204,13 +226,11 @@ const loadLive = useCallback(async ({ forceRefresh = false } = {}) => {
     }
   }, []);
 
-  // Force refresh history on the SERVER (slow ~3 min) then re-download
   const forceServerHistoryRefresh = useCallback(async () => {
     if (refreshingHistory) return;
     setRefreshingHistory(true);
     try {
       await refreshHistoryOnServer();
-      // Clear local cache and re-download
       await loadHistory({ forceRefresh: true });
     } catch (e) {
       alert('History server refresh failed: ' + e.message);
@@ -219,13 +239,11 @@ const loadLive = useCallback(async ({ forceRefresh = false } = {}) => {
     }
   }, [refreshingHistory, loadHistory]);
 
-  // Initial load: fire both in parallel
   useEffect(() => {
     loadLive();
     loadHistory();
   }, [loadLive, loadHistory]);
 
-  // Build the data object exactly like the old code expected (for back-compat with existing components)
   const dataH = useMemo(() => ({
     ...data,
     _coreInv: data.coreInv,
@@ -233,7 +251,6 @@ const loadLive = useCallback(async ({ forceRefresh = false } = {}) => {
     _bundleSales: data.bundleSales
   }), [data]);
 
-  // Active bundle cores
   const activeBundleCores = useMemo(() => {
     const set = new Set();
     const activeBundleJLS = new Set();
@@ -257,7 +274,6 @@ const loadLive = useCallback(async ({ forceRefresh = false } = {}) => {
     return set;
   }, [data.bundles, data.cores, stg]);
 
-  // === CENTRALIZED RECOMMENDER — computed once, shared by Dashboard + PurchTab ===
   const replenMap = useMemo(() => {
     const m = {};
     (data.replenRec || []).forEach(r => { m[r.j] = r });
@@ -288,6 +304,9 @@ const loadLive = useCallback(async ({ forceRefresh = false } = {}) => {
       cores: data.cores || [],
       bundles: data.bundles || [],
       bundleSales: data.bundleSales || [],
+      bundleDays: data.bundleDays || [],
+      coreDays: data.coreDays || [],
+      abcA: data.abcA || [],
       receivingFull: data.receivingFull || [],
       replenMap,
       missingMap,
@@ -295,7 +314,8 @@ const loadLive = useCallback(async ({ forceRefresh = false } = {}) => {
       settings: stg,
       purchFreqMap,
     });
-  }, [data.vendors, data.cores, data.bundles, data.bundleSales, data.receivingFull, data.priceCompFull, data.priceComp, replenMap, missingMap, stg, purchFreqMap]);
+  }, [data.vendors, data.cores, data.bundles, data.bundleSales, data.bundleDays, data.coreDays, data.abcA, data.receivingFull, data.priceCompFull, data.priceComp, replenMap, missingMap, stg, purchFreqMap]);
+
   const sc = useMemo(() => {
     const c = { critical: 0, warning: 0, healthy: 0 };
     (data.cores || []).forEach(x => {
@@ -335,7 +355,6 @@ const loadLive = useCallback(async ({ forceRefresh = false } = {}) => {
     } catch (e) { console.error('Vendor comment save error:', e); alert('Failed to save vendor comment: ' + e.message); }
   }, []);
 
-  // ─── LOADING / ERROR SCREENS ───
   if (liveStatus.loading && !data.cores.length) {
     return <div className="min-h-screen bg-gray-950"><Loader text="Loading live data..." /></div>;
   }
@@ -350,7 +369,6 @@ const loadLive = useCallback(async ({ forceRefresh = false } = {}) => {
     </div>;
   }
 
-  // ─── FRESHNESS BADGE ───
   const fmtVersion = (v) => {
     if (!v) return '—';
     try {
@@ -372,7 +390,6 @@ const loadLive = useCallback(async ({ forceRefresh = false } = {}) => {
             <span className="text-xs text-emerald-400 bg-emerald-400/10 px-2 py-0.5 rounded font-medium">LIVE — {data.cores.length}</span>
             {stg.buyer && <span className="text-xs text-gray-400 bg-gray-800 px-2 py-0.5 rounded">{stg.buyer}</span>}
 
-            {/* Freshness badge */}
             <div className="flex items-center gap-2 text-xs">
               <span className={liveColor} title={`Live data version: ${fmtVersion(liveStatus.version)}`}>
                 ● Live {liveAgeMin != null ? `${liveAgeMin}m` : '—'}
@@ -401,7 +418,6 @@ const loadLive = useCallback(async ({ forceRefresh = false } = {}) => {
           </div>
         </div>
 
-        {/* History error banner — non-blocking, just informative */}
         {historyStatus.error && !historyStatus.loading && (
           <div className="max-w-7xl mx-auto mt-2 px-3 py-1.5 bg-red-500/10 border border-red-500/30 rounded text-xs text-red-300">
             ⚠ History data failed to load: {historyStatus.error}. Some charts and seasonal calculations may be empty. <button onClick={() => loadHistory({ forceRefresh: true })} className="underline ml-1">Retry</button>
@@ -421,6 +437,7 @@ const loadLive = useCallback(async ({ forceRefresh = false } = {}) => {
       <main className="max-w-7xl mx-auto">
        {tab === "dashboard" && <DashboardSummary data={dataH} stg={stg} vendorRecs={vendorRecs} goVendor={goVendor} workflow={data.workflow} saveWorkflow={saveWorkflow} deleteWorkflow={deleteWorkflow} vendorComments={data.vendorComments} saveVendorComment={saveVendorComment} onEnterPurchasing={() => setTab("purchasing")} activeBundleCores={activeBundleCores} />}
         {tab === "purchasing" && <PurchTab data={dataH} stg={stg} vendorRecs={vendorRecs} goCore={goCore} goBundle={goBundle} goVendor={goVendor} ov={ov} setOv={setOv} initV={initV} clearIV={clearIV} saveWorkflow={saveWorkflow} deleteWorkflow={deleteWorkflow} saveVendorComment={saveVendorComment} activeBundleCores={activeBundleCores} />}
+        {tab === "core" && <CoreTab data={data} stg={stg} hist={{ coreInv: data.coreInv, bundleSales: data.bundleSales, priceHist: data.priceHist }} daily={{ coreDays: data.coreDays, bundleDays: data.bundleDays }} coreId={coreId} onBack={handleBackFromCore} goBundle={goBundle} />}
         {tab === "bundle" && <BundleTab data={data} stg={stg} hist={{ coreInv: data.coreInv, bundleSales: data.bundleSales, bundleInv: data.bundleInv, priceHist: data.priceHist }} daily={{ coreDays: data.coreDays, bundleDays: data.bundleDays }} bundleId={bundleId} onBack={handleBackFromBundle} goCore={goCore} />}
         {tab === "orders" && <OrdersTab data={data} />}
         {tab === "vendors" && <VendorsTab data={data} stg={stg} goVendor={goVendor} workflow={data.workflow} saveWorkflow={saveWorkflow} deleteWorkflow={deleteWorkflow} vendorComments={data.vendorComments} saveVendorComment={saveVendorComment} />}
