@@ -3,6 +3,7 @@ import { R, D1, $, $2, $4, P, gS, cAI, cNQ, cOQ, cDA, bNQ, isD, gTD, dc, cSeas, 
 import { Dot, Toast, TH, SS, WorkflowChip, NumInput, SumCtx, VendorNotes, CalcBreakdownV2 } from "./Shared";
 import { batchProfiles, batchBundleProfiles, calcCoverageNeed, calcPurchaseFrequency, DEFAULT_PROFILE } from "../lib/seasonal";
 import { batchVendorRecommendations, calcVendorRecommendation } from "../lib/recommender";
+import { saveSnapshotIfNeeded, loadPreviousSnapshot, computeDelta } from "../lib/snapshot";
 
 // === FLAG DEFINITIONS — compact icons, text in tooltip ===
 // PROC removed (was redundant with OOS/MOQ signals).
@@ -65,6 +66,78 @@ function SC({ v, children, className }) {
   const ok = !isNaN(raw) && raw !== 0;
   const tog = () => { if (!ok) return; if (sel) { addCell(raw, true); setSel(false) } else { addCell(raw, false); setSel(true) } };
   return <td className={`${className || ''} ${sel ? "bg-blue-500/20 ring-1 ring-blue-500" : ""} ${ok ? "cursor-pointer select-none" : ""}`} onClick={tog}>{children}</td>;
+}
+
+// === DELTA MODAL — shows what changed vs yesterday's recommendation ===
+function DeltaModal({ vendorName, delta, onClose }) {
+  if (!delta) return null;
+  const dir = delta.pctChange > 0 ? '+' : '';
+  const color = delta.pctChange > 0 ? 'text-red-400' : 'text-emerald-400';
+  const fmtN = n => Math.round(n).toLocaleString('en-US');
+  const fmt$ = n => '$' + Math.round(n).toLocaleString('en-US');
+
+  return (
+    <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center overflow-auto p-4" onClick={onClose}>
+      <div className="bg-gray-900 border border-gray-700 rounded-xl p-5 w-full max-w-2xl max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+        <div className="flex justify-between items-start mb-3">
+          <div>
+            <h2 className="text-lg font-bold text-white">{vendorName} — What changed?</h2>
+            <p className="text-gray-400 text-xs">Comparing today's recommendation vs snapshot from {delta.prevDate}</p>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-white text-xl">✕</button>
+        </div>
+
+        <div className="grid grid-cols-3 gap-3 mb-4">
+          <div className="bg-gray-800 rounded-lg p-3">
+            <div className="text-gray-500 text-[10px] uppercase">Yesterday ({delta.prevDate})</div>
+            <div className="text-white font-bold text-lg">{fmt$(delta.prevTotal)}</div>
+          </div>
+          <div className="bg-gray-800 rounded-lg p-3">
+            <div className="text-gray-500 text-[10px] uppercase">Today</div>
+            <div className="text-white font-bold text-lg">{fmt$(delta.todayTotal)}</div>
+          </div>
+          <div className={`rounded-lg p-3 ${delta.pctChange > 0 ? "bg-red-500/10 border border-red-500/30" : "bg-emerald-500/10 border border-emerald-500/30"}`}>
+            <div className="text-gray-500 text-[10px] uppercase">Δ</div>
+            <div className={`font-bold text-lg ${color}`}>{dir}{delta.pctChange.toFixed(1)}%</div>
+          </div>
+        </div>
+
+        <h3 className="text-sm font-semibold text-white mb-2">Top contributors to the change</h3>
+        {delta.contributions && delta.contributions.length > 0 ? (
+          <div className="space-y-1.5">
+            {delta.contributions.map((c, i) => {
+              const arrow = c.amount > 0 ? '↑' : '↓';
+              const aColor = c.amount > 0 ? 'text-red-400' : 'text-emerald-400';
+              const sourceColors = {
+                level: 'text-blue-400', trend: 'text-emerald-400',
+                inventory: 'text-amber-400', safety_stock: 'text-purple-400',
+                new_bundle: 'text-cyan-400',
+              };
+              return (
+                <div key={i} className="flex items-start gap-3 bg-gray-800/50 rounded px-3 py-2">
+                  <span className={`text-lg ${aColor}`}>{arrow}</span>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 text-xs">
+                      <span className="text-blue-300 font-mono">{c.bundleId}</span>
+                      <span className={`text-[10px] uppercase font-semibold ${sourceColors[c.source] || 'text-gray-400'}`}>{c.source.replace('_', ' ')}</span>
+                      <span className={`ml-auto font-bold ${aColor}`}>{c.amount > 0 ? '+' : ''}{fmtN(c.amount)} units</span>
+                    </div>
+                    <div className="text-gray-400 text-[11px] mt-0.5">{c.detail}</div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <p className="text-gray-500 text-xs">No significant per-bundle drivers found (change may be from MOQ rounding or price shifts).</p>
+        )}
+
+        <p className="text-[10px] text-gray-500 mt-4 italic">
+          Snapshots are saved once per day per vendor (browser localStorage, last 14 days retained). They help explain why the recommendation moved without needing to open the console.
+        </p>
+      </div>
+    </div>
+  );
 }
 
 export default function PurchTab({ data, stg, vendorRecs, goCore, goBundle, goVendor, ov, setOv, initV, clearIV, saveWorkflow, deleteWorkflow, saveVendorComment, activeBundleCores }) {
@@ -133,6 +206,11 @@ if (!vendorRecs || !Object.keys(vendorRecs).length) vendorRecs = {};
   // MOQ override inputs (session-only, not persisted)
   const [moqOverrides, setMoqOverrides] = useState({});
   const [overrideRecs, setOverrideRecs] = useState({});
+
+  // Snapshot + delta state: stores { [vendorName]: deltaObj } from today vs most recent prior snapshot
+  const [vendorDeltas, setVendorDeltas] = useState({});
+  const [showDeltaFor, setShowDeltaFor] = useState(null); // vendor name whose modal is open
+  
   const moqDebounceTimers = useRef({});
 
     useEffect(() => {
@@ -192,6 +270,23 @@ if (!vendorRecs || !Object.keys(vendorRecs).length) vendorRecs = {};
       window.__vendorRecs = effectiveRecs;
     }
   }, [effectiveRecs]);
+
+  // Snapshot & delta — automatic, once per day per vendor
+useEffect(() => {
+  if (!effectiveRecs || !Object.keys(effectiveRecs).length) return;
+  const deltas = {};
+  for (const [vendorName, rec] of Object.entries(effectiveRecs)) {
+    if (!rec) continue;
+    const prev = loadPreviousSnapshot(vendorName);
+    if (prev) {
+      const delta = computeDelta(rec, prev);
+      if (delta) deltas[vendorName] = delta;
+    }
+    // Save today's snapshot (no-op if already saved today)
+    saveSnapshotIfNeeded(vendorName, rec);
+  }
+  setVendorDeltas(deltas);
+}, [effectiveRecs]);
 
   // === AUTO-DETECT vendorSub on first visit to a vendor ===
   // Rule: if this vendor historically NEVER delivered any bundle assembled
@@ -896,7 +991,7 @@ if (!vendorRecs || !Object.keys(vendorRecs).length) vendorRecs = {};
   </tr>;
 
   return <div className="p-4">{toast && <Toast msg={toast} onClose={() => { setToast(null); setToastPersist(false); }} persist={toastPersist} />}
-    {breakdownCore && <CalcBreakdownV2 core={breakdownCore} vendor={vMap[breakdownCore.ven]} vendorRec={effectiveRecs[breakdownCore.ven]} profile={profiles[breakdownCore.id]} stg={stg} onClose={() => setBreakdownCore(null)} />}
+    {breakdownCore && <CalcBreakdownV2 core={breakdownCore} vendor={vMap[breakdownCore.ven]} vendorRec={effectiveRecs[breakdownCore.ven]} profile={profiles[breakdownCore.id]} stg={stg} onClose={() => setBreakdownCore(null)} />}{showDeltaFor && vendorDeltas[showDeltaFor] && <DeltaModal vendorName={showDeltaFor} delta={vendorDeltas[showDeltaFor]} onClose={() => setShowDeltaFor(null)} />}
     <div className="flex flex-wrap gap-2 items-center mb-4">
       <div className="flex bg-gray-800 rounded-lg p-0.5">{["core", "vendor"].map(m => <button key={m} onClick={() => setVm(m)} className={`px-3 py-1.5 rounded-md text-sm font-medium ${vm === m ? "bg-blue-600 text-white" : "text-gray-400"}`}>{m === "core" ? "By Core" : "By Vendor"}</button>)}</div>
       <SS value={vf} onChange={setVf} options={vNames} />
@@ -995,7 +1090,27 @@ if (!vendorRecs || !Object.keys(vendorRecs).length) vendorRecs = {};
                 MOQ excess: ${Math.round(totalExcessMoq).toLocaleString()} ({countInflated} cores)
               </span>;
             })()}
-            {poI.length === 0 ? <span className="ml-auto text-xs text-gray-400 bg-gray-700 px-2 py-0.5 rounded">—</span> : <span className={`ml-auto text-xs font-semibold px-2 py-0.5 rounded ${meets ? "text-emerald-400 bg-emerald-400/10" : "text-red-400 bg-red-400/10"}`}>{meets ? "✓" : "!"} {$(poT)}{poC > 0 ? " / " + poC + "cs" : ""}</span>}
+            {(() => {
+  const delta = vendorDeltas[v.name];
+  const hasDelta = delta && delta.significant;
+  return (
+    <span className="ml-auto flex items-center gap-2">
+      {hasDelta && (
+        <button
+          onClick={() => setShowDeltaFor(v.name)}
+          className={`text-xs font-semibold px-2 py-0.5 rounded border ${delta.pctChange > 0 ? "text-red-300 bg-red-500/10 border-red-500/30 hover:bg-red-500/20" : "text-emerald-300 bg-emerald-500/10 border-emerald-500/30 hover:bg-emerald-500/20"}`}
+          title={`Click to see what changed vs ${delta.prevDate}`}
+        >
+          {delta.pctChange > 0 ? '+' : ''}{delta.pctChange.toFixed(0)}% vs {delta.prevDate.substring(5)}
+        </button>
+      )}
+      {poI.length === 0
+        ? <span className="text-xs text-gray-400 bg-gray-700 px-2 py-0.5 rounded">—</span>
+        : <span className={`text-xs font-semibold px-2 py-0.5 rounded ${meets ? "text-emerald-400 bg-emerald-400/10" : "text-red-400 bg-red-400/10"}`}>{meets ? "✓" : "!"} {$(poT)}{poC > 0 ? " / " + poC + "cs" : ""}</span>
+      }
+    </span>
+  );
+})()}
           </div>
           {activeFlags.size > 0 && (
             <div className="flex flex-wrap items-center gap-1.5 mb-2 pb-2 border-b border-gray-800">
