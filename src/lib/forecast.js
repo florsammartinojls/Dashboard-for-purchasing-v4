@@ -29,6 +29,8 @@ export const DEFAULT_HAMPEL_WINDOW = 7;
 export const DEFAULT_HAMPEL_THRESHOLD = 3;
 export const DEFAULT_SERVICE_LEVEL_A = 97;
 export const DEFAULT_SERVICE_LEVEL_OTHER = 95;
+export const RECENT_REGIME_WINDOW = 30;
+export const RECENT_REGIME_THRESHOLD = 0.6;
 export const MIN_HISTORY_FOR_HOLT = 30;
 export const MIN_HISTORY_FOR_SIGMA = 2; // min lead-times worth of history
 export const FALLBACK_CV = 0.3;         // used when σ_LT can't be computed
@@ -311,6 +313,39 @@ export function calcBundleForecast({
     alpha: num(settings?.holtAlpha, DEFAULT_HOLT_ALPHA),
     beta: num(settings?.holtBeta, DEFAULT_HOLT_BETA),
   });
+ // [FIX-REGIME] Recent regime check
+  // If the last 30 days of real sales average is much lower than the Holt
+  // level, the model is lagging a decline in the demand regime. Holt with
+  // α=0.2 takes 6+ months to adapt, which is too slow for products going
+  // into sustained decline.
+  //
+  // When the ratio recent/level < RECENT_REGIME_THRESHOLD, we override
+  // level with recent avg and drop trend — the model is demonstrably wrong.
+  const RECENT_REGIME_WINDOW = 30;
+  const RECENT_REGIME_THRESHOLD = 0.6; // if recent < 60% of Holt level
+
+  const recentVals = clean.slice(-RECENT_REGIME_WINDOW)
+    .map(p => num(p.dsrClean != null ? p.dsrClean : p.dsr))
+    .filter(v => v > 0);
+
+  let recentRegimeApplied = false;
+  let recentRegimeInfo = null;
+  if (recentVals.length >= 14 && holt.level > 0 && holt.usedHolt) {
+    const recentAvg = mean(recentVals);
+    const ratio = recentAvg / holt.level;
+    if (ratio < RECENT_REGIME_THRESHOLD) {
+      recentRegimeInfo = {
+        holtLevelBefore: holt.level,
+        holtTrendBefore: holt.trend,
+        recentAvg,
+        ratio,
+        daysUsed: recentVals.length,
+      };
+      holt.level = recentAvg;
+      holt.trend = 0;
+      recentRegimeApplied = true;
+    }
+  }
 
   // [FIX-3] Tracking signal gate: if |TS| > 4, trust level only, drop trend.
   // This is the single most important fix for cases like JLS-1265 where the
@@ -395,8 +430,11 @@ export function calcBundleForecast({
       trackingSignalExceeded: ts.exceeded,
       trendGatedByTS,              // [FIX-3] new flag — true when trend dropped to 0 due to TS
       noData: false,
+      recentRegimeApplied,
+      recentRegimeInfo,   
     },
     effectiveDSR: holt.level, // for backwards compat
+
   };
 }
 
