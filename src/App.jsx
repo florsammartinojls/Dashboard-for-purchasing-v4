@@ -191,8 +191,7 @@ export default function App() {
         receiving: live.receiving || [],
         replenRec: live.replenRec || [],
         vendorComments: live.vendorComments || [],
-        coreDays: live.coreDays || [],
-        bundleDays: live.bundleDays || []
+
       }));
       setLiveStatus({ loading: false, error: null, version: live.version || null, partial: live.partial || false });
     } catch (e) {
@@ -207,12 +206,16 @@ export default function App() {
       const history = await fetchHistory({ forceRefresh });
       setData(prev => ({
         ...prev,
+      setData(prev => ({
+        ...prev,
         receivingFull: history.receivingFull || [],
         priceCompFull: history.priceCompFull || [],
         bundleSales: history.bundleSales || [],
         priceHist: history.priceHist || [],
         coreInv: history.coreInv || [],
-        bundleInv: history.bundleInv || []
+        bundleInv: history.bundleInv || [],
+        coreDays: history.coreDays || [],
+        bundleDays: history.bundleDays || []
       }));
       setHistoryStatus({
         loading: false,
