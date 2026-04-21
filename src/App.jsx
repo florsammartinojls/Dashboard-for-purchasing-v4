@@ -116,7 +116,7 @@ const EMPTY_DATA = {
   abcA: [], abcT: [], abcSub: '', restock: [], priceComp: [], agedInv: [],
   killMgmt: [], workflow: [], receiving: [], replenRec: [], receivingFull: [],
   vendorComments: [], priceCompFull: [], coreInv: [], bundleInv: [],
-  bundleSales: [], priceHist: [], coreDays: [], bundleDays: []
+  bundleSales: [], priceHist: [], coreDays: [], bundleDays: [], coreDaysForecast: [], bundleDaysForecast: []
 };
 
 // v3 defaults — service level, forecasting params, anomaly detection
@@ -191,6 +191,8 @@ export default function App() {
         receiving: live.receiving || [],
         replenRec: live.replenRec || [],
         vendorComments: live.vendorComments || [],
+        coreDays: live.coreDays || [],
+        bundleDays: live.bundleDays || []
 
       }));
       setLiveStatus({ loading: false, error: null, version: live.version || null, partial: live.partial || false });
@@ -212,8 +214,8 @@ export default function App() {
         priceHist: history.priceHist || [],
         coreInv: history.coreInv || [],
         bundleInv: history.bundleInv || [],
-        coreDays: history.coreDays || [],
-        bundleDays: history.bundleDays || []
+        coreDaysForecast: history.coreDaysForecast || [],
+        bundleDaysForecast: history.bundleDaysForecast || []
       }));
       setHistoryStatus({
         loading: false,
@@ -316,8 +318,8 @@ export default function App() {
       cores: data.cores || [],
       bundles: data.bundles || [],
       bundleSales: data.bundleSales || [],
-      bundleDays: data.bundleDays || [],
-      coreDays: data.coreDays || [],
+      bundleDays: data.bundleDaysForecast || [],
+      coreDays: data.coreDaysForecast || [],
       abcA: data.abcA || [],
       receivingFull: data.receivingFull || [],
       replenMap,
@@ -326,7 +328,7 @@ export default function App() {
       settings: stg,
       purchFreqMap,
     });
-  }, [data.vendors, data.cores, data.bundles, data.bundleSales, data.bundleDays, data.coreDays, data.abcA, data.receivingFull, data.priceCompFull, data.priceComp, replenMap, missingMap, stg, purchFreqMap]);
+ }, [data.vendors, data.cores, data.bundles, data.bundleSales, data.bundleDaysForecast, data.coreDaysForecast, data.abcA, ...
 
   const sc = useMemo(() => {
     const c = { critical: 0, warning: 0, healthy: 0 };
