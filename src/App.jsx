@@ -1,5 +1,5 @@
 // src/App.jsx
-import React, { useState, useMemo, useCallback, useEffect } from "react";
+import React, { useState, useMemo, useCallback, useEffect, useTransition } from "react";
 import { fetchLive, fetchHistory, refreshHistoryOnServer, fetchInfo, apiPost } from "./lib/api";
 import { R, D1, gS, fTs, gTD, isD, cAI, cNQ } from "./lib/utils";
 import { Loader, Stg, QuickSum, SumCtx, SlidePanel, Dot, WorkflowChip, VendorNotes } from "./components/Shared";
@@ -12,11 +12,13 @@ import PerformanceTab from "./components/PerformanceTab";
 import { batchVendorRecommendations } from "./lib/recommender";
 import { calcPurchaseFrequency } from "./lib/seasonal";
 
+
 // === Vendors Tab ===
 function VendorsTab({ data, stg, goVendor, workflow, saveWorkflow, deleteWorkflow, vendorComments, saveVendorComment }) {
   const [vSearch, setVSearch] = useState("");
   const [sortBy, setSortBy] = useState("alpha");
   const [filterNeed, setFilterNeed] = useState(false);
+  const [, startTransition] = useTransition();
   const vMap = useMemo(() => { const m = {}; (data.vendors || []).forEach(v => m[v.name] = v); return m }, [data.vendors]);
   const vS = useMemo(() => {
     const g = {};
@@ -444,20 +446,46 @@ useEffect(() => {
         )}
       </header>
 
-      <nav className="bg-gray-900/50 border-b border-gray-800 px-4 sticky top-[53px] z-30">
-        <div className="flex gap-0 max-w-7xl mx-auto overflow-x-auto">{TABS.map(t => <button key={t.id} onClick={(e) => { if (e.ctrlKey || e.metaKey) { window.open(window.location.pathname + '?tab=' + t.id, '_blank'); return; } setPrevTab(tab); setTab(t.id); if (t.id !== "core") setCoreId(null); if (t.id !== "bundle") setBundleId(null); clearSum() }} className={`px-4 py-2.5 text-sm font-medium border-b-2 whitespace-nowrap ${tab === t.id ? "border-blue-500 text-blue-400" : "border-transparent text-gray-500 hover:text-gray-300"}`}>{t.l}</button>)}</div>
-      </nav>
+<nav className="bg-gray-900/50 border-b border-gray-800 px-4 sticky top-[53px] z-30">
+  <div className="flex gap-0 max-w-7xl mx-auto overflow-x-auto">
+    {TABS.map(t => (
+      <button
+        key={t.id}
+        onClick={(e) => {
+          if (e.ctrlKey || e.metaKey) {
+            window.open(window.location.pathname + '?tab=' + t.id, '_blank');
+            return;
+          }
+          startTransition(() => {
+            setPrevTab(tab);
+            setTab(t.id);
+            if (t.id !== "core") setCoreId(null);
+            if (t.id !== "bundle") setBundleId(null);
+            clearSum();
+          });
+        }}
+        className={`px-4 py-2.5 text-sm font-medium border-b-2 whitespace-nowrap ${tab === t.id ? "border-blue-500 text-blue-400" : "border-transparent text-gray-500 hover:text-gray-300"}`}
+      >
+        {t.l}
+      </button>
+    ))}
+  </div>
+</nav>
 
-      <main className="max-w-7xl mx-auto">
-       {tab === "dashboard" && <DashboardSummary data={dataH} stg={stg} vendorRecs={vendorRecs} goVendor={goVendor} workflow={data.workflow} saveWorkflow={saveWorkflow} deleteWorkflow={deleteWorkflow} vendorComments={data.vendorComments} saveVendorComment={saveVendorComment} onEnterPurchasing={() => setTab("purchasing")} activeBundleCores={activeBundleCores} />}
-        {tab === "purchasing" && <PurchTab data={dataH} stg={stg} vendorRecs={vendorRecs} goCore={goCore} goBundle={goBundle} goVendor={goVendor} ov={ov} setOv={setOv} initV={initV} clearIV={clearIV} saveWorkflow={saveWorkflow} deleteWorkflow={deleteWorkflow} saveVendorComment={saveVendorComment} activeBundleCores={activeBundleCores} />}
-        {tab === "core" && <CoreTab data={data} stg={stg} hist={{ coreInv: data.coreInv, bundleSales: data.bundleSales, priceHist: data.priceHist }} daily={{ coreDays: data.coreDays, bundleDays: data.bundleDays }} coreId={coreId} onBack={handleBackFromCore} goBundle={goBundle} />}
-        {tab === "bundle" && <BundleTab data={data} stg={stg} hist={{ coreInv: data.coreInv, bundleSales: data.bundleSales, bundleInv: data.bundleInv, priceHist: data.priceHist }} daily={{ coreDays: data.coreDays, bundleDays: data.bundleDays }} bundleId={bundleId} onBack={handleBackFromBundle} goCore={goCore} />}
-        {tab === "orders" && <OrdersTab data={data} />}
-        {tab === "vendors" && <VendorsTab data={data} stg={stg} goVendor={goVendor} workflow={data.workflow} saveWorkflow={saveWorkflow} deleteWorkflow={deleteWorkflow} vendorComments={data.vendorComments} saveVendorComment={saveVendorComment} />}
-        {tab === "performance" && <PerformanceTab />}
-        {tab === "glossary" && <GlossTab />}
-      </main>
+<main className="max-w-7xl mx-auto">
+  <div style={{ display: tab === "dashboard" ? "block" : "none" }}>
+    <DashboardSummary data={dataH} stg={stg} vendorRecs={vendorRecs} goVendor={goVendor} workflow={data.workflow} saveWorkflow={saveWorkflow} deleteWorkflow={deleteWorkflow} vendorComments={data.vendorComments} saveVendorComment={saveVendorComment} onEnterPurchasing={() => setTab("purchasing")} activeBundleCores={activeBundleCores} />
+  </div>
+  <div style={{ display: tab === "purchasing" ? "block" : "none" }}>
+    <PurchTab data={dataH} stg={stg} vendorRecs={vendorRecs} goCore={goCore} goBundle={goBundle} goVendor={goVendor} ov={ov} setOv={setOv} initV={initV} clearIV={clearIV} saveWorkflow={saveWorkflow} deleteWorkflow={deleteWorkflow} saveVendorComment={saveVendorComment} activeBundleCores={activeBundleCores} />
+  </div>
+  {tab === "core" && <CoreTab data={data} stg={stg} hist={{ coreInv: data.coreInv, bundleSales: data.bundleSales, priceHist: data.priceHist }} daily={{ coreDays: data.coreDays, bundleDays: data.bundleDays }} coreId={coreId} onBack={handleBackFromCore} goBundle={goBundle} />}
+  {tab === "bundle" && <BundleTab data={data} stg={stg} hist={{ coreInv: data.coreInv, bundleSales: data.bundleSales, bundleInv: data.bundleInv, priceHist: data.priceHist }} daily={{ coreDays: data.coreDays, bundleDays: data.bundleDays }} bundleId={bundleId} onBack={handleBackFromBundle} goCore={goCore} />}
+  {tab === "orders" && <OrdersTab data={data} />}
+  {tab === "vendors" && <VendorsTab data={data} stg={stg} goVendor={goVendor} workflow={data.workflow} saveWorkflow={saveWorkflow} deleteWorkflow={deleteWorkflow} vendorComments={data.vendorComments} saveVendorComment={saveVendorComment} />}
+  {tab === "performance" && <PerformanceTab />}
+  {tab === "glossary" && <GlossTab />}
+</main>
 
       {showS && <Stg s={stg} setS={setStg} onClose={() => setShowS(false)} />}
       <SlidePanel open={!!(panelCoreId || panelBundleId)} onClose={() => { setPanelCoreId(null); setPanelBundleId(null); clearSum() }}>
