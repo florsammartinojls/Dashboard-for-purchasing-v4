@@ -313,9 +313,10 @@ useEffect(() => {
     return m;
   }, [data.vendors, data.receivingFull]);
 
-  const vendorRecs = useMemo(() => {
+const vendorRecs = useMemo(() => {
     if (!data.vendors?.length) return {};
-    return batchVendorRecommendations({
+    const t0 = performance.now();
+    const result = batchVendorRecommendations({
       vendors: data.vendors,
       cores: data.cores || [],
       bundles: data.bundles || [],
@@ -330,7 +331,11 @@ useEffect(() => {
       settings: stg,
       purchFreqMap,
     });
-}, [data.vendors, data.cores, data.bundles, data.bundleSales, data.bundleDaysForecast, data.coreDaysForecast, data.abcA, data.receivingFull, replenMap, missingMap, data.priceCompFull, data.priceComp, stg, purchFreqMap]);
+    const t1 = performance.now();
+    console.log(`[PERF] vendorRecs took ${(t1-t0).toFixed(0)}ms for ${Object.keys(result).length} vendors`);
+    return result;
+ }, [data.vendors, data.cores, data.bundles, data.bundleSales, data.bundleDaysForecast, data.coreDaysForecast, data.abcA, data.receivingFull, replenMap, missingMap, data.priceCompFull, data.priceComp, stg, purchFreqMap]);
+
 
   const sc = useMemo(() => {
     const c = { critical: 0, warning: 0, healthy: 0 };
