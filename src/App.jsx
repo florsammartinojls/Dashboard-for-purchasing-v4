@@ -149,7 +149,17 @@ export default function App() {
 
   const [tab, setTab] = useState(initCore ? "core" : initBundle ? "bundle" : initVendorParam ? "purchasing" : initTab || "dashboard");
   const [showS, setShowS] = useState(false);
-  const [stg, setStg] = useState(DEFAULT_SETTINGS);
+  const [stg, setStg] = useState(() => {
+  try {
+    const saved = localStorage.getItem('fba_stg_v1');
+    if (saved) return { ...DEFAULT_SETTINGS, ...JSON.parse(saved) };
+  } catch {}
+  return DEFAULT_SETTINGS;
+});
+
+useEffect(() => {
+  try { localStorage.setItem('fba_stg_v1', JSON.stringify(stg)); } catch {}
+}, [stg]);
   const [coreId, setCoreId] = useState(initCore || null);
   const [bundleId, setBundleId] = useState(initBundle || null);
 
