@@ -1,35 +1,29 @@
 // src/lib/recommender.js
 // ============================================================
-// v3.3 Purchase Recommendation Engine
+// v3.4 Purchase Recommendation Engine
 // ============================================================
-// NEW in v3.3:
-//   [PERF] batchVendorRecommendations now accepts a seasonalProfiles
-//          cache as a parameter. If provided, it skips re-computing
-//          profiles internally. Reduces vendorRecs time from 12s to ~300ms
-//          on typical workloads (500 bundles × 80K sales rows).
-//
-// NEW in v3.2:
-//   [STEP-8.5] Simplified core sanity check.
-//
-// From v3.1 (unchanged):
-//   [FIX-YoY] After calcBundleForecast returns, compare total demand
-//             against the same calendar window one year ago.
+// NEW in v3.4:
+//   [CORE-TS-GUARD] Core-level tracking signal check. If ≥60% of bundles
+//                   for a core have |TS| > 4 (biased forecast), we flag
+//                   the core as LOW CONFIDENCE and cap its recommendation
+//                   at the core-level target (not bundle-level).
+//   [CONFIDENCE]    Each recommendation now returns a `confidence` score
+//                   (high/medium/low) + a `suggestedAction` with a plain
+//                   language recommendation. UI uses these for badges.
 // ============================================================
 
 import { calcBundleSeasonalProfile, DEFAULT_PROFILE } from './seasonal.js';
 import { calcBundleForecast, calcHistoricSamePeriod } from './forecast.js';
 import { detectVendorAnomalies } from './anomalyDetector.js';
 
-// [FIX-YoY] If forecast > MAX_YOY_RATIO × historic LY same-period sales, cap it.
 export const MAX_YOY_RATIO = 1.5;
 export const MIN_HISTORIC_FOR_YOY = 30;
-
-// [STEP-8.5] Core-level sanity cap.
 export const CORE_CAP_MULTIPLIER = 1.1;
 
-// ────────────────────────────────────────────────────────────
-// 7g vendor-specific material cost lookup
-// ────────────────────────────────────────────────────────────
+// [CORE-TS-GUARD] If this fraction of bundles (or more) have |TS| > 4,
+// we consider the core's forecast unreliable.
+export const CORE_TS_BIAS_THRESHOLD = 0.6;
+
 function parseNoteVendor(note) {
   if (!note) return { kind: 'unknown', name: null };
   const n = String(note).trim();
@@ -71,17 +65,11 @@ function getVendorCoreUnitCost(coreId, vendor, paymentHistory) {
   return Number(best.matPrice) / Number(best.pcs);
 }
 
-// ────────────────────────────────────────────────────────────
-// Defaults
-// ────────────────────────────────────────────────────────────
 export const DEFAULT_SPIKE_THRESHOLD = 1.25;
 export const DEFAULT_MOQ_INFLATION_THRESHOLD = 1.5;
 const LEVELING_STEP_DAYS = 10;
 const MAX_WATERFALL_ITER = 100;
 
-// ────────────────────────────────────────────────────────────
-// Helpers
-// ────────────────────────────────────────────────────────────
 function num(x, d = 0) { const n = Number(x); return Number.isFinite(n) ? n : d; }
 function isDomestic(country) {
   const c = (country || '').toLowerCase().trim();
@@ -146,16 +134,13 @@ function isSpikeVisual(b, threshold) {
 
 function applyYoYSanityCheck(forecast, bundleId, bundleDays, targetDoc) {
   if (!forecast || forecast.flags.noData) return null;
-
   const historic = calcHistoricSamePeriod(bundleDays, bundleId, targetDoc);
   if (!historic) return { applied: false, reason: 'no_history' };
   if (historic.total < MIN_HISTORIC_FOR_YOY) {
     return { applied: false, reason: 'historic_too_small', historic: historic.total };
   }
-
   const forecastTotal = forecast.coverageDemand;
   const maxAllowed = historic.total * MAX_YOY_RATIO;
-
   if (forecastTotal <= maxAllowed) {
     return {
       applied: false,
@@ -165,11 +150,9 @@ function applyYoYSanityCheck(forecast, bundleId, bundleDays, targetDoc) {
       ratio: forecastTotal / historic.total,
     };
   }
-
   const scale = maxAllowed / forecastTotal;
   const cappedTotal = maxAllowed;
   const originalTotal = forecastTotal;
-
   forecast.coverageDemand = cappedTotal;
   forecast.demandBreakdown = {
     fromLevel: Math.round(forecast.demandBreakdown.fromLevel * scale),
@@ -181,7 +164,6 @@ function applyYoYSanityCheck(forecast, bundleId, bundleDays, targetDoc) {
   forecast.flags.yoyHistoric = Math.round(historic.total);
   forecast.flags.yoyOriginalForecast = Math.round(originalTotal);
   forecast.flags.yoyScale = scale;
-
   return {
     applied: true,
     historic: historic.total,
@@ -192,9 +174,6 @@ function applyYoYSanityCheck(forecast, bundleId, bundleDays, targetDoc) {
   };
 }
 
-// ────────────────────────────────────────────────────────────
-// Waterfall helpers
-// ────────────────────────────────────────────────────────────
 function maxBundleUnitsFromPools(b, corePools) {
   let max = Infinity;
   for (const { coreId, qty } of b.coresUsed) {
@@ -270,9 +249,6 @@ function distributeRawToBundles(prepped, corePools, targetDoc, replenFloor) {
   }
 }
 
-// ────────────────────────────────────────────────────────────
-// MOQ + casepack
-// ────────────────────────────────────────────────────────────
 function applyMoqAndCasePack(needPieces, moq, casePack, moqThreshold) {
   if (needPieces <= 0) {
     return { finalQty: 0, moqInflated: false, excessFromMoq: 0, moqInflationRatio: 0 };
@@ -292,9 +268,6 @@ function applyMoqAndCasePack(needPieces, moq, casePack, moqThreshold) {
   };
 }
 
-// ────────────────────────────────────────────────────────────
-// ABC lookup
-// ────────────────────────────────────────────────────────────
 function buildAbcMap(abcA) {
   const m = {};
   (abcA || []).forEach(a => { if (a?.j) m[a.j] = a.profABC || null; });
@@ -306,9 +279,69 @@ function computeCoreAllIn(c) {
          num(c.pq)  + num(c.ji)  + num(c.fba);
 }
 
-// ============================================================
-// MAIN ENTRY POINT
-// ============================================================
+// [CONFIDENCE] Evaluates how much we trust a core's recommendation.
+// Returns { confidence: 'high'|'medium'|'low', reasons: [], suggestedAction: string }
+function evaluateCoreConfidence(coreId, coreDetail, coreBundles, core, targetDoc) {
+  const reasons = [];
+
+  if (!coreBundles || coreBundles.length === 0) {
+    return { confidence: 'high', reasons: [], suggestedAction: null, tsBiasedPct: 0, anyRegimeShift: false };
+  }
+
+  // How many bundles have biased forecast?
+  const biased = coreBundles.filter(b =>
+    b.forecast?.flags?.trackingSignalExceeded
+  );
+  const tsBiasedPct = biased.length / coreBundles.length;
+
+  // Any bundle with regime shift detected?
+  const anyRegimeShift = coreBundles.some(b =>
+    b.forecast?.flags?.recentRegimeApplied || b.forecast?.flags?.slowRegimeApplied
+  );
+
+  // Core-level health
+  const allIn = computeCoreAllIn(core);
+  const coreDSR = num(core.dsr);
+  const coreDOC = coreDSR > 0 ? allIn / coreDSR : 9999;
+
+  if (tsBiasedPct >= CORE_TS_BIAS_THRESHOLD) {
+    reasons.push(`${Math.round(tsBiasedPct * 100)}% of bundles have biased forecast (TS > 4)`);
+  }
+  if (anyRegimeShift) {
+    reasons.push('Demand regime shift detected (declining sales)');
+  }
+  if (coreDOC >= targetDoc) {
+    reasons.push(`Core already at ${Math.round(coreDOC)} DOC (target ${targetDoc})`);
+  }
+
+  // Decide confidence
+  let confidence = 'high';
+  if (tsBiasedPct >= CORE_TS_BIAS_THRESHOLD || anyRegimeShift) {
+    confidence = 'low';
+  } else if (tsBiasedPct > 0.3) {
+    confidence = 'medium';
+  }
+
+  // Build a plain-language suggestion
+  let suggestedAction = null;
+  const needPieces = coreDetail?.needPieces || 0;
+  const finalQty = coreDetail?.finalQty || 0;
+
+  if (finalQty === 0) {
+    suggestedAction = '✓ No action needed — inventory sufficient';
+  } else if (confidence === 'low' && coreDOC >= targetDoc * 0.9) {
+    suggestedAction = `⚠ Forecast unreliable + core near target. Consider waiting 30d before buying.`;
+  } else if (confidence === 'low') {
+    suggestedAction = `⚠ Forecast unreliable. System recommends ${finalQty.toLocaleString()}, but review manually before ordering.`;
+  } else if (confidence === 'medium') {
+    suggestedAction = `Order ${finalQty.toLocaleString()} pcs. Some forecast uncertainty — verify trend.`;
+  } else {
+    suggestedAction = `Order ${finalQty.toLocaleString()} pcs.`;
+  }
+
+  return { confidence, reasons, suggestedAction, tsBiasedPct, anyRegimeShift };
+}
+
 export function calcVendorRecommendation({
   vendor,
   cores,
@@ -473,6 +506,9 @@ export function calcVendorRecommendation({
 
   const coreSanityLog = {};
 
+  // ────────────────────────────────────────────
+  // [STEP-8.5 + CORE-TS-GUARD] Sanity checks
+  // ────────────────────────────────────────────
   for (const coreId of Object.keys(coreNeedMap)) {
     const core = vCoreById[coreId];
     if (!core) continue;
@@ -481,6 +517,7 @@ export function calcVendorRecommendation({
     if (coreDSR <= 0) continue;
     const coreDOC = allIn / coreDSR;
 
+    // (1) Core healthy: cap to 0
     if (coreDOC >= targetDoc * CORE_CAP_MULTIPLIER) {
       const originalNeed = coreNeedMap[coreId];
       coreNeedMap[coreId] = 0;
@@ -488,6 +525,7 @@ export function calcVendorRecommendation({
       coreBundlesMap[coreId]._redistributeFlag = true;
       coreSanityLog[coreId] = {
         capped: true,
+        reason: 'core_healthy',
         coreDOC: Math.round(coreDOC),
         targetDoc,
         capMultiplier: CORE_CAP_MULTIPLIER,
@@ -495,9 +533,45 @@ export function calcVendorRecommendation({
         coreDSR,
         originalNeed,
       };
+      continue;
+    }
+
+    // (2) Core-level TS bias guard: if majority of bundles for this core have
+    // biased forecast, cap recommendation to only what the core needs at
+    // target DOC (don't trust bundle-level need projections).
+    const coreBundleIds = coreBundlesMap[coreId] || [];
+    const coreBundlesData = prepped.filter(b => coreBundleIds.includes(b.id));
+    const biasedCount = coreBundlesData.filter(b =>
+      b.forecast?.flags?.trackingSignalExceeded
+    ).length;
+    const biasedPct = coreBundlesData.length > 0
+      ? biasedCount / coreBundlesData.length
+      : 0;
+
+    if (biasedPct >= CORE_TS_BIAS_THRESHOLD && coreBundlesData.length >= 3) {
+      // Cap to core-level need only (no bundle-level inflation)
+      const coreTargetInv = coreDSR * targetDoc;
+      const coreLevelNeed = Math.max(0, Math.ceil(coreTargetInv - allIn));
+      const originalNeed = coreNeedMap[coreId];
+
+      if (coreLevelNeed < originalNeed) {
+        coreNeedMap[coreId] = coreLevelNeed;
+        coreSanityLog[coreId] = {
+          capped: true,
+          reason: 'ts_bias',
+          coreDOC: Math.round(coreDOC),
+          targetDoc,
+          biasedPct: Math.round(biasedPct * 100),
+          biasedCount,
+          totalBundles: coreBundlesData.length,
+          originalNeed,
+          cappedNeed: coreLevelNeed,
+        };
+      }
     }
   }
 
+  // Bundle-mode cap
   for (const b of prepped) {
     if (b.buyNeed <= 0 || b.buyMode !== 'bundle') continue;
     const allCoresHealthy = b.coresUsed.every(({ coreId }) => {
@@ -661,6 +735,13 @@ export function calcVendorRecommendation({
     const rawEff = coreRawEffective[c.id];
     const anomaly = anomalyMap[c.id];
     const sanityInfo = coreSanityLog[c.id] || null;
+
+    // [CONFIDENCE] evaluate confidence for this core
+    const coreBundleIds = coreBundlesMap[c.id] || [];
+    const coreBundlesData = prepped.filter(b => coreBundleIds.includes(b.id));
+    const coreDetailTemp = { needPieces: item?.needPieces || 0, finalQty: item?.finalQty || 0 };
+    const confidenceResult = evaluateCoreConfidence(c.id, coreDetailTemp, coreBundlesData, c, targetDoc);
+
     return {
       coreId: c.id,
       needPieces: item?.needPieces || 0,
@@ -680,6 +761,12 @@ export function calcVendorRecommendation({
       anomalyDetected: !!anomaly,
       anomalyInfo: anomaly || null,
       coreSanityCap: sanityInfo,
+      // [CONFIDENCE] new fields
+      confidence: confidenceResult.confidence,
+      confidenceReasons: confidenceResult.reasons,
+      suggestedAction: confidenceResult.suggestedAction,
+      tsBiasedPct: confidenceResult.tsBiasedPct,
+      anyRegimeShift: confidenceResult.anyRegimeShift,
     };
   });
 
@@ -702,11 +789,6 @@ export function calcVendorRecommendation({
   };
 }
 
-// ============================================================
-// Batch helper
-// ============================================================
-// [PERF] Now accepts a seasonalProfiles cache from caller. If provided,
-// skips re-computing profiles (saves ~11 seconds on typical workloads).
 export function batchVendorRecommendations({
   vendors,
   cores,
@@ -721,11 +803,10 @@ export function batchVendorRecommendations({
   priceCompFull,
   settings,
   purchFreqMap,
-  seasonalProfiles,  // [PERF] optional pre-computed cache from caller
+  seasonalProfiles,
 }) {
   const out = {};
 
-  // Build profile cache only if caller didn't provide one (backward compat)
   let profileCache = seasonalProfiles;
   if (!profileCache) {
     profileCache = {};
