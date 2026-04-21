@@ -206,8 +206,6 @@ export default function App() {
       const history = await fetchHistory({ forceRefresh });
       setData(prev => ({
         ...prev,
-      setData(prev => ({
-        ...prev,
         receivingFull: history.receivingFull || [],
         priceCompFull: history.priceCompFull || [],
         bundleSales: history.bundleSales || [],
@@ -217,6 +215,17 @@ export default function App() {
         coreDays: history.coreDays || [],
         bundleDays: history.bundleDays || []
       }));
+      setHistoryStatus({
+        loading: false,
+        error: null,
+        version: history.version || null,
+        fromCache: !!history._cachedAt && !forceRefresh
+      });
+    } catch (e) {
+      console.error('History load failed:', e);
+      setHistoryStatus({ loading: false, error: e.message, version: null, fromCache: false });
+    }
+  }, []);
       setHistoryStatus({
         loading: false,
         error: null,
