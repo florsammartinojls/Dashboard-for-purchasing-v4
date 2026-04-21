@@ -5,11 +5,30 @@ import { get as idbGet, set as idbSet, del as idbDel } from 'https://cdn.jsdeliv
 
 const API = 'https://script.google.com/macros/s/AKfycbyxFvNQjWvF6Ckajd_H-OZ8WsXixoCWtjSxtChs8SmpL5CvidjT5P161tn0RXgYawd3sg/exec';
 
-const HISTORY_CACHE_KEY = 'fba_history_cache_v4';
+const HISTORY_CACHE_KEY = 'fba_history_cache_v5'; // bumped: packed datasets + forecast merged
 const LIVE_CACHE_KEY = 'fba_live_cache_v2';
 const META_CACHE_KEY = 'fba_meta_cache_v1';
 const META_CACHE_TTL_MS = 5 * 60 * 1000;
 const LIVE_CACHE_TTL_MS = 240 * 60 * 1000; // 4 hrs
+
+// ─── Unpack: {fields, rows:[[...]]} → [{f1:v1, f2:v2, ...}, ...] ───
+// Backward-compatible: if input is already an array of objects, returns it untouched.
+function unpackRows(packed) {
+  if (Array.isArray(packed)) return packed; // legacy shape
+  if (packed && Array.isArray(packed.fields) && Array.isArray(packed.rows)) {
+    const { fields, rows } = packed;
+    const n = fields.length;
+    const out = new Array(rows.length);
+    for (let r = 0; r < rows.length; r++) {
+      const arr = rows[r];
+      const obj = {};
+      for (let i = 0; i < n; i++) obj[fields[i]] = arr[i];
+      out[r] = obj;
+    }
+    return out;
+  }
+  return [];
+}
 
 // ─── Generic Apps Script call ───
 async function appsScriptCall(action, extraParams = '') {
@@ -59,7 +78,10 @@ async function fetchFileInChunks(file, totalChunks, onProgress) {
   for (let i = 0; i < totalChunks; i += BATCH) {
     const batch = [];
     for (let j = i; j < Math.min(i + BATCH, totalChunks); j++) {
-      batch.push(fetchChunk(file, j).then(c => { chunks[j] = c; done++; if (onProgress) onProgress(done, totalChunks); }));
+      batch.push(fetchChunk(file, j).then(c => {
+        chunks[j] = c; done++;
+        if (onProgress) onProgress(done, totalChunks);
+      }));
     }
     await Promise.all(batch);
   }
@@ -92,11 +114,18 @@ export async function fetchLive(onProgress, { forceRefresh = false } = {}) {
   return data;
 }
 
-// ─── Public API: History (cached by lastUpdated in IndexedDB) ───
+// ─── Public API: History + Forecast (cached by combined lastUpdated in IndexedDB) ───
+// Fetches fba_history.json and fba_forecast.json in parallel, unpacks the packed
+// datasets, merges forecast into the legacy shape (coreDaysForecast /
+// bundleDaysForecast). Downstream consumers (recommender.js, components) see the
+// same shape they always have: plain arrays of objects.
 export async function fetchHistory({ forceRefresh = false, onProgress } = {}) {
   const meta = await getMeta();
   if (!meta.history || !meta.history.chunks) throw new Error('No history metadata');
-  const remoteVersion = meta.history.lastUpdated;
+  if (!meta.forecast || !meta.forecast.chunks) throw new Error('No forecast metadata');
+
+  // Combined version: cache invalidates if EITHER file changed on the server
+  const remoteVersion = meta.history.lastUpdated + '|' + meta.forecast.lastUpdated;
 
   if (!forceRefresh) {
     try {
@@ -107,7 +136,29 @@ export async function fetchHistory({ forceRefresh = false, onProgress } = {}) {
     } catch (e) { console.warn('History cache read failed:', e.message); }
   }
 
-  const fresh = await fetchFileInChunks('history', meta.history.chunks, onProgress);
+  // Combined progress across both files so the UI bar fills smoothly
+  const hTotal = meta.history.chunks;
+  const fTotal = meta.forecast.chunks;
+  const combinedTotal = hTotal + fTotal;
+  let hDone = 0, fDone = 0;
+  const report = () => { if (onProgress) onProgress(hDone + fDone, combinedTotal); };
+
+  const [historyRaw, forecastRaw] = await Promise.all([
+    fetchFileInChunks('history', hTotal, d => { hDone = d; report(); }),
+    fetchFileInChunks('forecast', fTotal, d => { fDone = d; report(); })
+  ]);
+
+  // Unpack history's packed datasets in place. Non-packed fields pass through.
+  const fresh = { ...historyRaw };
+  if (historyRaw.bundleSales !== undefined) fresh.bundleSales = unpackRows(historyRaw.bundleSales);
+  if (historyRaw.coreInv !== undefined)     fresh.coreInv     = unpackRows(historyRaw.coreInv);
+  if (historyRaw.bundleInv !== undefined)   fresh.bundleInv   = unpackRows(historyRaw.bundleInv);
+
+  // Merge forecast under the legacy field names that recommender.js already reads
+  fresh.coreDaysForecast   = unpackRows(forecastRaw.coreDays);
+  fresh.bundleDaysForecast = unpackRows(forecastRaw.bundleDays);
+  fresh._forecastBuiltAt   = forecastRaw.builtAt || forecastRaw.version;
+
   fresh._remoteLastUpdated = remoteVersion;
   fresh._cachedAt = new Date().toISOString();
   try {
@@ -118,10 +169,17 @@ export async function fetchHistory({ forceRefresh = false, onProgress } = {}) {
   return fresh;
 }
 
-// ─── Force server rebuild of history ───
+// ─── Force server rebuild of history + forecast ───
+// Runs both in parallel (each ~40-90s individually; parallel keeps us under the
+// appsScriptCall 90s timeout). Both read from the same source sheets, so a joint
+// refresh keeps them consistent.
 export async function refreshHistoryOnServer() {
   try { sessionStorage.removeItem(META_CACHE_KEY); } catch (e) {}
-  return appsScriptCall('refreshHistory');
+  const [h, f] = await Promise.all([
+    appsScriptCall('refreshHistory'),
+    appsScriptCall('refreshForecast')
+  ]);
+  return { history: h, forecast: f };
 }
 
 // ─── Metadata for badge ───
