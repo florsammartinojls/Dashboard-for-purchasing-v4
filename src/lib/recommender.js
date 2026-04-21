@@ -1,54 +1,26 @@
 // src/lib/recommender.js
 // ============================================================
-// v2 Purchase Recommendation Engine
+// v3 Purchase Recommendation Engine
 // ============================================================
-// Pure module. Given (vendor, cores, bundles, sales, receiving, settings),
-// returns a VendorRecommendation with per-bundle and per-core buy quantities.
-//
-// Core principles (see "FBA Tool - Recommender v2 Design"):
-//   1. Truth lives in the BUNDLE. Cores are aggregation for MOQ.
-//   2. Single calc, two consistent views (core / bundle) by construction.
-//   3. Assigned bundle inventory is intransferible in the calc.
-//   4. Core raw is fungible, distributed via waterfall (urgency -> leveling).
-//   5. Seasonality at bundle level via calcBundleSeasonalProfile.
-//   6. MOQ applied at the end; if forced, buy MOQ and warn.
-//   7. Buy mode (bundle-form vs core-form) decided per bundle from 7f history.
-//   8. vendor.lt is used as-is (already includes shipping + processing).
+// Core principles (v2 kept) PLUS:
+//   9.  Baseline forecast uses Hampel + Holt (not raw DSR). Industry-standard.
+//   10. Safety stock = Z × σ_LT with Z from service-level-by-ABC.
+//   11. Inventory anomalies are detected and corrected before waterfall.
+//   12. Spike detection is visual-only; cálculo nunca oscila.
 // ============================================================
-
 
 import { calcBundleSeasonalProfile, DEFAULT_PROFILE } from './seasonal.js';
+import { calcBundleForecast } from './forecast.js';
+import { detectVendorAnomalies } from './anomalyDetector.js';
 
 // ────────────────────────────────────────────────────────────
-// Vendor-specific unit material cost from 7g (priceCompFull)
-// ────────────────────────────────────────────────────────────
-// Returns the most recent material-only unit cost the vendor charged for
-// this exact core. Excludes inbound shipping and tariffs because those
-// are paid separately from the vendor PO.
-//
-// priceCompFull rows shape (from the sheet):
-//   { core, vendor, date, pcs, matPrice (total material $), inbShip, tariffs, totalCost, cpp }
-// Here we use matPrice / pcs, NOT cpp (cpp includes inbound + tariffs).
-//
-// If no row exists for (vendor, core), returns null so the caller can fallback.
-let __rec_debug_printed = false;
-
-// ────────────────────────────────────────────────────────────
-// Parse the "Note" field of a 7g row to figure out which vendor paid it.
-// Two patterns:
-//   (a) "Vendor Name - PO#XXX"  → US / domestic vendor, take the Vendor Name
-//   (b) "FSMSF2406050" / "AGL..." / anything WITHOUT " - " → Chinese container
-//       (we can't tell which specific Chinese vendor, just that it's Chinese)
+// 7g vendor-specific material cost lookup (unchanged from v2)
 // ────────────────────────────────────────────────────────────
 function parseNoteVendor(note) {
   if (!note) return { kind: 'unknown', name: null };
   const n = String(note).trim();
-  // US/domestic pattern: "Name - rest"
   const m = n.match(/^(.+?)\s+-\s+/);
-  if (m) {
-    return { kind: 'named', name: m[1].trim() };
-  }
-  // No " - " separator → Chinese container code
+  if (m) return { kind: 'named', name: m[1].trim() };
   return { kind: 'container', name: null };
 }
 
@@ -57,128 +29,63 @@ function isChinaVendor(vendor) {
   return c === 'china' || c === 'cn' || c === 'prc';
 }
 
-// ────────────────────────────────────────────────────────────
-// Vendor-specific unit material cost from 7g (priceComp / priceCompFull).
-// Returns the most recent (totalMaterial / piecesBought) that matches this
-// vendor for this core. Match strategy depends on vendor country:
-//
-//   US / domestic vendor:
-//     row.note must start with "<vendor.name> - " (case-insensitive, fuzzy).
-//
-//   Chinese vendor:
-//     row.note must start with a container code (no " - " separator).
-//     This is a best-effort heuristic: we can't distinguish between multiple
-//     Chinese vendors sharing the same core, so it returns the most recent
-//     container-code row for this core, regardless of which Chinese vendor
-//     actually shipped it. Acceptable as a transitional fallback.
-//
-// Falls back to null if nothing matches; caller then uses sheet core.cost.
-// ────────────────────────────────────────────────────────────
-let __rec_debug_count = 0;
-
 function getVendorCoreUnitCost(coreId, vendor, paymentHistory) {
   if (!Array.isArray(paymentHistory) || !coreId || !vendor?.name) return null;
   const cid = coreId.toLowerCase().trim();
   const vName = vendor.name.toLowerCase().trim();
   const china = isChinaVendor(vendor);
-
   let best = null;
   for (const r of paymentHistory) {
     if (!r) continue;
     if ((r.core || '').toLowerCase().trim() !== cid) continue;
-
     const pcs = Number(r.pcs);
     const mat = Number(r.matPrice);
     if (!(pcs > 0) || !(mat > 0)) continue;
-
     const parsed = parseNoteVendor(r.note);
-
     let matches = false;
     if (china) {
       matches = parsed.kind === 'container';
     } else {
       if (parsed.kind !== 'named' || !parsed.name) continue;
       const noteName = parsed.name.toLowerCase();
-      matches = noteName === vName
-             || noteName.includes(vName)
-             || vName.includes(noteName);
+      matches = noteName === vName || noteName.includes(vName) || vName.includes(noteName);
     }
     if (!matches) continue;
-
     if (!best || (r.date || '') > (best.date || '')) best = r;
   }
-
-  // Debug: log only when we're looking up Jiangmen or when a lookup fails
-  // for a Chinese vendor with rows present in the data
-  if (typeof window !== 'undefined' && window.__REC_DEBUG__) {
-    const rowsForCore = paymentHistory.filter(r => (r?.core || '').toLowerCase().trim() === cid);
-    if (rowsForCore.length > 0 && !best) {
-      console.log(`[rec-debug] NO MATCH for ${coreId} @ ${vendor.name} (country=${vendor.country}, isChina=${china})`);
-      console.log(`[rec-debug]   ${rowsForCore.length} rows exist for this core:`);
-      rowsForCore.slice(0, 5).forEach(r => {
-        const parsed = parseNoteVendor(r.note);
-        console.log(`[rec-debug]   - date=${r.date} note="${r.note}" parsed=`, parsed);
-      });
-    }
-  }
-
   if (!best) return null;
   return Number(best.matPrice) / Number(best.pcs);
 }
-// ────────────────────────────────────────────────────────────
-// Defaults for tunables (can be overridden via settings)
-// ────────────────────────────────────────────────────────────
-// ────────────────────────────────────────────────────────────
-// Defaults for tunables (can be overridden via settings)
-// ────────────────────────────────────────────────────────────
-export const DEFAULT_SPIKE_THRESHOLD = 1.25;          // d7 >= X * cd -> spike
-export const DEFAULT_MOQ_INFLATION_THRESHOLD = 1.5;   // finalQty/need >= X -> warn
 
-const DAMP = 0.5;                                     // matches seasonal.js
+// ────────────────────────────────────────────────────────────
+// Defaults
+// ────────────────────────────────────────────────────────────
+export const DEFAULT_SPIKE_THRESHOLD = 1.25;
+export const DEFAULT_MOQ_INFLATION_THRESHOLD = 1.5;
 const LEVELING_STEP_DAYS = 10;
 const MAX_WATERFALL_ITER = 100;
 
 // ────────────────────────────────────────────────────────────
 // Helpers
 // ────────────────────────────────────────────────────────────
-
-function num(x, d = 0) {
-  const n = Number(x);
-  return Number.isFinite(n) ? n : d;
-}
-
+function num(x, d = 0) { const n = Number(x); return Number.isFinite(n) ? n : d; }
 function isDomestic(country) {
   const c = (country || '').toLowerCase().trim();
   return c === '' || c === 'us' || c === 'usa' || c === 'united states';
 }
-
 function getTargetDoc(vendor, settings) {
   return isDomestic(vendor?.country)
     ? num(settings?.domesticDoc, 90)
     : num(settings?.intlDoc, 180);
 }
 
-function effectiveDSR(b, spikeThreshold) {
-  const cd = num(b.cd);
-  const d7 = num(b.d7comp);
-  const t = num(spikeThreshold, DEFAULT_SPIKE_THRESHOLD);
-  if (d7 > 0 && cd > 0 && d7 >= t * cd) return d7;
-  return cd;
-}
-
 function bundleAssignedInv(b, replenMap, missingMap) {
-  // Matches the existing all-in model for a bundle:
-  //   FIB Inv (already includes SC + Reserved + Inbound to FBA)
-  // + pre-processed (replenRec.pprcUnits)
-  // + batched (replenRec.batched)
-  // + 7f inbound already in bundle form (from `missingMap` keyed by bundle JLS)
   const rp = (replenMap && replenMap[b.j]) || {};
   const inb7fBundle = (missingMap && missingMap[b.j]) || 0;
   return num(b.fibInv) + num(rp.pprcUnits) + num(rp.batched) + num(inb7fBundle);
 }
 
 function coresOf(b) {
-  // Bundles store cores in flat fields core1..core20 / qty1..qty20
   const out = [];
   for (let i = 1; i <= 20; i++) {
     const cid = b['core' + i];
@@ -203,48 +110,6 @@ function bundleBelongsToVendor(b, vendorName) {
   return (b.vendors || '').indexOf(vendorName) >= 0;
 }
 
-// ────────────────────────────────────────────────────────────
-// Demand projection — inline, mirrors seasonal.js projectDemand
-// but simpler (returns just the total)
-// ────────────────────────────────────────────────────────────
-function projectBundleDemand(dsr, days, profile, safety) {
-  if (!(dsr > 0) || !(days > 0)) return 0;
-  const s = num(safety, 1);
-
-  // Flat fallback if no history
-  if (!profile || !profile.hasHistory || !profile.lastYearShape) {
-    return dsr * days * s;
-  }
-
-  const today = new Date();
-  const curMonth = today.getMonth();
-  const curShape = profile.lastYearShape[curMonth] || 1;
-  const endMs = today.getTime() + days * 86400000;
-
-  let total = 0;
-  let cursor = new Date(today);
-  let iter = 0;
-  while (cursor.getTime() < endMs && iter < 36) {
-    iter++;
-    const mi = cursor.getMonth();
-    const yr = cursor.getFullYear();
-    const mLast = new Date(yr, mi + 1, 0);
-    const effEnd = Math.min(mLast.getTime(), endMs);
-    const effStart = Math.max(cursor.getTime(), today.getTime());
-    const d = Math.max(0, Math.round((effEnd - effStart) / 86400000) + 1);
-    const shape = profile.lastYearShape[mi] || 1;
-    const rawNorm = curShape > 0 ? shape / curShape : 1;
-    const dampedNorm = 1 + (rawNorm - 1) * DAMP;
-    total += dsr * dampedNorm * s * d;
-    cursor = new Date(yr, mi + 1, 1);
-  }
-  return total;
-}
-
-// ────────────────────────────────────────────────────────────
-// Buy mode detection: has the vendor ever delivered this bundle
-// as a finished bundle (matching row.core === bundle.j)?
-// ────────────────────────────────────────────────────────────
 function canBuyAsBundle(b, vendor, receivingFull) {
   if (!Array.isArray(receivingFull) || !vendor?.name) return false;
   const v = vendor.name.toLowerCase().trim();
@@ -258,18 +123,23 @@ function canBuyAsBundle(b, vendor, receivingFull) {
   return false;
 }
 
+// Visual-only spike detection (for badge ⚡, NOT for math)
+function isSpikeVisual(b, threshold) {
+  const cd = num(b.cd);
+  const d7 = num(b.d7comp);
+  const t = num(threshold, DEFAULT_SPIKE_THRESHOLD);
+  return d7 > 0 && cd > 0 && d7 >= t * cd;
+}
+
 // ────────────────────────────────────────────────────────────
-// Waterfall helpers
+// Waterfall helpers (unchanged math, but uses rawEffective per core)
 // ────────────────────────────────────────────────────────────
 function maxBundleUnitsFromPools(b, corePools) {
   let max = Infinity;
   for (const { coreId, qty } of b.coresUsed) {
     if (!(qty > 0)) continue;
     const pool = corePools[coreId];
-    // Core de OTRO vendor → no es responsabilidad de este waterfall.
-    // Asumimos que ese otro vendor maneja su propio raw.
     if (pool === undefined) continue;
-    // Mi propio core con pool en 0 → no puedo armar nada con esta bundle.
     if (pool <= 0) return 0;
     const can = Math.floor(pool / qty);
     if (can < max) max = can;
@@ -281,23 +151,15 @@ function applyBundleGive(b, give, corePools) {
   if (give <= 0) return;
   b.rawAssigned += give;
   for (const { coreId, qty } of b.coresUsed) {
-    // Solo decrementar pools que pertenecen a este vendor.
-    // Cores de otros vendors no están en corePools y no se tocan.
     if (corePools[coreId] === undefined) continue;
     corePools[coreId] = corePools[coreId] - give * qty;
   }
 }
+
 function distributeRawToBundles(prepped, corePools, targetDoc, replenFloor) {
-  // Helper: seasonal-aware DSR for waterfall targets. Falls back to plain dsr
-  // if seasonalDSR isn't set (shouldn't happen, but defensive).
-  const effDSR = (b) => (b.seasonalDSR && b.seasonalDSR > 0) ? b.seasonalDSR : b.dsr;
+  const effDSR = b => (b.forecastLevel && b.forecastLevel > 0) ? b.forecastLevel : b.dsr;
 
-  // "DOC" inside the waterfall is measured against seasonalDSR so that
-  // reaching "90 days" here means "90 days of actual expected demand",
-  // not 90 days of the flat current-DSR projection. This keeps the
-  // waterfall target consistent with coverageDemand / buyNeed downstream.
-
-  // PHASE A — urgency: bring critical bundles up to replenFloor
+  // PHASE A — urgency
   const byUrgency = [...prepped].sort((a, b) => {
     const ad = a.assignedInv / (effDSR(a) || 1);
     const bd = b.assignedInv / (effDSR(b) || 1);
@@ -309,20 +171,16 @@ function distributeRawToBundles(prepped, corePools, targetDoc, replenFloor) {
     const curInv = b.assignedInv + b.rawAssigned;
     const curDOC = curInv / edsr;
     if (curDOC >= replenFloor) continue;
-
     const targetInv = Math.ceil(replenFloor * edsr);
     const gap = Math.max(0, targetInv - curInv);
     if (gap <= 0) continue;
-
     const maxPossible = maxBundleUnitsFromPools(b, corePools);
     const give = Math.min(gap, maxPossible);
     if (give <= 0) continue;
-
     applyBundleGive(b, give, corePools);
   }
 
-  // PHASE B — leveling: raise everyone toward targetDoc in steps,
-  // using seasonal-aware DSR so the end state matches coverageDemand.
+  // PHASE B — leveling
   let level = replenFloor + LEVELING_STEP_DAYS;
   let iter = 0;
   while (level <= targetDoc && iter < MAX_WATERFALL_ITER) {
@@ -339,15 +197,12 @@ function distributeRawToBundles(prepped, corePools, targetDoc, replenFloor) {
       const curInv = b.assignedInv + b.rawAssigned;
       const curDOC = curInv / edsr;
       if (curDOC >= level) continue;
-
       const targetInv = Math.ceil(level * edsr);
       const gap = Math.max(0, targetInv - curInv);
       if (gap <= 0) continue;
-
       const maxPossible = maxBundleUnitsFromPools(b, corePools);
       const give = Math.min(gap, maxPossible);
       if (give <= 0) continue;
-
       applyBundleGive(b, give, corePools);
       any = true;
     }
@@ -355,9 +210,9 @@ function distributeRawToBundles(prepped, corePools, targetDoc, replenFloor) {
     level += LEVELING_STEP_DAYS;
   }
 }
- 
+
 // ────────────────────────────────────────────────────────────
-// MOQ + casepack for a core
+// MOQ + casepack
 // ────────────────────────────────────────────────────────────
 function applyMoqAndCasePack(needPieces, moq, casePack, moqThreshold) {
   if (needPieces <= 0) {
@@ -378,6 +233,15 @@ function applyMoqAndCasePack(needPieces, moq, casePack, moqThreshold) {
   };
 }
 
+// ────────────────────────────────────────────────────────────
+// ABC lookup
+// ────────────────────────────────────────────────────────────
+function buildAbcMap(abcA) {
+  const m = {};
+  (abcA || []).forEach(a => { if (a?.j) m[a.j] = a.profABC || null; });
+  return m;
+}
+
 // ============================================================
 // MAIN ENTRY POINT
 // ============================================================
@@ -386,16 +250,18 @@ export function calcVendorRecommendation({
   cores,
   bundles,
   bundleSales,
+  bundleDays,
+  coreDays,
+  abcA,
   receivingFull,
   replenMap,
   missingMap,
-  priceCompFull,   // full 7g purchase history rows — used to get the last
-                   // material unit cost the vendor charged for each core
+  priceCompFull,
   settings,
   purchFreqSafety,
-  forceMode,       // optional: 'cores' | 'bundles' — overrides historical detection
-  bundleMoqOverride,      // optional: min bundle qty for bundle-mode purchases (manual input)
-  moqExtraDocThreshold,   // optional: max acceptable extra DOC days from MOQ inflation
+  forceMode,
+  bundleMoqOverride,
+  moqExtraDocThreshold,
 }) {
   if (!vendor || !vendor.name) return null;
 
@@ -404,126 +270,137 @@ export function calcVendorRecommendation({
   const spikeThreshold = num(settings?.spikeThreshold, DEFAULT_SPIKE_THRESHOLD);
   const moqThreshold = num(settings?.moqInflationThreshold, DEFAULT_MOQ_INFLATION_THRESHOLD);
   const lt = num(vendor.lt, 30);
-  const safety = num(purchFreqSafety, 1.0);
 
-  // Cores owned by this vendor (exclude JLS-prefixed rows which aren't real cores)
   const vendorCores = (cores || []).filter(
     c => c && c.id && !/^JLS/i.test(c.id) && c.ven === vendor.name
   );
   const vCoreById = {};
   vendorCores.forEach(c => { vCoreById[c.id] = c; });
 
-  // Active bundles that reference this vendor
   const vendorBundles = (bundles || []).filter(
     b => isActiveBundle(b, settings) && bundleBelongsToVendor(b, vendor.name)
   );
 
-  // Steps 1-2: prep each bundle (assigned inv, effective DSR, seasonal profile)
-  const prepped = vendorBundles.map(b => {
-    const dsr = effectiveDSR(b, spikeThreshold);
+  const abcMap = buildAbcMap(abcA);
 
-    // Use precomputed profile if provided (via batch), otherwise compute now
+  // ──────────────────────────────────────────────────────────
+  // Step 0: Inventory anomaly detection
+  // ──────────────────────────────────────────────────────────
+  const anomalyMap = detectVendorAnomalies({
+    vendor, cores: vendorCores, coreDays,
+    receivingRows: receivingFull,
+    settings,
+  });
+
+  // ──────────────────────────────────────────────────────────
+  // Steps 1-3: forecast + profile + assigned inv per bundle
+  // ──────────────────────────────────────────────────────────
+  const prepped = vendorBundles.map(b => {
+    // Seasonal profile (cached from batch if provided, else compute now)
     let profile = b._profile;
     if (!profile) {
-      try {
-        profile = calcBundleSeasonalProfile(b.j, bundleSales);
-      } catch {
-        profile = DEFAULT_PROFILE;
-      }
+      try { profile = calcBundleSeasonalProfile(b.j, bundleSales); }
+      catch { profile = DEFAULT_PROFILE; }
     }
 
+    // Forecast (Holt + seasonal + safety)
+    const forecast = calcBundleForecast({
+      bundleId: b.j,
+      bundleDays,
+      leadTime: lt,
+      targetDoc,
+      profABC: abcMap[b.j] || null,
+      seasonalProfile: profile,
+      settings,
+    });
+
     const ai = bundleAssignedInv(b, replenMap, missingMap);
+    const fallbackDsr = num(b.cd);
+
     return {
       raw: b,
       id: b.j,
       j: b.j,
-      dsr,
       profile,
       hasSeasonalHistory: !!(profile && profile.hasHistory),
       assignedInv: ai,
       coresUsed: coresOf(b),
-      currentDOC: dsr > 0 ? ai / dsr : 99999,
       rawAssigned: 0,
       coverageDemand: 0,
+      flatDemand: 0,
       ltDemand: 0,
       totalAvailable: 0,
       currentCoverDOC: 0,
       buyNeed: 0,
       buyMode: 'core',
       urgent: false,
+      // forecast outputs
+      forecast,
+      forecastLevel: forecast.flags.noData ? fallbackDsr : (forecast.level || fallbackDsr),
+      // dsr kept for back-compat (urgency, DOC displays)
+      dsr: forecast.flags.noData ? fallbackDsr : Math.max(forecast.level, fallbackDsr * 0.01),
+      spikeVisual: isSpikeVisual(b, spikeThreshold),
+      profABC: abcMap[b.j] || null,
     };
   });
 
-// Step 3: project demand
-  //   flatDemand    = dsr × targetDoc × safety (the non-seasonal baseline)
-  //   coverageDemand = seasonally-adjusted (what buyNeed uses)
-  //   ltDemand      = for the urgency flag only
-  //   seasonalDSR   = coverageDemand / targetDoc — average DSR over the horizon
-  //                   accounting for seasonality. Used by the waterfall so the
-  //                   leveling target matches the actual demand the bundle
-  //                   will face, not a flat projection.
-for (const b of prepped) {
-    // For low-volume bundles (DSR < 1.0), seasonal signal is unreliable —
-    // noise dominates any pattern. Use flat projection instead.
-    const useFlat = b.dsr < 1.0;
-    b.coverageDemand = useFlat
-      ? Math.round(b.dsr * targetDoc * safety)
-      : projectBundleDemand(b.dsr, targetDoc, b.profile, safety);
-    b.flatDemand = Math.round(b.dsr * targetDoc * safety);
-    b.ltDemand = useFlat
-      ? Math.round(b.dsr * lt)
-      : projectBundleDemand(b.dsr, lt, b.profile, 1.0);
-    b.seasonalDSR = targetDoc > 0 ? b.coverageDemand / targetDoc : b.dsr;
+  // ──────────────────────────────────────────────────────────
+  // Step 4: demand projection from forecast
+  // ──────────────────────────────────────────────────────────
+  for (const b of prepped) {
+    b.coverageDemand = Math.round(b.forecast.coverageDemand + b.forecast.safetyStock);
+    b.flatDemand = Math.round(b.forecast.flatDemand);
+    // LT demand: simple projection using level only (for urgency flag)
+    b.ltDemand = Math.max(0, Math.round(b.forecastLevel * lt));
+    b.seasonalDSR = targetDoc > 0 ? b.forecast.coverageDemand / targetDoc : b.forecastLevel;
   }
-  // Step 4: waterfall — distribute this vendor's core raw among the bundles
-  // that use those cores. Pool = raw in JLS warehouse + 7f inbound to JLS
-  // (pendingInbound from missingMap keyed by core.id). `core.inb` is NOT
-  // included because that's inbound to Amazon FBA (already committed to
-  // direct-to-Amazon flow, can't be used to assemble bundles).
+
+  // ──────────────────────────────────────────────────────────
+  // Step 5: waterfall using rawEffective when anomaly detected
+  // ──────────────────────────────────────────────────────────
   const corePools = {};
   const corePendingInbound = {};
+  const coreRawEffective = {};
   for (const c of vendorCores) {
     const pending = num(missingMap?.[c.id]);
     corePendingInbound[c.id] = pending;
-    corePools[c.id] = num(c.raw) + pending;
+    const anomaly = anomalyMap[c.id];
+    const rawEff = (anomaly?.override?.rawEffective != null)
+      ? anomaly.override.rawEffective
+      : num(c.raw);
+    coreRawEffective[c.id] = rawEff;
+    corePools[c.id] = rawEff + pending;
   }
 
-  
-  // Only bundles that have at least one core from this vendor participate
   const waterfallBundles = prepped.filter(
     b => b.coresUsed.some(c => vCoreById[c.coreId])
   );
   distributeRawToBundles(waterfallBundles, corePools, targetDoc, replenFloor);
 
-// Step 5: buy need per bundle
-  //   currentCoverDOC is expressed in "seasonal days" — how many days of the
-  //   expected (seasonal) demand the current total covers. This matches what
-  //   buyNeed operates on, so DOC₁ and buyNeed stay consistent.
+  // ──────────────────────────────────────────────────────────
+  // Step 6: buy need
+  // ──────────────────────────────────────────────────────────
   for (const b of prepped) {
     const total = b.assignedInv + b.rawAssigned;
     b.totalAvailable = total;
-    const edsr = (b.seasonalDSR && b.seasonalDSR > 0) ? b.seasonalDSR : b.dsr;
+    const edsr = (b.seasonalDSR && b.seasonalDSR > 0) ? b.seasonalDSR : b.forecastLevel;
     b.currentCoverDOC = edsr > 0 ? total / edsr : 99999;
     b.buyNeed = Math.max(0, Math.ceil(b.coverageDemand - total));
     b.urgent = (total - b.ltDemand) < 0;
   }
 
-  // Step 6: decide buy mode per bundle
+  // ──────────────────────────────────────────────────────────
+  // Step 7: buy mode per bundle
+  // ──────────────────────────────────────────────────────────
   for (const b of prepped) {
-    if (forceMode === 'bundles') {
-      b.buyMode = 'bundle';
-    } else if (forceMode === 'cores') {
-      b.buyMode = 'core';
-    } else {
-      b.buyMode = canBuyAsBundle(b.raw, vendor, receivingFull) ? 'bundle' : 'core';
-    }
+    if (forceMode === 'bundles') b.buyMode = 'bundle';
+    else if (forceMode === 'cores') b.buyMode = 'core';
+    else b.buyMode = canBuyAsBundle(b.raw, vendor, receivingFull) ? 'bundle' : 'core';
   }
-  
-// Step 6.5: Apply Bundle MOQ override (if provided by user).
-  // For each bundle-mode bundle with buyNeed > 0 but below the MOQ:
-  //   - If urgent (OOS) → inflate to MOQ (buy it, can't wait)
-  //   - If extra DOC from inflation is acceptable (≤ threshold) → inflate
-  //   - Otherwise → wait (set buyNeed to 0, flag as 'wait')
+
+  // ──────────────────────────────────────────────────────────
+  // Step 7.5: Bundle MOQ override
+  // ──────────────────────────────────────────────────────────
   const bMoq = num(bundleMoqOverride, 0);
   const moqDocThresh = num(moqExtraDocThreshold, 30);
   for (const b of prepped) {
@@ -531,28 +408,19 @@ for (const b of prepped) {
     b.bundleMoqExtraDOC = 0;
     b.bundleMoqOriginalNeed = b.buyNeed;
     if (bMoq <= 0 || b.buyMode !== 'bundle' || b.buyNeed <= 0) continue;
-    if (b.buyNeed >= bMoq) {
-      b.bundleMoqStatus = 'meets_moq';
-      continue;
-    }
+    if (b.buyNeed >= bMoq) { b.bundleMoqStatus = 'meets_moq'; continue; }
     const extraUnits = bMoq - b.buyNeed;
-    const edsr = (b.seasonalDSR > 0) ? b.seasonalDSR : b.dsr;
+    const edsr = (b.seasonalDSR > 0) ? b.seasonalDSR : b.forecastLevel;
     const extraDOC = edsr > 0 ? Math.round(extraUnits / edsr) : 99999;
     b.bundleMoqExtraDOC = extraDOC;
-    if (b.urgent) {
-      b.buyNeed = bMoq;
-      b.bundleMoqStatus = 'inflated_urgent';
-    } else if (extraDOC <= moqDocThresh) {
-      b.buyNeed = bMoq;
-      b.bundleMoqStatus = 'inflated_ok';
-    } else {
-      b.buyNeed = 0;
-      b.bundleMoqStatus = 'wait';
-    }
+    if (b.urgent) { b.buyNeed = bMoq; b.bundleMoqStatus = 'inflated_urgent'; }
+    else if (extraDOC <= moqDocThresh) { b.buyNeed = bMoq; b.bundleMoqStatus = 'inflated_ok'; }
+    else { b.buyNeed = 0; b.bundleMoqStatus = 'wait'; }
   }
-  
-  // Step 7: aggregate to core (only for core-mode bundles and
-  // only for cores owned by THIS vendor)
+
+  // ──────────────────────────────────────────────────────────
+  // Step 8: aggregate to core
+  // ──────────────────────────────────────────────────────────
   const coreNeedMap = {};
   const coreBundlesMap = {};
   for (const b of prepped) {
@@ -565,10 +433,7 @@ for (const b of prepped) {
     }
   }
 
-// Step 7.5: Sanity check — if the core's TOTAL inventory (all-in) already
-  // covers the target DOC, don't buy. The bundles might look "short" individually
-  // because of how PPRC is assigned, but the physical inventory is there —
-  // it just needs to be redistributed/processed, not purchased.
+  // Step 8.5: sanity — if core's all-in already covers target DOC, don't buy
   for (const coreId of Object.keys(coreNeedMap)) {
     const core = vCoreById[coreId];
     if (!core) continue;
@@ -582,11 +447,10 @@ for (const b of prepped) {
       coreBundlesMap[coreId]._redistributeFlag = true;
     }
   }
-  
-  // Step 8: MOQ + casepack per core -> coreItems
 
-  // Price per piece comes from 7g (last material cost vendor charged for this
-  // core). Falls back to sheet core.cost if no history with this vendor.
+  // ──────────────────────────────────────────────────────────
+  // Step 9: MOQ + casepack per core -> coreItems
+  // ──────────────────────────────────────────────────────────
   const coreItems = [];
   for (const [coreId, needPieces] of Object.entries(coreNeedMap)) {
     const core = vCoreById[coreId];
@@ -614,19 +478,8 @@ for (const b of prepped) {
       ),
     });
   }
-// Bundle-mode items: one row per bundle bought as a finished bundle.
-  // Price per bundle unit = Σ (vendor-specific unit cost of each constituent
-  // core × qty per bundle). The vendor unit cost comes from 7g history
-  // (material-only, excluding inbound/tariffs which are paid separately).
-  //
-  // Rationale: the user confirmed that the vendor charges the same material
-  // price whether they ship the core loose or assemble it into a bundle —
-  // the material cost encapsulates the bundle assembly if it was bought
-  // assembled historically.
-  //
-  // If any core in the bundle has no history with this vendor, we fallback to
-  // sheet core.cost for that one core and mark priceSource as 'partial-history'.
-  // If no core has any history, priceSource is 'sheet-cost'.
+
+  // Bundle-mode items
   const bundleItems = [];
   for (const b of prepped) {
     if (b.buyNeed <= 0 || b.buyMode !== 'bundle') continue;
@@ -637,17 +490,11 @@ for (const b of prepped) {
       const c = vCoreById[coreId];
       if (!c) continue;
       const histUnit = getVendorCoreUnitCost(coreId, vendor, priceCompFull);
-      if (histUnit != null) {
-        pricePerPiece += histUnit * qty;
-        anyFromHistory = true;
-      } else {
-        pricePerPiece += num(c.cost) * qty;
-        anyFromSheet = true;
-      }
+      if (histUnit != null) { pricePerPiece += histUnit * qty; anyFromHistory = true; }
+      else { pricePerPiece += num(c.cost) * qty; anyFromSheet = true; }
     }
     const priceSource = anyFromHistory && anyFromSheet ? 'partial-history'
-                      : anyFromHistory ? '7g-history'
-                      : 'sheet-cost';
+                      : anyFromHistory ? '7g-history' : 'sheet-cost';
     bundleItems.push({
       id: b.id,
       mode: 'bundle',
@@ -672,14 +519,7 @@ for (const b of prepped) {
   const meetsVendorMoq = vendorMoqDollar <= 0 || totalCost >= vendorMoqDollar;
   const vendorMoqGap = Math.max(0, vendorMoqDollar - totalCost);
 
-// === PRICE MAP — full lookup of { id → pricePerPiece } for every core
-  // and every bundle of this vendor, regardless of whether they need to be
-  // bought right now. The UI uses this so that ANY row for this vendor
-  // displays the correct price (not just rows that are in buyNeed).
-  //
-  // For cores: unit cost = 7g material history or sheet core.cost fallback.
-  // For bundles: Σ (per-core unit cost × qty per bundle), same formula as
-  // bundleItems uses, but applied to ALL bundles of the vendor.
+  // Price map (unchanged from v2)
   const priceMap = {};
   for (const c of vendorCores) {
     const histUnitCost = getVendorCoreUnitCost(c.id, vendor, priceCompFull);
@@ -696,14 +536,16 @@ for (const b of prepped) {
     }
     priceMap[b.j] = price;
   }
-  
-  // Per-bundle transparency (used by Bundle rows and CoreTab BundlesTable)
-const bundleDetails = prepped.map(b => ({
+
+  // ──────────────────────────────────────────────────────────
+  // Bundle details (extended with forecast + safety stock)
+  // ──────────────────────────────────────────────────────────
+  const bundleDetails = prepped.map(b => ({
     bundleId: b.id,
     assignedInv: b.assignedInv,
     rawAssignedFromWaterfall: b.rawAssigned,
     totalAvailable: b.totalAvailable,
-    effectiveDSR: b.dsr,
+    effectiveDSR: b.forecastLevel,
     seasonalDSR: b.seasonalDSR,
     currentCoverDOC: b.currentCoverDOC,
     targetDOC: targetDoc,
@@ -718,14 +560,41 @@ const bundleDetails = prepped.map(b => ({
     bundleMoqStatus: b.bundleMoqStatus || null,
     bundleMoqExtraDOC: b.bundleMoqExtraDOC || 0,
     bundleMoqOriginalNeed: b.bundleMoqOriginalNeed ?? b.buyNeed,
+    // NEW v3 fields
+    forecast: {
+      level: b.forecast.level,
+      trend: b.forecast.trend,
+      usedHolt: b.forecast.flags.usedHolt,
+      outliersRemoved: b.forecast.flags.outliersRemoved,
+    },
+    safetyStock: {
+      amount: Math.round(b.forecast.safetyStock),
+      sigmaLT: b.forecast.sigmaLT,
+      Z: b.forecast.Z,
+      profABC: b.profABC,
+      fallback: b.forecast.flags.safetyStockFallback,
+    },
+    demandBreakdown: b.forecast.demandBreakdown,
+    spikeVisual: b.spikeVisual,
+    flags: {
+      trackingSignalExceeded: b.forecast.flags.trackingSignalExceeded,
+      trackingSignal: b.forecast.flags.trackingSignal,
+      shortHistory: b.forecast.flags.shortHistory,
+      trendCapped: b.forecast.flags.trendCapped,
+      safetyStockFallback: b.forecast.flags.safetyStockFallback,
+      outliersRemoved: b.forecast.flags.outliersRemoved,
+    },
   }));
 
-  // Per-core summary (used by the by-core view)
-  // Zero rows for cores with no need so the view can still show them.
+  // ──────────────────────────────────────────────────────────
+  // Core details (extended with anomaly info)
+  // ──────────────────────────────────────────────────────────
   const coreDetails = vendorCores.map(c => {
     const item = coreItems.find(i => i.id === c.id);
     const pending = corePendingInbound[c.id] || 0;
     const rawOnHand = num(c.raw);
+    const rawEff = coreRawEffective[c.id];
+    const anomaly = anomalyMap[c.id];
     return {
       coreId: c.id,
       needPieces: item?.needPieces || 0,
@@ -739,8 +608,11 @@ const bundleDetails = prepped.map(b => ({
       bundlesAffected: item?.bundlesAffected || 0,
       bundlesAffectedIds: item?.bundlesAffectedIds || [],
       rawOnHand,
+      rawEffective: rawEff,
       pendingInbound: pending,
-      totalPool: rawOnHand + pending,
+      totalPool: rawEff + pending,
+      anomalyDetected: !!anomaly,
+      anomalyInfo: anomaly || null,
     };
   });
 
@@ -759,18 +631,21 @@ const bundleDetails = prepped.map(b => ({
     vendorMoqDollar,
     meetsVendorMoq,
     vendorMoqGap,
+    anomalyMap,
   };
 }
 
 // ============================================================
-// Batch helper — compute recommendations for all vendors in one go.
-// Bundle seasonal profiles are computed once and cached across vendors.
+// Batch helper
 // ============================================================
 export function batchVendorRecommendations({
   vendors,
   cores,
   bundles,
   bundleSales,
+  bundleDays,
+  coreDays,
+  abcA,
   receivingFull,
   replenMap,
   missingMap,
@@ -783,11 +658,8 @@ export function batchVendorRecommendations({
   for (const b of (bundles || [])) {
     if (!b || !b.j) continue;
     if (profileCache[b.j]) continue;
-    try {
-      profileCache[b.j] = calcBundleSeasonalProfile(b.j, bundleSales);
-    } catch {
-      profileCache[b.j] = DEFAULT_PROFILE;
-    }
+    try { profileCache[b.j] = calcBundleSeasonalProfile(b.j, bundleSales); }
+    catch { profileCache[b.j] = DEFAULT_PROFILE; }
   }
   const bundlesWithProfile = (bundles || []).map(b => ({ ...b, _profile: profileCache[b.j] }));
   for (const v of (vendors || [])) {
@@ -798,12 +670,15 @@ export function batchVendorRecommendations({
       cores,
       bundles: bundlesWithProfile,
       bundleSales,
+      bundleDays,
+      coreDays,
+      abcA,
       receivingFull,
       replenMap,
       missingMap,
       priceCompFull,
       settings,
-      purchFreqSafety: safety,
+      purchFreqSafety: safety, // kept for UI metadata only
       bundleMoqOverride: 0,
       moqExtraDocThreshold: num(settings?.moqExtraDocThreshold, 30),
     });
