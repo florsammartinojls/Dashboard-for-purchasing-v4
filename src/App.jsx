@@ -318,7 +318,7 @@ export default function App() {
       settings: stg,
       purchFreqMap,
     });
- }, [data.vendors, data.cores, data.bundles, data.bundleSales, data.bundleDaysForecast, data.coreDaysForecast, data.abcA, ...
+}, [data.vendors, data.cores, data.bundles, data.bundleSales, data.bundleDaysForecast, data.coreDaysForecast, data.abcA, data.receivingFull, replenMap, missingMap, data.priceCompFull, data.priceComp, stg, purchFreqMap]);
 
   const sc = useMemo(() => {
     const c = { critical: 0, warning: 0, healthy: 0 };
