@@ -1,31 +1,60 @@
 // src/lib/recommender.js
 // ============================================================
-// v3.5 Purchase Recommendation Engine
+// v3.2 Purchase Recommendation Engine (FIXED)
 // ============================================================
-// NEW in v3.5:
-//   [HARD-CAP] Final recommendation can NEVER exceed
-//              core_target_need × CORE_HARD_CAP_MULTIPLIER.
-//              This is the last-line enforcement: no matter what
-//              bundle-level forecasts say, the core purchase cannot
-//              push total inventory beyond 1.2× target DOC worth.
-//              This catches all cases where safety stock or bundle
-//              coverage demand is inflated relative to actual core need.
+// NEW in v3.2:
+//   [FIX-MOQ-CROSS] When a core has MOQ inflation AND the same vendor is
+//                   also getting bundles-as-bundles that USE this core,
+//                   the raw material needed to build those bundles is
+//                   credited against the core's MOQ.
+//
+//                   Example (Core-10294 w/ TIANJIN HUAYUE):
+//                     needPieces: 4,176
+//                     MOQ: 34,560
+//                     bundles-as-bundle consuming this core: 11,831 pcs
+//                     (JLS-0866 × 12, JLS-0865 × 4, JLS-0536 × 1)
+//
+//                   v3.1 behavior: finalQty = 34,560 (MOQ forced on 4,176)
+//                   v3.2 behavior: effectiveMoq = 34,560 − 11,831 = 22,729
+//                                  finalQty = max(4,176, 22,729) = 22,729
+//                                  Still MOQ-inflated, but 5.4× instead of 8.3×.
+//
+//                   Logic: if we're already getting ~X units of this core
+//                   baked into bundle deliveries, the vendor's minimum-run
+//                   cost is effectively partially amortized. We credit X
+//                   against the MOQ before applying it to the raw-core line.
+//
+// NEW in v3.1 (kept):
+//   [FIX-YoY] After calcBundleForecast returns, compare total demand
+//             (coverageDemand + safetyStock) against the same calendar
+//             window one year ago. If today's forecast is more than
+//             MAX_YOY_RATIO × historic, cap it at that ratio and flag.
+//
+// v3 principles (unchanged):
+//   9.  Baseline forecast uses Hampel + Holt (not raw DSR). Industry-standard.
+//   10. Safety stock = Z × σ_LT with Z from service-level-by-ABC.
+//   11. Inventory anomalies are detected and corrected before waterfall.
+//   12. Spike detection is visual-only; cálculo nunca oscila.
 // ============================================================
 
 import { calcBundleSeasonalProfile, DEFAULT_PROFILE } from './seasonal.js';
 import { calcBundleForecast, calcHistoricSamePeriod } from './forecast.js';
 import { detectVendorAnomalies } from './anomalyDetector.js';
 
+// [FIX-YoY] If forecast > MAX_YOY_RATIO × historic LY same-period sales,
+// cap it at that ratio. 1.5 means "we'll forecast up to 50% more than LY
+// but never more than that without manual review". Set high enough to allow
+// genuine growth, low enough to catch runaway models.
 export const MAX_YOY_RATIO = 1.5;
+
+// Minimum LY sales to trust the sanity check. If LY same-period was < 30
+// units total, YoY ratios are noise (e.g. going from 5 → 25 is +400% but
+// meaningless). Skip the check entirely in that case.
 export const MIN_HISTORIC_FOR_YOY = 30;
-export const CORE_CAP_MULTIPLIER = 1.1;
-export const CORE_TS_BIAS_THRESHOLD = 0.6;
 
-// [HARD-CAP] Maximum recommendation as a multiple of core-target need.
-// 1.2 = rec can be at most 20% more than what core needs to hit target DOC.
-// This is a hard enforcement regardless of bundle-level calculations.
-export const CORE_HARD_CAP_MULTIPLIER = 1.2;
-
+// ────────────────────────────────────────────────────────────
+// 7g vendor-specific material cost lookup (unchanged from v2)
+// ────────────────────────────────────────────────────────────
 function parseNoteVendor(note) {
   if (!note) return { kind: 'unknown', name: null };
   const n = String(note).trim();
@@ -67,11 +96,17 @@ function getVendorCoreUnitCost(coreId, vendor, paymentHistory) {
   return Number(best.matPrice) / Number(best.pcs);
 }
 
+// ────────────────────────────────────────────────────────────
+// Defaults
+// ────────────────────────────────────────────────────────────
 export const DEFAULT_SPIKE_THRESHOLD = 1.25;
 export const DEFAULT_MOQ_INFLATION_THRESHOLD = 1.5;
 const LEVELING_STEP_DAYS = 10;
 const MAX_WATERFALL_ITER = 100;
 
+// ────────────────────────────────────────────────────────────
+// Helpers
+// ────────────────────────────────────────────────────────────
 function num(x, d = 0) { const n = Number(x); return Number.isFinite(n) ? n : d; }
 function isDomestic(country) {
   const c = (country || '').toLowerCase().trim();
@@ -127,6 +162,7 @@ function canBuyAsBundle(b, vendor, receivingFull) {
   return false;
 }
 
+// Visual-only spike detection (for badge ⚡, NOT for math)
 function isSpikeVisual(b, threshold) {
   const cd = num(b.cd);
   const d7 = num(b.d7comp);
@@ -134,15 +170,22 @@ function isSpikeVisual(b, threshold) {
   return d7 > 0 && cd > 0 && d7 >= t * cd;
 }
 
+// [FIX-YoY] Apply YoY sanity check to a bundle forecast. Mutates the
+// forecast object's coverageDemand and flags; returns info about the cap
+// for logging/UI. Returns null if check was not applicable (not enough
+// history), so we know to skip the flag.
 function applyYoYSanityCheck(forecast, bundleId, bundleDays, targetDoc) {
   if (!forecast || forecast.flags.noData) return null;
+
   const historic = calcHistoricSamePeriod(bundleDays, bundleId, targetDoc);
   if (!historic) return { applied: false, reason: 'no_history' };
   if (historic.total < MIN_HISTORIC_FOR_YOY) {
     return { applied: false, reason: 'historic_too_small', historic: historic.total };
   }
-  const forecastTotal = forecast.coverageDemand;
+
+  const forecastTotal = forecast.coverageDemand; // before safety stock
   const maxAllowed = historic.total * MAX_YOY_RATIO;
+
   if (forecastTotal <= maxAllowed) {
     return {
       applied: false,
@@ -152,9 +195,13 @@ function applyYoYSanityCheck(forecast, bundleId, bundleDays, targetDoc) {
       ratio: forecastTotal / historic.total,
     };
   }
+
+  // Cap the forecast. Preserve the structure: scale down coverageDemand
+  // proportionally and recompute demandBreakdown for transparency.
   const scale = maxAllowed / forecastTotal;
   const cappedTotal = maxAllowed;
   const originalTotal = forecastTotal;
+
   forecast.coverageDemand = cappedTotal;
   forecast.demandBreakdown = {
     fromLevel: Math.round(forecast.demandBreakdown.fromLevel * scale),
@@ -166,6 +213,7 @@ function applyYoYSanityCheck(forecast, bundleId, bundleDays, targetDoc) {
   forecast.flags.yoyHistoric = Math.round(historic.total);
   forecast.flags.yoyOriginalForecast = Math.round(originalTotal);
   forecast.flags.yoyScale = scale;
+
   return {
     applied: true,
     historic: historic.total,
@@ -176,6 +224,9 @@ function applyYoYSanityCheck(forecast, bundleId, bundleDays, targetDoc) {
   };
 }
 
+// ────────────────────────────────────────────────────────────
+// Waterfall helpers (unchanged math, but uses rawEffective per core)
+// ────────────────────────────────────────────────────────────
 function maxBundleUnitsFromPools(b, corePools) {
   let max = Infinity;
   for (const { coreId, qty } of b.coresUsed) {
@@ -201,6 +252,7 @@ function applyBundleGive(b, give, corePools) {
 function distributeRawToBundles(prepped, corePools, targetDoc, replenFloor) {
   const effDSR = b => (b.forecastLevel && b.forecastLevel > 0) ? b.forecastLevel : b.dsr;
 
+  // PHASE A — urgency
   const byUrgency = [...prepped].sort((a, b) => {
     const ad = a.assignedInv / (effDSR(a) || 1);
     const bd = b.assignedInv / (effDSR(b) || 1);
@@ -221,6 +273,7 @@ function distributeRawToBundles(prepped, corePools, targetDoc, replenFloor) {
     applyBundleGive(b, give, corePools);
   }
 
+  // PHASE B — leveling
   let level = replenFloor + LEVELING_STEP_DAYS;
   let iter = 0;
   while (level <= targetDoc && iter < MAX_WATERFALL_ITER) {
@@ -251,14 +304,29 @@ function distributeRawToBundles(prepped, corePools, targetDoc, replenFloor) {
   }
 }
 
-function applyMoqAndCasePack(needPieces, moq, casePack, moqThreshold) {
+// ────────────────────────────────────────────────────────────
+// MOQ + casepack
+// ────────────────────────────────────────────────────────────
+// [FIX-MOQ-CROSS] New parameter: moqCredit = material from bundle-as-bundle
+// purchases at the same vendor that consume this core. It reduces the
+// effective MOQ threshold. If the raw-core need is X, and the vendor is
+// simultaneously going to process Y units of the same core into bundles
+// for us, the MOQ is effectively X+Y worth of core going through their
+// production. We credit Y against the MOQ line.
+function applyMoqAndCasePack(needPieces, moq, casePack, moqThreshold, moqCredit = 0) {
   if (needPieces <= 0) {
-    return { finalQty: 0, moqInflated: false, excessFromMoq: 0, moqInflationRatio: 0 };
+    return { finalQty: 0, moqInflated: false, excessFromMoq: 0, moqInflationRatio: 0, moqCredit: 0, effectiveMoq: 0 };
   }
   let qty = needPieces;
   const m = num(moq);
   const cp = num(casePack, 1);
-  if (m > 0 && qty < m) qty = m;
+  const credit = Math.max(0, num(moqCredit));
+
+  // [FIX-MOQ-CROSS] Effective MOQ for the raw-core line = MOQ − credit
+  // from bundle-as-bundle deliveries. Never goes below 0.
+  const effectiveMoq = Math.max(0, m - credit);
+
+  if (effectiveMoq > 0 && qty < effectiveMoq) qty = effectiveMoq;
   if (cp > 1) qty = Math.ceil(qty / cp) * cp;
   const t = num(moqThreshold, DEFAULT_MOQ_INFLATION_THRESHOLD);
   const ratio = needPieces > 0 ? qty / needPieces : 0;
@@ -267,85 +335,23 @@ function applyMoqAndCasePack(needPieces, moq, casePack, moqThreshold) {
     moqInflated: ratio >= t,
     moqInflationRatio: ratio,
     excessFromMoq: qty - needPieces,
+    moqCredit: credit,
+    effectiveMoq,
   };
 }
 
+// ────────────────────────────────────────────────────────────
+// ABC lookup
+// ────────────────────────────────────────────────────────────
 function buildAbcMap(abcA) {
   const m = {};
   (abcA || []).forEach(a => { if (a?.j) m[a.j] = a.profABC || null; });
   return m;
 }
 
-function computeCoreAllIn(c) {
-  return num(c.raw) + num(c.inb) + num(c.pp) + num(c.jfn) +
-         num(c.pq)  + num(c.ji)  + num(c.fba);
-}
-
-// [HARD-CAP] Compute the maximum recommendation we will allow for a core.
-// This is: (target_doc × core_dsr - core_all_in) × CORE_HARD_CAP_MULTIPLIER
-// If core is already at/above target, returns 0.
-function computeCoreHardCap(core, targetDoc) {
-  const allIn = computeCoreAllIn(core);
-  const coreDSR = num(core.dsr);
-  if (coreDSR <= 0) return Infinity; // can't evaluate, don't cap
-  const targetInv = targetDoc * coreDSR;
-  const rawNeed = Math.max(0, targetInv - allIn);
-  return Math.ceil(rawNeed * CORE_HARD_CAP_MULTIPLIER);
-}
-
-function evaluateCoreConfidence(coreId, coreDetail, coreBundles, core, targetDoc) {
-  const reasons = [];
-
-  if (!coreBundles || coreBundles.length === 0) {
-    return { confidence: 'high', reasons: [], suggestedAction: null, tsBiasedPct: 0, anyRegimeShift: false };
-  }
-
-  const biased = coreBundles.filter(b => b.forecast?.flags?.trackingSignalExceeded);
-  const tsBiasedPct = biased.length / coreBundles.length;
-
-  const anyRegimeShift = coreBundles.some(b =>
-    b.forecast?.flags?.recentRegimeApplied || b.forecast?.flags?.slowRegimeApplied
-  );
-
-  const allIn = computeCoreAllIn(core);
-  const coreDSR = num(core.dsr);
-  const coreDOC = coreDSR > 0 ? allIn / coreDSR : 9999;
-
-  if (tsBiasedPct >= CORE_TS_BIAS_THRESHOLD) {
-    reasons.push(`${Math.round(tsBiasedPct * 100)}% of bundles have biased forecast`);
-  }
-  if (anyRegimeShift) {
-    reasons.push('Demand regime shift detected');
-  }
-  if (coreDOC >= targetDoc) {
-    reasons.push(`Core at ${Math.round(coreDOC)} DOC (target ${targetDoc})`);
-  }
-
-  let confidence = 'high';
-  if (tsBiasedPct >= CORE_TS_BIAS_THRESHOLD || anyRegimeShift) {
-    confidence = 'low';
-  } else if (tsBiasedPct > 0.3) {
-    confidence = 'medium';
-  }
-
-  let suggestedAction = null;
-  const finalQty = coreDetail?.finalQty || 0;
-
-  if (finalQty === 0) {
-    suggestedAction = '✓ No action needed';
-  } else if (confidence === 'low' && coreDOC >= targetDoc * 0.9) {
-    suggestedAction = `⚠ Forecast unreliable + core near target. Consider waiting 30d.`;
-  } else if (confidence === 'low') {
-    suggestedAction = `⚠ Forecast unreliable. Review before ordering ${finalQty.toLocaleString()}.`;
-  } else if (confidence === 'medium') {
-    suggestedAction = `Order ${finalQty.toLocaleString()} pcs. Verify trend.`;
-  } else {
-    suggestedAction = `Order ${finalQty.toLocaleString()} pcs.`;
-  }
-
-  return { confidence, reasons, suggestedAction, tsBiasedPct, anyRegimeShift };
-}
-
+// ============================================================
+// MAIN ENTRY POINT
+// ============================================================
 export function calcVendorRecommendation({
   vendor,
   cores,
@@ -384,19 +390,27 @@ export function calcVendorRecommendation({
 
   const abcMap = buildAbcMap(abcA);
 
+  // ──────────────────────────────────────────────────────────
+  // Step 0: Inventory anomaly detection
+  // ──────────────────────────────────────────────────────────
   const anomalyMap = detectVendorAnomalies({
     vendor, cores: vendorCores, coreDays,
     receivingRows: receivingFull,
     settings,
   });
 
+  // ──────────────────────────────────────────────────────────
+  // Steps 1-3: forecast + profile + assigned inv per bundle
+  // ──────────────────────────────────────────────────────────
   const prepped = vendorBundles.map(b => {
+    // Seasonal profile (cached from batch if provided, else compute now)
     let profile = b._profile;
     if (!profile) {
       try { profile = calcBundleSeasonalProfile(b.j, bundleSales); }
       catch { profile = DEFAULT_PROFILE; }
     }
 
+    // Forecast (Holt + seasonal + safety)
     const forecast = calcBundleForecast({
       bundleId: b.j,
       bundleDays,
@@ -407,6 +421,8 @@ export function calcVendorRecommendation({
       settings,
     });
 
+    // [FIX-YoY] Apply YoY sanity check. Mutates `forecast` in place when a
+    // cap is applied. Info object is stored for debugging / UI.
     const yoyInfo = applyYoYSanityCheck(forecast, b.j, bundleDays, targetDoc);
 
     const ai = bundleAssignedInv(b, replenMap, missingMap);
@@ -429,22 +445,31 @@ export function calcVendorRecommendation({
       buyNeed: 0,
       buyMode: 'core',
       urgent: false,
+      // forecast outputs
       forecast,
-      yoyInfo,
+      yoyInfo,                     // [FIX-YoY] for debugging / UI
       forecastLevel: forecast.flags.noData ? fallbackDsr : (forecast.level || fallbackDsr),
+      // dsr kept for back-compat (urgency, DOC displays)
       dsr: forecast.flags.noData ? fallbackDsr : Math.max(forecast.level, fallbackDsr * 0.01),
       spikeVisual: isSpikeVisual(b, spikeThreshold),
       profABC: abcMap[b.j] || null,
     };
   });
 
+  // ──────────────────────────────────────────────────────────
+  // Step 4: demand projection from forecast
+  // ──────────────────────────────────────────────────────────
   for (const b of prepped) {
     b.coverageDemand = Math.round(b.forecast.coverageDemand + b.forecast.safetyStock);
     b.flatDemand = Math.round(b.forecast.flatDemand);
+    // LT demand: simple projection using level only (for urgency flag)
     b.ltDemand = Math.max(0, Math.round(b.forecastLevel * lt));
     b.seasonalDSR = targetDoc > 0 ? b.forecast.coverageDemand / targetDoc : b.forecastLevel;
   }
 
+  // ──────────────────────────────────────────────────────────
+  // Step 5: waterfall using rawEffective when anomaly detected
+  // ──────────────────────────────────────────────────────────
   const corePools = {};
   const corePendingInbound = {};
   const coreRawEffective = {};
@@ -464,6 +489,9 @@ export function calcVendorRecommendation({
   );
   distributeRawToBundles(waterfallBundles, corePools, targetDoc, replenFloor);
 
+  // ──────────────────────────────────────────────────────────
+  // Step 6: buy need
+  // ──────────────────────────────────────────────────────────
   for (const b of prepped) {
     const total = b.assignedInv + b.rawAssigned;
     b.totalAvailable = total;
@@ -473,12 +501,18 @@ export function calcVendorRecommendation({
     b.urgent = (total - b.ltDemand) < 0;
   }
 
+  // ──────────────────────────────────────────────────────────
+  // Step 7: buy mode per bundle
+  // ──────────────────────────────────────────────────────────
   for (const b of prepped) {
     if (forceMode === 'bundles') b.buyMode = 'bundle';
     else if (forceMode === 'cores') b.buyMode = 'core';
     else b.buyMode = canBuyAsBundle(b.raw, vendor, receivingFull) ? 'bundle' : 'core';
   }
 
+  // ──────────────────────────────────────────────────────────
+  // Step 7.5: Bundle MOQ override
+  // ──────────────────────────────────────────────────────────
   const bMoq = num(bundleMoqOverride, 0);
   const moqDocThresh = num(moqExtraDocThreshold, 30);
   for (const b of prepped) {
@@ -496,6 +530,9 @@ export function calcVendorRecommendation({
     else { b.buyNeed = 0; b.bundleMoqStatus = 'wait'; }
   }
 
+  // ──────────────────────────────────────────────────────────
+  // Step 8: aggregate to core
+  // ──────────────────────────────────────────────────────────
   const coreNeedMap = {};
   const coreBundlesMap = {};
   for (const b of prepped) {
@@ -508,96 +545,46 @@ export function calcVendorRecommendation({
     }
   }
 
-  const coreSanityLog = {};
+  // [FIX-MOQ-CROSS] Step 8.25: compute material credit per core from
+  // bundles that are being bought AS BUNDLES (finished goods). Each such
+  // bundle, when produced by the vendor, consumes raw-core material that
+  // counts toward the vendor's MOQ production run of that core.
+  //
+  // Example: JLS-0866 uses 12× Core-10294. If we buy 407 of JLS-0866 as
+  // bundle, the vendor processes 407×12 = 4,884 pcs of Core-10294 into
+  // those bundles. We credit 4,884 against Core-10294's MOQ.
+  const coreMoqCreditFromBundles = {};
+  const coreCreditBundlesMap = {};
+  for (const b of prepped) {
+    if (b.buyNeed <= 0 || b.buyMode !== 'bundle') continue;
+    for (const { coreId, qty } of b.coresUsed) {
+      if (!vCoreById[coreId]) continue; // only credit if we own this core at this vendor
+      const credit = b.buyNeed * qty;
+      coreMoqCreditFromBundles[coreId] = (coreMoqCreditFromBundles[coreId] || 0) + credit;
+      if (!coreCreditBundlesMap[coreId]) coreCreditBundlesMap[coreId] = [];
+      coreCreditBundlesMap[coreId].push({ bundleId: b.id, qty, credit });
+    }
+  }
 
+  // Step 8.5: sanity — if core's all-in already covers target DOC, don't buy
   for (const coreId of Object.keys(coreNeedMap)) {
     const core = vCoreById[coreId];
     if (!core) continue;
-    const allIn = computeCoreAllIn(core);
+    const allIn = num(core.raw) + num(core.pp) + num(core.inb) + num(core.fba);
     const coreDSR = num(core.dsr);
     if (coreDSR <= 0) continue;
     const coreDOC = allIn / coreDSR;
-
-    // Soft cap: core already healthy → 0
-    if (coreDOC >= targetDoc * CORE_CAP_MULTIPLIER) {
-      const originalNeed = coreNeedMap[coreId];
+    if (coreDOC > targetDoc * 1.2) {
       coreNeedMap[coreId] = 0;
       if (!coreBundlesMap[coreId]) coreBundlesMap[coreId] = [];
       coreBundlesMap[coreId]._redistributeFlag = true;
-      coreSanityLog[coreId] = {
-        capped: true,
-        reason: 'core_healthy',
-        coreDOC: Math.round(coreDOC),
-        targetDoc,
-        capMultiplier: CORE_CAP_MULTIPLIER,
-        allIn,
-        coreDSR,
-        originalNeed,
-      };
-      continue;
-    }
-
-    // [HARD-CAP] Always enforce: rec ≤ core_target_need × CORE_HARD_CAP_MULTIPLIER
-    const hardCap = computeCoreHardCap(core, targetDoc);
-    const currentNeed = coreNeedMap[coreId];
-    if (currentNeed > hardCap) {
-      coreNeedMap[coreId] = hardCap;
-      coreSanityLog[coreId] = {
-        capped: true,
-        reason: 'hard_cap_core_target',
-        coreDOC: Math.round(coreDOC),
-        targetDoc,
-        hardCapMultiplier: CORE_HARD_CAP_MULTIPLIER,
-        allIn,
-        coreDSR,
-        originalNeed: currentNeed,
-        cappedNeed: hardCap,
-      };
     }
   }
 
-  // Bundle-mode: apply hard cap there too
-  for (const b of prepped) {
-    if (b.buyNeed <= 0 || b.buyMode !== 'bundle') continue;
-
-    const allCoresHealthy = b.coresUsed.every(({ coreId }) => {
-      const core = vCoreById[coreId];
-      if (!core) return false;
-      const allIn = computeCoreAllIn(core);
-      const coreDSR = num(core.dsr);
-      if (coreDSR <= 0) return false;
-      return (allIn / coreDSR) >= targetDoc * CORE_CAP_MULTIPLIER;
-    });
-    if (allCoresHealthy) {
-      b.bundleMoqStatus = 'core_level_capped';
-      b.bundleMoqOriginalNeed = b.buyNeed;
-      b.buyNeed = 0;
-      continue;
-    }
-
-    // [HARD-CAP] For bundle mode, the bundle's buyNeed (in bundle units)
-    // translates to core pieces. Check that total pieces consumed don't exceed
-    // hard cap per core.
-    let capRatio = 1;
-    for (const { coreId, qty } of b.coresUsed) {
-      const core = vCoreById[coreId];
-      if (!core) continue;
-      const hardCap = computeCoreHardCap(core, targetDoc);
-      const piecesForThisCore = b.buyNeed * qty;
-      if (piecesForThisCore > hardCap && hardCap > 0) {
-        const ratio = hardCap / piecesForThisCore;
-        if (ratio < capRatio) capRatio = ratio;
-      } else if (hardCap === 0) {
-        capRatio = 0;
-      }
-    }
-    if (capRatio < 1) {
-      b.bundleMoqOriginalNeed = b.buyNeed;
-      b.buyNeed = Math.floor(b.buyNeed * capRatio);
-      b.bundleMoqStatus = capRatio === 0 ? 'core_level_capped' : 'hard_capped';
-    }
-  }
-
+  // ──────────────────────────────────────────────────────────
+  // Step 9: MOQ + casepack per core -> coreItems
+  // [FIX-MOQ-CROSS] Now passes moqCredit from bundle purchases.
+  // ──────────────────────────────────────────────────────────
   const coreItems = [];
   for (const [coreId, needPieces] of Object.entries(coreNeedMap)) {
     const core = vCoreById[coreId];
@@ -605,7 +592,11 @@ export function calcVendorRecommendation({
     const histUnitCost = getVendorCoreUnitCost(coreId, vendor, priceCompFull);
     const pricePerPiece = histUnitCost != null ? histUnitCost : num(core.cost);
     const priceSource = histUnitCost != null ? '7g-history' : 'sheet-cost';
-    const moqRes = applyMoqAndCasePack(needPieces, core.moq, core.casePack, moqThreshold);
+
+    // [FIX-MOQ-CROSS] credit from bundle-as-bundle purchases of this vendor
+    const moqCredit = coreMoqCreditFromBundles[coreId] || 0;
+    const moqRes = applyMoqAndCasePack(needPieces, core.moq, core.casePack, moqThreshold, moqCredit);
+
     coreItems.push({
       id: coreId,
       mode: 'core',
@@ -618,6 +609,11 @@ export function calcVendorRecommendation({
       moqInflationRatio: moqRes.moqInflationRatio,
       excessFromMoq: moqRes.excessFromMoq,
       excessCostFromMoq: moqRes.excessFromMoq * pricePerPiece,
+      // [FIX-MOQ-CROSS] new fields exposing the credit logic for UI/debug
+      moqOriginal: num(core.moq),
+      moqCredit: moqRes.moqCredit,
+      moqEffective: moqRes.effectiveMoq,
+      creditingBundles: coreCreditBundlesMap[coreId] || [],
       bundlesAffected: (coreBundlesMap[coreId] || []).length,
       bundlesAffectedIds: coreBundlesMap[coreId] || [],
       urgent: prepped.some(b =>
@@ -626,6 +622,13 @@ export function calcVendorRecommendation({
     });
   }
 
+  // [FIX-MOQ-CROSS] Edge case: a core has NO direct need (needPieces=0) but
+  // bundles-as-bundles consume material from it. The vendor's MOQ for that
+  // core is cleared by the bundle material itself — no coreItem row is needed,
+  // but we still want this info visible in coreDetails for transparency.
+  // (Handled below when building coreDetails.)
+
+  // Bundle-mode items
   const bundleItems = [];
   for (const b of prepped) {
     if (b.buyNeed <= 0 || b.buyMode !== 'bundle') continue;
@@ -665,6 +668,7 @@ export function calcVendorRecommendation({
   const meetsVendorMoq = vendorMoqDollar <= 0 || totalCost >= vendorMoqDollar;
   const vendorMoqGap = Math.max(0, vendorMoqDollar - totalCost);
 
+  // Price map (unchanged from v2)
   const priceMap = {};
   for (const c of vendorCores) {
     const histUnitCost = getVendorCoreUnitCost(c.id, vendor, priceCompFull);
@@ -682,6 +686,9 @@ export function calcVendorRecommendation({
     priceMap[b.j] = price;
   }
 
+  // ──────────────────────────────────────────────────────────
+  // Bundle details (extended with forecast + safety stock + YoY info)
+  // ──────────────────────────────────────────────────────────
   const bundleDetails = prepped.map(b => ({
     bundleId: b.id,
     assignedInv: b.assignedInv,
@@ -705,7 +712,7 @@ export function calcVendorRecommendation({
     forecast: {
       level: b.forecast.level,
       trend: b.forecast.trend,
-      effectiveTrend: b.forecast.effectiveTrend,
+      effectiveTrend: b.forecast.effectiveTrend,    // [FIX-3] trend actually used
       usedHolt: b.forecast.flags.usedHolt,
       outliersRemoved: b.forecast.flags.outliersRemoved,
     },
@@ -718,7 +725,7 @@ export function calcVendorRecommendation({
     },
     demandBreakdown: b.forecast.demandBreakdown,
     spikeVisual: b.spikeVisual,
-    yoyInfo: b.yoyInfo,
+    yoyInfo: b.yoyInfo,          // [FIX-YoY] null or { applied, historic, ... }
     flags: {
       trackingSignalExceeded: b.forecast.flags.trackingSignalExceeded,
       trackingSignal: b.forecast.flags.trackingSignal,
@@ -730,26 +737,21 @@ export function calcVendorRecommendation({
       yoyCapApplied: b.forecast.flags.yoyCapApplied || false,
       yoyHistoric: b.forecast.flags.yoyHistoric,
       yoyOriginalForecast: b.forecast.flags.yoyOriginalForecast,
-      recentRegimeApplied: b.forecast.flags.recentRegimeApplied || false,
-      recentRegimeInfo: b.forecast.flags.recentRegimeInfo || null,
-      slowRegimeApplied: b.forecast.flags.slowRegimeApplied || false,
-      slowRegimeInfo: b.forecast.flags.slowRegimeInfo || null,
     },
   }));
 
+  // ──────────────────────────────────────────────────────────
+  // Core details (extended with anomaly info + [FIX-MOQ-CROSS] credit info)
+  // ──────────────────────────────────────────────────────────
   const coreDetails = vendorCores.map(c => {
     const item = coreItems.find(i => i.id === c.id);
     const pending = corePendingInbound[c.id] || 0;
     const rawOnHand = num(c.raw);
     const rawEff = coreRawEffective[c.id];
     const anomaly = anomalyMap[c.id];
-    const sanityInfo = coreSanityLog[c.id] || null;
-
-    const coreBundleIds = coreBundlesMap[c.id] || [];
-    const coreBundlesData = prepped.filter(b => coreBundleIds.includes(b.id));
-    const coreDetailTemp = { needPieces: item?.needPieces || 0, finalQty: item?.finalQty || 0 };
-    const confidenceResult = evaluateCoreConfidence(c.id, coreDetailTemp, coreBundlesData, c, targetDoc);
-
+    // [FIX-MOQ-CROSS] credit visibility even if this core has no direct buy
+    const moqCredit = coreMoqCreditFromBundles[c.id] || 0;
+    const creditingBundles = coreCreditBundlesMap[c.id] || [];
     return {
       coreId: c.id,
       needPieces: item?.needPieces || 0,
@@ -759,6 +761,11 @@ export function calcVendorRecommendation({
       moqInflationRatio: item?.moqInflationRatio || 1,
       excessFromMoq: item?.excessFromMoq || 0,
       excessCostFromMoq: item?.excessCostFromMoq || 0,
+      // [FIX-MOQ-CROSS] expose the credit so UI / debug can show it
+      moqOriginal: item?.moqOriginal ?? num(c.moq),
+      moqCredit,
+      moqEffective: item?.moqEffective ?? Math.max(0, num(c.moq) - moqCredit),
+      creditingBundles,
       urgent: item?.urgent || false,
       bundlesAffected: item?.bundlesAffected || 0,
       bundlesAffectedIds: item?.bundlesAffectedIds || [],
@@ -768,12 +775,6 @@ export function calcVendorRecommendation({
       totalPool: rawEff + pending,
       anomalyDetected: !!anomaly,
       anomalyInfo: anomaly || null,
-      coreSanityCap: sanityInfo,
-      confidence: confidenceResult.confidence,
-      confidenceReasons: confidenceResult.reasons,
-      suggestedAction: confidenceResult.suggestedAction,
-      tsBiasedPct: confidenceResult.tsBiasedPct,
-      anyRegimeShift: confidenceResult.anyRegimeShift,
     };
   });
 
@@ -796,6 +797,9 @@ export function calcVendorRecommendation({
   };
 }
 
+// ============================================================
+// Batch helper
+// ============================================================
 export function batchVendorRecommendations({
   vendors,
   cores,
@@ -810,21 +814,15 @@ export function batchVendorRecommendations({
   priceCompFull,
   settings,
   purchFreqMap,
-  seasonalProfiles,
 }) {
   const out = {};
-
-  let profileCache = seasonalProfiles;
-  if (!profileCache) {
-    profileCache = {};
-    for (const b of (bundles || [])) {
-      if (!b || !b.j) continue;
-      if (profileCache[b.j]) continue;
-      try { profileCache[b.j] = calcBundleSeasonalProfile(b.j, bundleSales); }
-      catch { profileCache[b.j] = DEFAULT_PROFILE; }
-    }
+  const profileCache = {};
+  for (const b of (bundles || [])) {
+    if (!b || !b.j) continue;
+    if (profileCache[b.j]) continue;
+    try { profileCache[b.j] = calcBundleSeasonalProfile(b.j, bundleSales); }
+    catch { profileCache[b.j] = DEFAULT_PROFILE; }
   }
-
   const bundlesWithProfile = (bundles || []).map(b => ({ ...b, _profile: profileCache[b.j] }));
   for (const v of (vendors || [])) {
     if (!v || !v.name) continue;
@@ -842,7 +840,7 @@ export function batchVendorRecommendations({
       missingMap,
       priceCompFull,
       settings,
-      purchFreqSafety: safety,
+      purchFreqSafety: safety, // kept for UI metadata only
       bundleMoqOverride: 0,
       moqExtraDocThreshold: num(settings?.moqExtraDocThreshold, 30),
     });
