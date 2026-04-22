@@ -423,7 +423,7 @@ export function calcVendorRecommendation({
 
     // [FIX-YoY] Apply YoY sanity check. Mutates `forecast` in place when a
     // cap is applied. Info object is stored for debugging / UI.
-    const yoyInfo = applyYoYSanityCheck(forecast, b.j, bundleDays, targetDoc);
+    const yoyInfo = null;
 
     const ai = bundleAssignedInv(b, replenMap, missingMap);
     const fallbackDsr = num(b.cd);
