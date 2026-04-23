@@ -695,7 +695,7 @@ export function CalcBreakdownV2({ core, vendor, vendorRec, profile, stg, onClose
                           {b.urgent && <span className="ml-1 text-red-400 text-[9px]" title="Will stockout before LT">⚠</span>}
                           {b.spikeVisual && <span className="ml-1 text-orange-400 text-[9px]" title="7D trending >25% above composite">⚡</span>}
                         </td>
-                        <td className="py-1.5 text-right text-gray-300">{fmt1(b.forecast?.level ?? b.effectiveDSR)}</td>
+                        <td className="py-1.5 text-right text-gray-300">{fmt1(b.forecast?.level ?? b.forecastLevelRaw ?? b.effectiveDSR)}</td>
                         <td className="py-1.5 text-right text-gray-500">×{b.qtyPerBundle}</td>
                         <td className="py-1.5 text-right text-gray-300">{fmtN(b.assignedInv)}</td>
                         <td className="py-1.5 text-right text-gray-400">{docBefore != null ? fmtN(docBefore) : "—"}</td>
