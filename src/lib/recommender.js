@@ -467,14 +467,25 @@ export function calcVendorRecommendation({
   // Step 4: demand projection from forecast
   // ──────────────────────────────────────────────────────────
   for (const b of prepped) {
-    b.coverageDemand = Math.round(b.forecast.coverageDemand + b.forecast.safetyStock);
-    b.flatDemand = Math.round(b.forecast.flatDemand);
-    b.ltDemand = Math.max(0, Math.round(b.forecastLevel * lt));
-    // [FIX-CONSISTENCY] effectiveDSR = la vara única
-    b.effectiveDSR = effDSR(b, targetDoc);
-    // seasonalDSR preservado para back-compat del UI (es lo mismo ahora)
-    b.seasonalDSR = b.effectiveDSR;
+  // Fallback para bundles con poca historia: usar DSR plano × targetDoc
+  // Razón: forecast.coverageDemand=0 cuando shortHistory=true, pero b.dsr
+  // puede tener un valor real de la planilla (composite DSR del bundle).
+  // Sin este fallback, bundles nuevos quedan invisibles para el recomendador.
+  let coverageDemand = b.forecast.coverageDemand + b.forecast.safetyStock;
+  let flatDemand = b.forecast.flatDemand;
+
+  if (coverageDemand <= 0 && b.dsr > 0) {
+    coverageDemand = b.dsr * targetDoc;
+    flatDemand = b.dsr * targetDoc;
+    b.usedFlatFallback = true;
   }
+
+  b.coverageDemand = Math.round(coverageDemand);
+  b.flatDemand = Math.round(flatDemand);
+  b.ltDemand = Math.max(0, Math.round(b.forecastLevel * lt));
+  b.effectiveDSR = effDSR(b, targetDoc);
+  b.seasonalDSR = b.effectiveDSR;
+}
 
   // ──────────────────────────────────────────────────────────
   // Step 5: waterfall usando effDSR único
@@ -744,6 +755,7 @@ export function calcVendorRecommendation({
       yoyCapApplied: b.forecast.flags.yoyCapApplied || false,
       yoyHistoric: b.forecast.flags.yoyHistoric,
       yoyOriginalForecast: b.forecast.flags.yoyOriginalForecast,
+      usedFlatFallback: b.usedFlatFallback || false,  
     },
   }));
 
