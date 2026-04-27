@@ -541,7 +541,7 @@ export function calcVendorRecommendation({
     b.bundleMoqExtraDOC = extraDOC;
     if (b.urgent) { b.buyNeed = bMoq; b.bundleMoqStatus = 'inflated_urgent'; }
     else if (extraDOC <= moqDocThresh) { b.buyNeed = bMoq; b.bundleMoqStatus = 'inflated_ok'; }
-    else { b.buyNeed = 0; b.bundleMoqStatus = 'wait'; }
+    else { b.buyNeed = bMoq; b.bundleMoqStatus = 'inflated_excess'; }
   }
 
   // ──────────────────────────────────────────────────────────
