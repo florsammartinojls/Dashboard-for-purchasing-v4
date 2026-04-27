@@ -675,6 +675,8 @@ useEffect(() => {
           settings: stg,
           purchFreqSafety: purchFreqMap[vendorName]?.safetyMultiplier || 1.0,
           forceMode,
+          bundleMoqOverride: moqOverrides[vendorName]?.bundleMoq || 0,  // ← AGREGAR
+          moqExtraDocThreshold: stg.moqExtraDocThreshold || 30,         // ← AGREGAR
         })
       : effectiveRecs[vendorName];
     if (!rec || !rec.items?.length) { setToast("Nothing to fill"); return; }
