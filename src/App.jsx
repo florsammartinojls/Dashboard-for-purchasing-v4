@@ -288,6 +288,7 @@ const DEFAULT_SETTINGS = {
   serviceLevelOther: 95,
   inventoryAnomalyMultiplier: 3,
   anomalyLookbackDays: 7,
+  baseWindowDays: 60,
 };
 
 export default function App() {
