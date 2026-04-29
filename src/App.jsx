@@ -69,36 +69,186 @@ function VendorsTab({ data, stg, goVendor, workflow, saveWorkflow, deleteWorkflo
 }
 
 // === Glossary Tab ===
+// Organized in blocks: status → forecast engine → demand regime →
+// waterfall → buy mode → MOQ → flags → settings tunable.
+// Separators are entries with empty desc — rendered as section headers below.
 const DEFAULT_GL = [
-  { term: "C.DSR", desc: "Composite Daily Sales Rate (1 decimal)." },
-  { term: "DOC", desc: "Days of Coverage — how many days current inventory will last at current sales rate." },
-  { term: "Critical", desc: "DOC ≤ Lead Time. Needs immediate action." },
-  { term: "Warning", desc: "DOC ≤ Lead Time + Buffer Days. Monitor closely." },
-  { term: "Healthy", desc: "DOC > Lead Time + Buffer. Sufficient inventory." },
-  { term: "Forecast Level", desc: "Holt-smoothed baseline DSR. Replaces raw DSR for calculations — more stable than a 7-day or 30-day average." },
-  { term: "Trend", desc: "Holt-estimated change in DSR per day. Positive = demand rising." },
-  { term: "σ_LT (sigma LT)", desc: "Standard deviation of demand during lead time. Measures volatility." },
-  { term: "Z", desc: "Service-level multiplier. 95% = 1.65 (buffer 1.65 × σ_LT), 97% = 1.88, 99% = 2.33." },
-  { term: "Safety Stock", desc: "Z × σ_LT. Statistical buffer that grows with volatility, shrinks when demand is stable." },
-  { term: "Tracking Signal", desc: "Sum of forecast errors ÷ MAD. |TS| > 4 means forecast is biased — review." },
-  { term: "Confidence", desc: "Forecast reliability. LOW = majority of bundles have biased forecast (TS > 4) or detected demand regime shift — recommendation may be inflated." },
+  // ─── BLOCK 1: BASIC STATUS METRICS ───────────────────────────
+  { term: "—— BASIC STATUS ——", desc: "" },
+  { term: "C.DSR", desc: "Composite Daily Sales Rate (1 decimal). Average daily units sold for a core or bundle, based on the live sheet. This is the FALLBACK number — the recommender uses something more sophisticated, but C.DSR is what shows in the table because it's familiar." },
+  { term: "DOC", desc: "Days of Coverage — how many days current inventory will last at current sales rate. Calculated as All-In ÷ DSR. A DOC of 90 means: 'with the stock I have today, I'll be selling for 90 more days before running out.'" },
+  { term: "All-In", desc: "Total available inventory across all stages: Raw + Pre-Processed (PPRC) + Inbound to Amazon + FBA Pieces. This is the denominator for DOC calculations." },
+  { term: "Critical", desc: "DOC ≤ Lead Time. You will run out before your next order can possibly arrive. Needs immediate action — order today." },
+  { term: "Warning", desc: "DOC ≤ Lead Time + Buffer Days. You won't run out before the next order, but you have no margin if anything goes wrong (vendor delay, demand spike). Monitor closely, plan to order soon." },
+  { term: "Healthy", desc: "DOC > Lead Time + Buffer. Sufficient inventory. No urgent action needed." },
+  { term: "Lead Time (LT)", desc: "Days from placing an order to having usable stock. For domestic vendors, typically 14-30 days; for international (China), 90-180 days. Used as-is from vendor.lt — the value already includes processing time after arrival." },
+  { term: "Target DOC", desc: "How many days of coverage we want to maintain. Domestic vendors: 90 days default. International: 180 days default. Configurable in Settings." },
+  { term: "Replen Floor DOC", desc: "Minimum days of coverage we never want to fall below. Default 80. The waterfall fills bundles to this floor first (urgency phase) before equalizing to target." },
+
+  // ─── BLOCK 2: FORECAST ENGINE (CONTINUOUS) ───────────────────
+  { term: "—— FORECAST ENGINE ——", desc: "" },
+  { term: "Forecast Level (Holt level)", desc: "Smoothed baseline DSR estimated by Holt's method. Replaces raw DSR for forecast calculations because it's more stable than 7-day or 30-day averages — it reacts to changes but doesn't overreact to single-day spikes." },
+  { term: "Trend (Holt trend)", desc: "Estimated change in DSR per day. Positive = demand rising. Capped to ±2% of level per day to prevent runaway extrapolation. If demand was 10/day yesterday and trend is +0.05, the model expects ~10.05 today." },
+  { term: "Trend damping (φ phi)", desc: "Trend slowly fades over the forecast horizon (φ=0.88). A trend of +0.05/day doesn't mean +18 units after a year — it means about +2-3 units, because we don't trust trends to continue indefinitely." },
+  { term: "Hampel filter", desc: "Outlier detection using rolling median + MAD (median absolute deviation). Single-day spikes (3× more than neighbors) get replaced with the local median, so a Black Friday day doesn't permanently inflate the forecast." },
+  { term: "σ_LT (sigma LT)", desc: "Standard deviation of demand during lead time. Measures how much actual sales bounced around in the past during a window equal to your lead time. Higher σ_LT → more volatile → more safety stock needed." },
+  { term: "Z (service-level multiplier)", desc: "How many standard deviations of buffer you want. 95% service = Z=1.65, 97% = Z=1.88, 99% = Z=2.33. Higher Z = more cushion = less stockout risk = more cash tied up. ABC class A items use higher Z than C." },
+  { term: "Safety Stock", desc: "Z × σ_LT. Statistical buffer added on top of forecasted demand. Grows automatically when demand is volatile, shrinks when it's stable. NOT a fixed % markup — it's based on actual variability." },
+  { term: "Tracking Signal", desc: "Sum of forecast errors ÷ MAD over the last 14 days. |TS| > 4 means the forecast is biased — actual demand is consistently above or below forecast. When triggered, trend gets gated to zero (we stop extrapolating) until the bias clears." },
+  { term: "Recent regime shift (fast)", desc: "Triggers if the last 30 days average less than 75% of Holt level. Replaces the level with the recent average and zeros out trend. Catches sudden drops (product getting unlisted, competitor entry, market shift)." },
+  { term: "Slow regime shift", desc: "Triggers if last 90 days average more than 15% below the prior 90 days. Same effect as fast regime: replace level with recent, trend = 0. Catches gradual decline that fast regime misses." },
+  { term: "YoY sanity cap", desc: "If forecast > 1.5× same period last year, cap it. Prevents the engine from projecting wild growth that wasn't seen historically. Only applies when prior-year history exists." },
+
+  // ─── BLOCK 3: DEMAND REGIME (NEW IN v3.4) ─────────────────────
+  { term: "—— DEMAND REGIME ——", desc: "" },
+  { term: "Regime: continuous", desc: "Bundle that sells almost every day. Forecast uses Holt + seasonal (the engine described above). Most bundles fall here. No special badge in the UI." },
+  { term: "Regime: intermittent", desc: "Bundle that sells sporadically — more than 50% of days have ZERO sales. If you sold 4 units in 30 days, the real rate is 0.13/day, NOT 4/day. Holt would overestimate because it filters out zero days. The intermittent path uses (total units ÷ total days) including zeros, so a single sales day doesn't inflate the recommendation. Marked with a sky-blue ~ badge." },
+  { term: "Regime: new_or_sparse", desc: "Bundle with less than 30 days of history. Impossible to forecast reliably. Falls back to the sheet DSR with a conservative cap (max 1 unit/day). Always review manually before purchasing. Marked with a violet N badge." },
+  { term: "Zero-day ratio", desc: "% of the last 365 days with no sales. If above 50%, the bundle is classified as intermittent. This is the trigger that switches calculation method — visible in the regime badge tooltip." },
+  { term: "Rate per day (intermittent)", desc: "For intermittent bundles: total units sold ÷ total days in window (zeros included). Different from the sheet DSR, which filters out zero-sale days and therefore overstates real demand for sporadic items." },
+  { term: "Avg when selling (intermittent)", desc: "For intermittent bundles: average units sold ONLY on days with sales. Used as a heuristic safety stock (1 average sale of cushion). If you typically sell 4 at a time, carry 4 extra." },
+
+  // ─── BLOCK 4: EFFECTIVE DSR & DEMAND ─────────────────────────
+  { term: "—— EFFECTIVE DSR ——", desc: "" },
+  { term: "effDSR (Effective DSR)", desc: "The single rate of decision used everywhere in the v3 engine. Defined as: coverageDemand ÷ targetDoc. Guarantees consistency across the waterfall, the DOC calculation, and the buy decision. If buyNeed > 0 ⟺ DOC < targetDoc, no exceptions. For continuous bundles, effDSR ≈ Holt level adjusted by seasonal/safety. For intermittent, effDSR = real rate." },
+  { term: "coverageDemand", desc: "Total demand projected over the targetDoc horizon. Includes Holt level + trend + seasonal adjustment + safety stock for continuous bundles. For intermittent: rate × targetDoc. This is the goal post — the inventory level we want to reach." },
+  { term: "ltDemand (lead-time demand)", desc: "Forecast level × lead time. The amount we expect to sell during the time it takes a new order to arrive. Used to flag URGENT bundles where current available inventory < ltDemand (would stock out before next PO arrives)." },
+  { term: "buyNeed", desc: "Final purchase need per bundle: max(0, coverageDemand − totalAvailable). If totalAvailable already covers coverageDemand, buyNeed is zero — no purchase needed. Otherwise, buyNeed fills the gap exactly." },
+
+  // ─── BLOCK 5: WATERFALL ALLOCATION ────────────────────────────
+  { term: "—— WATERFALL ——", desc: "" },
+  { term: "Waterfall (raw allocation)", desc: "Algorithm that distributes a core's raw inventory among the bundles that use it. Bundles are SOURCE OF TRUTH — cores are aggregated from bundle needs. The waterfall happens BEFORE buy needs are calculated, ensuring raw on-hand gets credited correctly." },
+  { term: "Waterfall Phase A (urgency)", desc: "Fills bundles up to the replenFloorDOC (default 80 days). Most urgent bundles (lowest current DOC) get raw first. Prevents stockouts before equalization." },
+  { term: "Waterfall Phase B (leveling)", desc: "After urgency is satisfied, bundles get topped up in 10-day increments toward targetDOC. Bundles with the lowest current coverage get filled first at each increment, so no single bundle gets overstocked while others remain under." },
+  { term: "Assigned inventory", desc: "Inventory that's already committed to a specific bundle and CANNOT be reallocated by the waterfall. Includes: FIB Inventory, Pre-processed (PPRC), JFN, Batched Raw, Batched PPRC, and Inbound 7f marked as bundle. The waterfall only touches raw core stock and pending core inbound." },
+  { term: "Total available", desc: "Sum of assignedInv + rawAssignedFromWaterfall. The bundle's total stock position after the waterfall has run. Used to compute current DOC and buyNeed." },
+
+  // ─── BLOCK 6: BUY MODE ────────────────────────────────────────
+  { term: "—— BUY MODE ——", desc: "" },
+  { term: "Buy mode: core", desc: "Bundle's need will be purchased as raw core material from the vendor, then assembled in-house. Default when the vendor has never delivered this bundle pre-assembled (per 7f history)." },
+  { term: "Buy mode: bundle", desc: "Bundle's need will be purchased as finished units directly from the vendor (drop-in, no assembly required). Triggered when 7f history shows the vendor previously delivered this bundle finished." },
+  { term: "Mix (auto)", desc: "Default vendor view. Each bundle uses its own buy mode (bundle or core) based on 7f history. The system decides per-bundle." },
+  { term: "Force Cores", desc: "Override: every bundle is bought as raw core material, regardless of 7f history. Use when the vendor temporarily can't or won't assemble. Quantities should match Mix exactly — only the FORM changes, not the numbers." },
+  { term: "Force Bundles", desc: "Override: every bundle is bought as finished units, regardless of 7f history. Use when you want to skip in-house assembly. Quantities should match Mix exactly." },
+  { term: "Mix vs Force consistency", desc: "Mix, Force Cores, and Force Bundles MUST produce the same total unit need — only the buy mode (form) changes. If you see different unit totals between modes, that's a bug. Costs may differ legitimately if assembled-bundle pricing differs from sum-of-components pricing." },
+  { term: "MOQ credit cross-mode", desc: "If a bundle is purchased in 'bundle' mode, the cores it would have used get credit toward their own MOQ. Prevents the vendor's core MOQ from being inflated by needs that are already being purchased as finished bundles." },
+
+  // ─── BLOCK 7: MOQ HANDLING ────────────────────────────────────
+  { term: "—— MOQ ——", desc: "" },
+  { term: "Vendor MOQ ($)", desc: "Minimum dollar value the vendor requires per order. Below this, they refuse the order or charge premium. The PO badge shows ✓ when met, ! when below." },
+  { term: "Core MOQ (units)", desc: "Per-core minimum unit quantity from the vendor. If real need is below MOQ, the recommender forces qty up to MOQ. Casepack rounding applied on top." },
+  { term: "Bundle MOQ (override)", desc: "Per-bundle minimum unit quantity for bundles bought in bundle mode. Set in the BdlMOQ field per vendor. If need < MOQ, the engine decides: buy MOQ if urgent, buy MOQ if extra is ≤30 days, otherwise flag as 'excess' for manual review." },
+  { term: "MOQ inflated", desc: "When the vendor's MOQ forces buying more than 1.5× the real need (configurable threshold). Triggers the orange $ badge. The Need column shows '450→1000' meaning real need 450, MOQ-forced 1000. Excess is shown in pcs and dollars." },
+  { term: "MOQ inflation ratio", desc: "finalQty ÷ realNeed. If 1.0, no inflation. If 2.0, you're buying twice what you need. Threshold of 1.5 (configurable) triggers the inflated flag." },
+  { term: "Excess from MOQ", desc: "finalQty − realNeed. The number of pieces you'd buy beyond the actual need solely because of MOQ. Multiplied by unit cost gives the dollar excess — shown in tooltip and at the vendor header." },
+  { term: "Bundle MOQ status: meets_moq", desc: "Bundle's natural need is already at or above the bundle MOQ. No special action — just buy the need." },
+  { term: "Bundle MOQ status: inflated_urgent", desc: "Need is below MOQ but the bundle is urgent (would stock out during lead time). Buying MOQ anyway to avoid stockout. Red ⚠ badge." },
+  { term: "Bundle MOQ status: inflated_ok", desc: "Need is below MOQ and not urgent, but the extra DOC from buying MOQ is ≤30 days (acceptable overhead). Orange $ badge — go ahead." },
+  { term: "Bundle MOQ status: inflated_excess", desc: "Need is below MOQ, not urgent, AND extra DOC from buying MOQ exceeds 30 days. Red ⚠ MOQ excess badge — review before ordering, may want to wait for accumulated demand." },
+
+  // ─── BLOCK 8: FLAGS & BADGES ──────────────────────────────────
+  { term: "—— FLAGS & BADGES ——", desc: "" },
+  { term: "Flag: OOS (⚠)", desc: "Stockout risk — at least one bundle using this core would run out BEFORE the next PO arrives. Must be in the next order. Red badge." },
+  { term: "Flag: INV (≠)", desc: "Inventory mismatch — sheet DOC and recalculated DOC (allIn ÷ DSR) differ by more than 20%. Numbers don't reconcile. Recheck stock manually. Amber badge." },
+  { term: "Flag: MOQ ($)", desc: "MOQ inflated — see MOQ section. Orange badge." },
+  { term: "Flag: INTERMIT (~)", desc: "Bundle classified as intermittent demand. Tooltip shows the zero-day ratio and the real rate per day. Sky-blue badge." },
+  { term: "Flag: NEW (N)", desc: "Bundle has less than 30 days of history. Forecast capped at 1 unit/day. Review manually. Violet badge." },
+  { term: "(Nb) suffix", desc: "Number of bundles driving this core's need. E.g. '(3b)' means 3 bundles use this core and contribute to its purchase need. Click 📊 to see the breakdown by bundle." },
+  { term: "Spike (⚡)", desc: "7-day DSR is at least 1.25× the composite DSR. VISUAL ONLY — does not affect calculations. Threshold configurable in Settings." },
+
+  // ─── BLOCK 9: ANOMALY DETECTION ───────────────────────────────
+  { term: "—— ANOMALY DETECTION ——", desc: "" },
+  { term: "Inventory anomaly", desc: "When a core's raw on-hand exceeds anomalyMultiplier × historic average (default 3×) within the lookback window (default 7 days), the engine treats the recent inflow as 'pending verification' rather than usable stock. Prevents buying decisions based on counts that haven't been confirmed." },
+  { term: "Core already covered", desc: "Sanity check after waterfall: if a core's standalone DOC (raw + pp + inb + fba ÷ DSR) exceeds 1.2× targetDoc, its bundle-driven need is zeroed out. Prevents over-buying when the core is independently overstocked." },
+
+  // ─── BLOCK 10: PRICING & VENDOR ──────────────────────────────
+  { term: "—— PRICING ——", desc: "" },
+  { term: "Price source: 7g-history", desc: "Unit cost taken from the most recent purchase history (7g sheet) for this vendor + core combination. Includes material price only (not inbound shipping or tariffs)." },
+  { term: "Price source: sheet-cost", desc: "Unit cost taken from the cores sheet (the static 'cost' column). Used when no 7g history exists for this vendor + core combination." },
+  { term: "Price source: partial-history", desc: "For bundles in bundle mode: some component cores have 7g history, others don't. Mixed sources — review CPP carefully." },
+  { term: "CPP (Cost Per Piece)", desc: "Total landed cost ÷ pieces, including material + inbound shipping + tariffs. Shown in the History panel. Differs from sheet cost (material only) — CPP is the real economic cost." },
+  { term: "CPP benchmark", desc: "Comparison of current vendor's CPP vs an alternate source (China container price or named domestic vendor). Shown as ±% under the cost column. Negative % = current vendor is cheaper. Calculated from total-cost CPP, not just material." },
+
+  // ─── BLOCK 11: SETTINGS (TUNABLE) ─────────────────────────────
+  { term: "—— TUNABLE SETTINGS ——", desc: "" },
+  { term: "spikeThreshold", desc: "Multiplier for the spike (⚡) flag. Default 1.25. If 7d DSR ≥ this × composite DSR, mark as spike. Visual only." },
+  { term: "moqInflationThreshold", desc: "Ratio above which MOQ is considered inflated. Default 1.5 (i.e., buying 1.5× real need). Triggers the orange $ badge." },
+  { term: "moqExtraDocThreshold", desc: "For bundle MOQ override — max acceptable extra days of coverage when forced to buy MOQ. Default 30. Above this, flag as 'inflated_excess' for review." },
+  { term: "domesticDoc / intlDoc", desc: "Default target DOC per vendor type. 90 days for domestic (US), 180 for international (China). Vendor-specific override possible via vendor record." },
+  { term: "replenFloorDoc", desc: "Minimum DOC the waterfall fills to before equalizing. Default 80. Bundles below this floor get raw inventory urgency-first." },
+  { term: "holtAlpha / holtBeta", desc: "Smoothing parameters for Holt's method. Alpha (default 0.2) controls how much weight new observations get for the level. Beta (default 0.1) controls trend smoothing. Lower = smoother but slower to react." },
+  { term: "hampelWindow / hampelThreshold", desc: "Outlier detection: window=7 days on each side, threshold=3× MAD. A point is replaced if its deviation from local median exceeds threshold × MAD." },
+  { term: "serviceLevelA / serviceLevelOther", desc: "Target service level per ABC class. A items default 97% (Z=1.88), others 95% (Z=1.65). Higher = more safety stock." },
+  { term: "inventoryAnomalyMultiplier / anomalyLookbackDays", desc: "Anomaly detection: if raw on-hand > N× recent avg within M days, treat excess as pending. Defaults: 3×, 7 days." },
+
+  // ─── BLOCK 12: TROUBLESHOOTING ────────────────────────────────
+  { term: "—— TROUBLESHOOTING ——", desc: "" },
+  { term: "Why did the recommendation change a lot vs yesterday?", desc: "Click the '+X% vs MM-DD' badge at the vendor header for the breakdown by contributor (level change, trend change, inventory change, safety stock change, new bundle). Snapshots are saved once per day per vendor in browser localStorage, last 14 days. Big changes from 0.0 → something usually mean the snapshot was saved before data finished loading — NOT a real demand change." },
+  { term: "Why does Force Cores give different $ than Mix?", desc: "Total UNITS should match. Total $ may legitimately differ if assembled-bundle pricing ≠ sum of component pricing. If unit totals don't match, that's a bug — file it." },
+  { term: "Why is buyNeed 0 even when DOC < target?", desc: "Either (1) the waterfall already filled coverage from raw on-hand, or (2) the core sanity check zeroed it (core has independent DOC > 1.2× target). Open Calc Breakdown 📊 to verify." },
+  { term: "Why is the forecast much higher than my gut?", desc: "Check the regime badge. If continuous, look at fromTrend in demandBreakdown — runaway trend gets capped but can still be aggressive. If no badge, but recently shifted, check 'recentRegimeApplied' in flags — you may want to manually override." },
 ];
 
 function GlossTab() {
   const [gl, setGl] = useState(() => { try { const s = localStorage.getItem('fba_glossary'); if (s) return JSON.parse(s) } catch { } return DEFAULT_GL });
   const [editing, setEditing] = useState(null);
+  const [search, setSearch] = useState("");
   const [nT, setNT] = useState(""); const [nD, setND] = useState("");
   const save = (arr) => { setGl(arr); try { localStorage.setItem('fba_glossary', JSON.stringify(arr)) } catch { } };
   const add = () => { if (nT.trim()) { save([...gl, { term: nT.trim(), desc: nD.trim() }]); setNT(""); setND("") } };
   const del = i => save(gl.filter((_, j) => j !== i));
   const upd = (i, field, val) => { const n = [...gl]; n[i] = { ...n[i], [field]: val }; save(n) };
-  const reset = () => save(DEFAULT_GL);
+  const reset = () => { if (confirm('Reset glossary to defaults? Your custom entries will be lost.')) save(DEFAULT_GL); };
+
+  // Filter by search (matches term or description)
+  const filtered = useMemo(() => {
+    if (!search.trim()) return gl.map((g, i) => ({ ...g, _idx: i }));
+    const q = search.toLowerCase();
+    return gl
+      .map((g, i) => ({ ...g, _idx: i }))
+      .filter(g => g.desc === "" || g.term.toLowerCase().includes(q) || g.desc.toLowerCase().includes(q));
+  }, [gl, search]);
+
   return <div className="p-4 max-w-4xl mx-auto">
-    <div className="flex items-center justify-between mb-4"><h2 className="text-xl font-bold text-white">Glossary</h2><button onClick={reset} className="text-xs text-gray-500 hover:text-white">Reset to defaults</button></div>
-    {gl.map((g, i) => <div key={i} className={`flex gap-4 py-3 px-4 rounded-lg ${i % 2 === 0 ? "bg-gray-900/50" : ""}`}>
-      {editing === i ? <><input value={g.term} onChange={e => upd(i, 'term', e.target.value)} className="bg-gray-800 text-blue-400 font-mono text-sm rounded px-2 py-1 w-28" /><input value={g.desc} onChange={e => upd(i, 'desc', e.target.value)} className="bg-gray-800 text-gray-300 text-sm rounded px-2 py-1 flex-1" /><button onClick={() => setEditing(null)} className="text-emerald-400 text-xs">✓</button></> : <><span className="text-blue-400 font-mono font-semibold text-sm min-w-[140px]">{g.term}</span><span className="text-gray-300 text-sm flex-1">{g.desc}</span><button onClick={() => setEditing(i)} className="text-gray-500 hover:text-white text-xs">✎</button><button onClick={() => del(i)} className="text-gray-500 hover:text-red-400 text-xs">✕</button></>}
-    </div>)}
-    <div className="flex gap-2 mt-4"><input value={nT} onChange={e => setNT(e.target.value)} placeholder="Term" className="bg-gray-800 border border-gray-700 text-white text-sm rounded px-2 py-1.5 w-28" /><input value={nD} onChange={e => setND(e.target.value)} placeholder="Description" className="bg-gray-800 border border-gray-700 text-white text-sm rounded px-2 py-1.5 flex-1" /><button onClick={add} className="bg-blue-600 text-white text-sm px-3 py-1.5 rounded">Add</button></div>
+    <div className="flex items-center justify-between mb-4">
+      <h2 className="text-xl font-bold text-white">Glossary</h2>
+      <div className="flex items-center gap-3">
+        <input type="text" placeholder="Search..." value={search} onChange={e => setSearch(e.target.value)} className="bg-gray-800 border border-gray-700 text-white text-sm rounded px-2 py-1.5 w-48" />
+        <button onClick={reset} className="text-xs text-gray-500 hover:text-white">Reset to defaults</button>
+      </div>
+    </div>
+    <p className="text-xs text-gray-500 mb-3">Concepts and terms used across the dashboard. Hover any term in the app for a quick tooltip; come here for the full explanation. Click ✎ to edit, ✕ to remove. Add custom entries at the bottom.</p>
+    {filtered.map((g) => {
+      const i = g._idx;
+      // Render block separators (entries with empty desc) as headers
+      if (g.desc === "") {
+        return <div key={i} className="mt-5 mb-1 px-1 text-[10px] uppercase tracking-wider text-gray-500 font-semibold border-b border-gray-800 pb-1">
+          <span className="flex-1">{g.term.replace(/^—— /, '').replace(/ ——$/, '')}</span>
+        </div>;
+      }
+      return <div key={i} className={`flex gap-4 py-2.5 px-4 rounded-lg ${i % 2 === 0 ? "bg-gray-900/50" : ""}`}>
+        {editing === i ? (
+          <>
+            <input value={g.term} onChange={e => upd(i, 'term', e.target.value)} className="bg-gray-800 text-blue-400 font-mono text-sm rounded px-2 py-1 w-40" />
+            <textarea value={g.desc} onChange={e => upd(i, 'desc', e.target.value)} rows={3} className="bg-gray-800 text-gray-300 text-sm rounded px-2 py-1 flex-1" />
+            <button onClick={() => setEditing(null)} className="text-emerald-400 text-xs self-start">✓</button>
+          </>
+        ) : (
+          <>
+            <span className="text-blue-400 font-mono font-semibold text-sm min-w-[160px] flex-shrink-0">{g.term}</span>
+            <span className="text-gray-300 text-sm flex-1 leading-relaxed">{g.desc}</span>
+            <button onClick={() => setEditing(i)} className="text-gray-500 hover:text-white text-xs flex-shrink-0">✎</button>
+            <button onClick={() => del(i)} className="text-gray-500 hover:text-red-400 text-xs flex-shrink-0">✕</button>
+          </>
+        )}
+      </div>;
+    })}
+    {filtered.length === 0 && <p className="text-gray-500 text-sm py-8 text-center">No matches for "{search}"</p>}
+    <div className="flex gap-2 mt-6 pt-4 border-t border-gray-800">
+      <input value={nT} onChange={e => setNT(e.target.value)} placeholder="New term" className="bg-gray-800 border border-gray-700 text-white text-sm rounded px-2 py-1.5 w-40" />
+      <input value={nD} onChange={e => setND(e.target.value)} placeholder="Description" className="bg-gray-800 border border-gray-700 text-white text-sm rounded px-2 py-1.5 flex-1" />
+      <button onClick={add} className="bg-blue-600 text-white text-sm px-3 py-1.5 rounded">Add</button>
+    </div>
   </div>;
 }
 
