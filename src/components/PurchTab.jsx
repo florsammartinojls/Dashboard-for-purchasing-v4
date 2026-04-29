@@ -6,7 +6,6 @@ import { batchVendorRecommendations, calcVendorRecommendation } from "../lib/rec
 import { saveSnapshotIfNeeded, loadPreviousSnapshot, computeDelta } from "../lib/snapshot";
 
 // === FLAG DEFINITIONS — compact icons, text in tooltip ===
-// PROC removed (was redundant with OOS/MOQ signals).
 const FLAG_DEFS = {
   OOS: {
     label: "Stockout risk",
@@ -29,9 +28,23 @@ const FLAG_DEFS = {
     cls: "text-orange-300 bg-orange-500/25 border border-orange-500/50",
     tip: "MOQ inflated — the MOQ or casepack forces an order significantly larger than the real need. Check 📊 for excess details.",
   },
+  // [v3.4] NEW regime badges
+  INTERMITTENT: {
+    label: "Intermittent demand",
+    short: "INTERMIT",
+    icon: "~",
+    cls: "text-sky-300 bg-sky-500/25 border border-sky-500/50",
+    tip: "Intermittent demand — sells sporadically (most days zero). Forecast uses real rate over the window, not the peak sale value.",
+  },
+  NEW: {
+    label: "New / sparse history",
+    short: "NEW",
+    icon: "N",
+    cls: "text-violet-300 bg-violet-500/25 border border-violet-500/50",
+    tip: "New or sparse history — less than 30 days of data. Recommendation uses sheet DSR with a conservative cap. Review manually.",
+  },
 };
 
-// Compact icon-only badge (tooltip carries the full explanation).
 function Flag({ type, extraTip }) {
   const def = FLAG_DEFS[type];
   if (!def) return null;
@@ -46,7 +59,6 @@ function Flag({ type, extraTip }) {
   );
 }
 
-// Legend item shown at the top of each vendor block.
 function FlagLegendItem({ type }) {
   const def = FLAG_DEFS[type];
   if (!def) return null;
@@ -68,7 +80,7 @@ function SC({ v, children, className }) {
   return <td className={`${className || ''} ${sel ? "bg-blue-500/20 ring-1 ring-blue-500" : ""} ${ok ? "cursor-pointer select-none" : ""}`} onClick={tog}>{children}</td>;
 }
 
-// === DELTA MODAL — shows what changed vs yesterday's recommendation ===
+// === DELTA MODAL ===
 function DeltaModal({ vendorName, delta, onClose }) {
   if (!delta) return null;
   const dir = delta.pctChange > 0 ? '+' : '';
@@ -177,8 +189,6 @@ if (!vendorRecs || !Object.keys(vendorRecs).length) vendorRecs = {};
     } catch {}
     return "mix";
   });
-  // Track which vendors we've already applied auto-detect on, so the user can
-  // override manually and we don't keep forcing them back.
   const [autoDetectedVendors, setAutoDetectedVendors] = useState(() => new Set());
   useEffect(() => {
     try {
@@ -194,8 +204,6 @@ if (!vendorRecs || !Object.keys(vendorRecs).length) vendorRecs = {};
     } catch {}
   }, [vf]);
   const [showRS, setShowRS] = useState(false);
-  // "Detail" toggle (formerly "+$") — expands the secondary info columns:
-  // MOQ, VCAS, RAW, PPRC, INB, FBA PCS, and input overrides (InbS/CogP/CogC).
   const [showDetail, setShowDetail] = useState(false);
   const [showPH, setShowPH] = useState({});
   const [collapsed, setCollapsed] = useState({});
@@ -203,13 +211,11 @@ if (!vendorRecs || !Object.keys(vendorRecs).length) vendorRecs = {};
   const [showIgnored, setShowIgnored] = useState(false);
   const [showNoBundleCores, setShowNoBundleCores] = useState(false);
   const [breakdownCore, setBreakdownCore] = useState(null);
-  // MOQ override inputs (session-only, not persisted)
   const [moqOverrides, setMoqOverrides] = useState({});
   const [overrideRecs, setOverrideRecs] = useState({});
 
-  // Snapshot + delta state: stores { [vendorName]: deltaObj } from today vs most recent prior snapshot
   const [vendorDeltas, setVendorDeltas] = useState({});
-  const [showDeltaFor, setShowDeltaFor] = useState(null); // vendor name whose modal is open
+  const [showDeltaFor, setShowDeltaFor] = useState(null);
   
   const moqDebounceTimers = useRef({});
 
@@ -249,51 +255,37 @@ if (!vendorRecs || !Object.keys(vendorRecs).length) vendorRecs = {};
   const missingMap = useMemo(() => { const m = {}; (data.receiving || []).forEach(r => { if (r.piecesMissing > 0) { const k = (r.core || "").trim(); m[k] = (m[k] || 0) + r.piecesMissing } }); return m }, [data.receiving]);
   const casePackFromRec = useMemo(() => { const m = {}; (data.receiving || []).forEach(r => { const k = (r.core || "").trim(); if (k && r.pcs > 0 && r.cases > 0 && !m[k]) m[k] = Math.round(r.pcs / r.cases) }); return m }, [data.receiving]);
 
-  // === SEASONAL PROFILES (core-level — kept for the Calc Breakdown modal only) ===
   const profiles = useMemo(() => batchProfiles(data.cores || [], data._coreInv || [], data._coreDays || []), [data.cores, data._coreInv, data._coreDays]);
 
-  // === PURCHASE FREQUENCY per vendor ===
   const purchFreqMap = useMemo(() => {
     const m = {};
     (data.vendors || []).forEach(v => { m[v.name] = calcPurchaseFrequency(v.name, data.receivingFull || []) });
     return m;
   }, [data.vendors, data.receivingFull]);
 
- 
-
-// Merge batch recs with any per-vendor overrides (from Apply button)
   const effectiveRecs = useMemo(() => ({ ...vendorRecs, ...overrideRecs }), [vendorRecs, overrideRecs]);
 
-  // DEBUG: expose to console
   useEffect(() => {
     if (typeof window !== 'undefined') {
       window.__vendorRecs = effectiveRecs;
     }
   }, [effectiveRecs]);
 
-  // Snapshot & delta — automatic, once per day per vendor
-useEffect(() => {
-  if (!effectiveRecs || !Object.keys(effectiveRecs).length) return;
-  const deltas = {};
-  for (const [vendorName, rec] of Object.entries(effectiveRecs)) {
-    if (!rec) continue;
-    const prev = loadPreviousSnapshot(vendorName);
-    if (prev) {
-      const delta = computeDelta(rec, prev);
-      if (delta) deltas[vendorName] = delta;
+  useEffect(() => {
+    if (!effectiveRecs || !Object.keys(effectiveRecs).length) return;
+    const deltas = {};
+    for (const [vendorName, rec] of Object.entries(effectiveRecs)) {
+      if (!rec) continue;
+      const prev = loadPreviousSnapshot(vendorName);
+      if (prev) {
+        const delta = computeDelta(rec, prev);
+        if (delta) deltas[vendorName] = delta;
+      }
+      saveSnapshotIfNeeded(vendorName, rec);
     }
-    // Save today's snapshot (no-op if already saved today)
-    saveSnapshotIfNeeded(vendorName, rec);
-  }
-  setVendorDeltas(deltas);
-}, [effectiveRecs]);
+    setVendorDeltas(deltas);
+  }, [effectiveRecs]);
 
-  // === AUTO-DETECT vendorSub on first visit to a vendor ===
-  // Rule: if this vendor historically NEVER delivered any bundle assembled
-  // (all its bundles fall in buyMode='core'), default the view to 'cores'.
-  // If ALL its bundles are delivered assembled, default to 'bundles'.
-  // Otherwise 'mix'. Only runs once per vendor per session — the user can
-  // override and the override is remembered in localStorage.
   useEffect(() => {
     if (!vf) return;
     if (autoDetectedVendors.has(vf)) return;
@@ -578,62 +570,60 @@ useEffect(() => {
 
   const autoPO = (vendorCode) => { if (poN) return poN; const d = new Date(); const serial = Math.floor((d - new Date(1899, 11, 30)) / 86400000); return 'PO-' + serial + '-' + (vendorCode || 'XXX') };
 
-  // Apply MOQ overrides for a specific vendor — recalculates with bundle MOQ
-  const applyMoqOverride = useCallback((vendorName) => {
+  // ════════════════════════════════════════════════════════
+  // [v3.4 FIX] Helper centralizado para llamar al recommender
+  // con TODOS los inputs correctos. Antes fillR y los MOQ
+  // overrides olvidaban bundleDays/coreDays/abcA, lo que hacía
+  // que el motor cayera al fallback flat y diera números
+  // distintos que el batch principal.
+  // ════════════════════════════════════════════════════════
+  const callRecommender = useCallback((vendorName, opts = {}) => {
     const vendor = vMap[vendorName];
-    if (!vendor) return;
-    const ov = moqOverrides[vendorName] || {};
-    const rec = calcVendorRecommendation({
+    if (!vendor) return null;
+    return calcVendorRecommendation({
       vendor,
       cores: data.cores || [],
       bundles: data.bundles || [],
       bundleSales: data._bundleSales || [],
+      bundleDays: data._bundleDays || [],
+      coreDays: data._coreDays || [],
+      abcA: data.abcA || [],
       receivingFull: data.receivingFull || [],
       replenMap,
       missingMap,
       priceCompFull: (data.priceCompFull?.length ? data.priceCompFull : data.priceComp) || [],
       settings: stg,
       purchFreqSafety: purchFreqMap[vendorName]?.safetyMultiplier || 1.0,
-      bundleMoqOverride: ov.bundleMoq || 0,
+      forceMode: opts.forceMode || null,
+      bundleMoqOverride: opts.bundleMoqOverride || 0,
       moqExtraDocThreshold: stg.moqExtraDocThreshold || 30,
     });
+  }, [vMap, data, replenMap, missingMap, stg, purchFreqMap]);
+
+  const applyMoqOverride = useCallback((vendorName) => {
+    const ov = moqOverrides[vendorName] || {};
+    const rec = callRecommender(vendorName, { bundleMoqOverride: ov.bundleMoq || 0 });
     if (rec) {
       setOverrideRecs(prev => ({ ...prev, [vendorName]: rec }));
       setToast(`MOQ override applied for ${vendorName}`);
     }
-  }, [moqOverrides, vMap, data, replenMap, missingMap, stg, purchFreqMap]);
+  }, [moqOverrides, callRecommender]);
 
   const applyMoqOverrideSilent = useCallback((vendorName, bundleMoqValue) => {
-  const vendor = vMap[vendorName];
-  if (!vendor) return;
-  // Si el BdlMOQ es 0 o vacío, limpiar el override para ese vendor
-  if (!bundleMoqValue || bundleMoqValue <= 0) {
-    setOverrideRecs(prev => {
-      if (!prev[vendorName]) return prev;
-      const n = { ...prev };
-      delete n[vendorName];
-      return n;
-    });
-    return;
-  }
-  const rec = calcVendorRecommendation({
-    vendor,
-    cores: data.cores || [],
-    bundles: data.bundles || [],
-    bundleSales: data._bundleSales || [],
-    receivingFull: data.receivingFull || [],
-    replenMap,
-    missingMap,
-    priceCompFull: (data.priceCompFull?.length ? data.priceCompFull : data.priceComp) || [],
-    settings: stg,
-    purchFreqSafety: purchFreqMap[vendorName]?.safetyMultiplier || 1.0,
-    bundleMoqOverride: bundleMoqValue,
-    moqExtraDocThreshold: stg.moqExtraDocThreshold || 30,
-  });
-  if (rec) {
-    setOverrideRecs(prev => ({ ...prev, [vendorName]: rec }));
-  }
-}, [vMap, data, replenMap, missingMap, stg, purchFreqMap]);
+    if (!bundleMoqValue || bundleMoqValue <= 0) {
+      setOverrideRecs(prev => {
+        if (!prev[vendorName]) return prev;
+        const n = { ...prev };
+        delete n[vendorName];
+        return n;
+      });
+      return;
+    }
+    const rec = callRecommender(vendorName, { bundleMoqOverride: bundleMoqValue });
+    if (rec) {
+      setOverrideRecs(prev => ({ ...prev, [vendorName]: rec }));
+    }
+  }, [callRecommender]);
   
   const resetMoqOverride = useCallback((vendorName) => {
     setMoqOverrides(prev => { const n = { ...prev }; delete n[vendorName]; return n; });
@@ -642,41 +632,30 @@ useEffect(() => {
   }, []);
 
   const getMoqOv = (vendorName) => moqOverrides[vendorName] || {};
- const setMoqOv = (vendorName, field, value) => {
-  setMoqOverrides(prev => ({
-    ...prev,
-    [vendorName]: { ...(prev[vendorName] || {}), [field]: value }
-  }));
-  // dollarMoq solo afecta UI (badge + Fill MOQ) → no hace falta recalcular
-  // bundleMoq SÍ afecta el recommender → debounce + auto-apply
-  if (field === 'bundleMoq') {
-    if (moqDebounceTimers.current[vendorName]) {
-      clearTimeout(moqDebounceTimers.current[vendorName]);
+  const setMoqOv = (vendorName, field, value) => {
+    setMoqOverrides(prev => ({
+      ...prev,
+      [vendorName]: { ...(prev[vendorName] || {}), [field]: value }
+    }));
+    if (field === 'bundleMoq') {
+      if (moqDebounceTimers.current[vendorName]) {
+        clearTimeout(moqDebounceTimers.current[vendorName]);
+      }
+      moqDebounceTimers.current[vendorName] = setTimeout(() => {
+        applyMoqOverrideSilent(vendorName, value);
+      }, 600);
     }
-    moqDebounceTimers.current[vendorName] = setTimeout(() => {
-      applyMoqOverrideSilent(vendorName, value);
-    }, 600);
-  }
-};
+  };
+
+  // [v3.4 FIX] fillR ahora usa callRecommender — Force Cores y
+  // Force Bundles producen los mismos números que Mix. Lo único
+  // que cambia es el switch de buyMode.
   const fillR = (cores, bundles, mode, vendorName) => {
-    const vendor = vMap[vendorName];
-    if (!vendor) return;
     const forceMode = mode === 'cores' ? 'cores' : mode === 'bundles' ? 'bundles' : null;
     const rec = forceMode
-      ? calcVendorRecommendation({
-          vendor,
-          cores: data.cores || [],
-          bundles: data.bundles || [],
-          bundleSales: data._bundleSales || [],
-          receivingFull: data.receivingFull || [],
-          replenMap,
-          missingMap,
-          priceCompFull: (data.priceCompFull?.length ? data.priceCompFull : data.priceComp) || [],
-          settings: stg,
-          purchFreqSafety: purchFreqMap[vendorName]?.safetyMultiplier || 1.0,
+      ? callRecommender(vendorName, {
           forceMode,
-          bundleMoqOverride: moqOverrides[vendorName]?.bundleMoq || 0,  // ← AGREGAR
-          moqExtraDocThreshold: stg.moqExtraDocThreshold || 30,         // ← AGREGAR
+          bundleMoqOverride: moqOverrides[vendorName]?.bundleMoq || 0,
         })
       : effectiveRecs[vendorName];
     if (!rec || !rec.items?.length) { setToast("Nothing to fill"); return; }
@@ -750,12 +729,6 @@ useEffect(() => {
   const getCombinedRec = (coreId) => { const recs = [...(recMap[coreId] || [])]; (data.bundles || []).filter(b => b.core1 === coreId && b.active === "Yes").forEach(b => { if (recMap[b.j]) recs.push(...recMap[b.j]) }); return recs.sort((a, b) => (b.date || '').localeCompare(a.date || '')).slice(0, 7) };
   const hasRecData = (coreId) => recMap[coreId]?.length || (data.bundles || []).some(b => b.core1 === coreId && b.active === "Yes" && recMap[b.j]?.length);
 
-  // === CORE ROW ===
-  // Visual hierarchy:
-  //   - Compact badges (icon-only) right next to title
-  //   - Primary info always visible: DSR, 7D, T, DOC, ALL-IN, S (vendor's decision inputs)
-  //   - Secondary info behind +Detail toggle: MOQ, VCAS, RAW, PPRC, INB, FBA PCS
-  //   - Extra padding + stronger bottom border so each core group is visually distinct
   const CoreRow = ({ c, isLastOfGroup }) => {
     if (dismissed[c.id]) return <tr className="border-t border-gray-800/20 bg-gray-900/30 text-xs opacity-40"><td className="py-1 px-1" colSpan={2}><Dot status={c.status} /></td><td className="py-1 px-1 text-gray-500 font-mono">{c.id}</td><td className="py-1 px-1 text-gray-600 truncate max-w-[110px]">{c.ti}</td><td colSpan={30} className="py-1 px-1 text-right"><button onClick={() => togDismiss(c.id)} className="text-xs text-gray-500 hover:text-white px-1">+</button></td></tr>;
     const eq = coreEffQ(c);
@@ -792,7 +765,6 @@ useEffect(() => {
           </div>
         </td>
 
-        {/* PRIMARY — always visible */}
         <SC v={c.dsr} className="py-2 px-1 text-right">{D1(c.dsr)}</SC>
         <SC v={c.d7} className="py-2 px-1 text-right">{D1(c.d7)}</SC>
         <td className="py-2 px-1 text-center">{c.d7 > c.dsr ? <span className={c.spike ? "text-orange-400 font-bold" : "text-emerald-400"}>▲</span> : c.d7 < c.dsr ? <span className="text-red-400">▼</span> : "—"}{c.spike && <span className="text-orange-400 text-xs ml-0.5">⚡</span>}</td>
@@ -800,7 +772,6 @@ useEffect(() => {
         <SC v={c.allIn} className="py-2 px-1 text-right">{R(c.allIn)}</SC>
         <td className="py-2 px-1 text-center">{c.seas && <span className="text-purple-400 font-bold">{c.seas.peak}</span>}</td>
 
-        {/* SECONDARY — only when +Detail is on */}
         {showDetail && <>
           <td className="py-2 px-1 text-right text-gray-500">{c.moq > 0 ? R(c.moq) : "—"}</td>
           <td className="py-2 px-1 text-right text-gray-500">{c.casePack > 0 ? R(c.casePack) : "—"}</td>
@@ -815,7 +786,6 @@ useEffect(() => {
         {showRS && <td colSpan={8} />}
         <td className="py-2 border-l-2 border-blue-500/40 px-1" />
 
-        {/* ACTION — always visible */}
         <td className={`py-1 px-0.5 sticky right-36 z-10 ${stickyBg}`}><NumInput value={gPcs(c.id)} onChange={v => setF(c.id, 'pcs', v)} /></td>
         <td className={`py-1 px-0.5 sticky right-24 z-10 ${stickyBg}`}><NumInput value={gCas(c.id)} onChange={v => setF(c.id, 'cas', v)} /></td>
         {showDetail && <>
@@ -857,7 +827,6 @@ useEffect(() => {
     </>;
   };
 
-  // === BUNDLE ROW ===
   const BundleRow = ({ b }) => {
     const f = b.fee || feMap[b.j];
     const eq = bundleEffQ(b);
@@ -884,6 +853,10 @@ useEffect(() => {
     const effectiveDOC = effDSR > 0 ? Math.round((totalAvail + eq) / effDSR) : null;
     const urgentBundle = bd?.urgent;
 
+    // [v3.4] regime info para badges
+    const regime = bd?.regime || null;
+    const regimeReason = bd?.regimeInfo?.reason || '';
+
     const rowBg = "bg-indigo-950/20";
     const stickyBg = "bg-indigo-950/40";
 
@@ -894,6 +867,8 @@ useEffect(() => {
         <span className="pl-3">↳ {b.t}</span>
         {b.asin && <a href={`https://sellercentral.amazon.com/myinventory/inventory?fulfilledBy=all&page=1&pageSize=25&searchField=all&searchTerm=${b.asin}&sort=date_created_desc&status=all`} target="_blank" rel="noopener noreferrer" className="ml-1 text-gray-500 hover:text-blue-400 text-[9px] font-mono">{b.asin}</a>}
         {urgentBundle && <Flag type="OOS" />}
+        {regime === 'intermittent' && <Flag type="INTERMITTENT" extraTip={regimeReason} />}
+        {regime === 'new_or_sparse' && <Flag type="NEW" extraTip={regimeReason} />}
         {bd?.bundleMoqStatus === 'wait' && <span className="ml-1 text-[10px] font-semibold text-sky-300 bg-sky-500/20 border border-sky-500/40 px-1.5 py-0.5 rounded" title={`Below Bundle MOQ. Need ${bd.bundleMoqOriginalNeed} but MOQ requires more. Would add ${bd.bundleMoqExtraDOC}d extra stock. Waiting to accumulate.`}>⏸ Wait</span>}
         {bd?.bundleMoqStatus === 'inflated_urgent' && <span className="ml-1 text-[10px] font-semibold text-red-300 bg-red-500/20 border border-red-500/40 px-1.5 py-0.5 rounded" title={`MOQ inflated (urgent) — needed ${bd.bundleMoqOriginalNeed}, buying MOQ to avoid stockout. +${bd.bundleMoqExtraDOC}d extra.`}>⚠ MOQ urgent</span>}
         {bd?.bundleMoqStatus === 'inflated_ok' && <span className="ml-1 text-[10px] font-semibold text-orange-300 bg-orange-500/20 border border-orange-500/40 px-1.5 py-0.5 rounded" title={`MOQ inflated — needed ${bd.bundleMoqOriginalNeed}, buying MOQ. +${bd.bundleMoqExtraDOC}d extra (acceptable).`}>$ Inflated</span>}
@@ -944,9 +919,6 @@ useEffect(() => {
   const rsToggle = <button onClick={() => setShowRS(!showRS)} className={`text-xs px-1.5 py-0.5 rounded font-bold ${showRS ? "bg-purple-600 text-white" : "bg-gray-700 text-gray-400 hover:text-gray-200"}`} title="Show Replen Stock details (margin, batch, FIB)">{showRS ? "−" : "+"}RS</button>;
   const detailToggle = <button onClick={() => setShowDetail(!showDetail)} className={`text-xs px-1.5 py-0.5 rounded font-bold ${showDetail ? "bg-teal-600 text-white" : "bg-gray-700 text-gray-400 hover:text-gray-200"}`} title="Show secondary detail columns (MOQ, VCAS, Raw, PPRC, INB, FBA, cost overrides)">{showDetail ? "−" : "+"} Detail</button>;
 
-  // === HEADER ROW ===
-  // Primary (always): DSR · 7D · T · DOC · All-In · S
-  // Secondary (+Detail): MOQ · VCAS · Raw · PPRC · Inb · FBA PCS · InbS · CogP · CogC
   const VTH = ({ isCol }) => <tr className="text-gray-500 uppercase bg-gray-900 text-xs sticky top-0 z-20">
     <th className="py-2 px-1 w-5 sticky left-0 bg-gray-900 z-30" />
     <TH tip="Core or JLS #" className="py-2 px-1 text-left sticky left-5 bg-gray-900 z-30">ID</TH>
@@ -1061,12 +1033,21 @@ useEffect(() => {
       const bundlesInBundleMode = vRec?.bundleItems?.length || 0;
       const bundlesInCoreMode = (vRec?.bundleDetails || []).filter(bd => bd.buyMode === 'core' && bd.buyNeed > 0).length;
 
+      // [v3.4] count bundles by regime (visible at vendor header)
+      const regimeCounts = (vRec?.bundleDetails || []).reduce((acc, bd) => {
+        const r = bd.regime || 'unknown';
+        acc[r] = (acc[r] || 0) + 1;
+        return acc;
+      }, {});
+
       const activeFlags = new Set();
       grp.cores.forEach(c => {
         if (c.sCoverage?.urgent) activeFlags.add('OOS');
         if (c.invAnomaly) activeFlags.add('INV');
         if (c.moqInflated) activeFlags.add('MOQ');
       });
+      if (regimeCounts.intermittent > 0) activeFlags.add('INTERMITTENT');
+      if (regimeCounts.new_or_sparse > 0) activeFlags.add('NEW');
 
       return <div key={v.name} className="mb-5 border border-gray-800 rounded-xl overflow-hidden">
         <div className="bg-gray-900 px-4 py-3">
@@ -1122,7 +1103,6 @@ useEffect(() => {
             </div>
           )}
           <div className="flex flex-wrap gap-2 items-center">
-            {/* MOQ Override inputs (session-only) */}
             <div className="flex items-center gap-1.5 mr-2">
               <span className="text-[10px] text-gray-500">MOQ$:</span>
               <input
