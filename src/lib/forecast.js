@@ -1,12 +1,20 @@
 // src/lib/forecast.js
 // ============================================================
-// Demand Forecasting Engine — v3.3
+// Demand Forecasting Engine — v3.4
 // ============================================================
-// Changes from v3.2:
-//   Slow regime threshold 20% → 15%. More sensitive to gradual decline.
-//   Helpful for cases like JLS-1241 where decline is -30% YoY but spread
-//   over many months, so 20% threshold was marginal.
+// Changes from v3.3:
+//   [FIX-INTERMITTENT] calcBundleForecast ahora acepta regimeInfo
+//   y dispatcha correctamente:
+//     - regime='continuous' → Holt + seasonal (lo de siempre)
+//     - regime='intermittent' → calcRegimeCoverage (tasa real)
+//     - regime='new_or_sparse' → calcRegimeCoverage (DSR capeado)
+//   El bug histórico: vals.filter(v => v > 0) ignoraba los días
+//   con cero ventas, así que un bundle que vende 4 unidades cada
+//   30 días era forecasteado como si vendiera 4 por día. Para los
+//   regímenes no-continuous ahora ese filter no se aplica nunca.
 // ============================================================
+
+import { calcRegimeCoverage } from './regimeClassifier.js';
 
 export const DEFAULT_HOLT_ALPHA = 0.2;
 export const DEFAULT_HOLT_BETA = 0.1;
@@ -18,7 +26,6 @@ export const DEFAULT_SERVICE_LEVEL_OTHER = 95;
 export const RECENT_REGIME_WINDOW = 30;
 export const RECENT_REGIME_THRESHOLD = 0.75;
 
-// [v3.3] slow regime check — threshold lowered to 15% to catch gradual declines
 export const SLOW_REGIME_WINDOW = 90;
 export const SLOW_REGIME_DROP_THRESHOLD = 0.15;
 export const SLOW_REGIME_MIN_PRIOR = 30;
@@ -222,6 +229,13 @@ export function calcHistoricSamePeriod(bundleDays, bundleId, horizonDays) {
   };
 }
 
+// ============================================================
+// MAIN FORECAST FUNCTION
+// ============================================================
+// [v3.4] Acepta regimeInfo opcional. Si viene y NO es continuous,
+// dispatcha a calcRegimeCoverage. Si es continuous (o no viene),
+// usa Holt + seasonal como siempre.
+// ============================================================
 export function calcBundleForecast({
   bundleId,
   bundleDays,
@@ -230,11 +244,66 @@ export function calcBundleForecast({
   profABC,
   seasonalProfile,
   settings,
+  regimeInfo,
+  bundleDsrFromSheet,
 }) {
   const lt = num(leadTime, 30);
   const td = num(targetDoc, 180);
   const Z = getServiceLevelZ(profABC, settings);
 
+  // ──────────────────────────────────────────────────────────
+  // [v3.4] Régimen no-continuo → calcular sin Holt
+  // ──────────────────────────────────────────────────────────
+  if (regimeInfo && regimeInfo.regime !== 'continuous') {
+    const regimeResult = calcRegimeCoverage(regimeInfo, td, bundleDsrFromSheet);
+    if (regimeResult) {
+      return {
+        level: regimeResult.effectiveDSR,
+        trend: 0,
+        effectiveTrend: 0,
+        coverageDemand: regimeResult.coverageDemand,
+        flatDemand: regimeResult.coverageDemand,
+        safetyStock: regimeResult.safetyStock,
+        sigmaLT: 0,
+        Z,
+        demandBreakdown: {
+          fromLevel: Math.round(regimeResult.coverageDemand),
+          fromTrend: 0,
+          fromSeasonal: 0,
+          total: Math.round(regimeResult.coverageDemand),
+        },
+        flags: {
+          usedHolt: false,
+          shortHistory: regimeInfo.regime === 'new_or_sparse',
+          trendCapped: false,
+          safetyStockFallback: true,
+          outliersRemoved: 0,
+          trackingSignal: 0,
+          trackingSignalExceeded: false,
+          trendGatedByTS: false,
+          noData: false,
+          recentRegimeApplied: false,
+          recentRegimeInfo: null,
+          slowRegimeApplied: false,
+          slowRegimeInfo: null,
+          // NEW: flag visible para UI
+          regime: regimeInfo.regime,
+          regimeMethod: regimeResult.method,
+          regimeReason: regimeInfo.reason,
+          regimeRatePerDay: regimeInfo.ratePerDay,
+          regimeAvgWhenSelling: regimeInfo.avgWhenSelling,
+          regimeZeroRatio: regimeInfo.zeroRatio,
+          regimeTotalDays: regimeInfo.totalDays,
+          regimeNonZeroDays: regimeInfo.nonZeroDays,
+        },
+        effectiveDSR: regimeResult.effectiveDSR,
+      };
+    }
+  }
+
+  // ──────────────────────────────────────────────────────────
+  // Régimen continuous (o sin clasificador) → Holt como siempre
+  // ──────────────────────────────────────────────────────────
   const raw = (bundleDays || [])
     .filter(d => d && d.j === bundleId)
     .sort((a, b) => (a.date || '').localeCompare(b.date || ''));
@@ -252,6 +321,9 @@ export function calcBundleForecast({
         trendGatedByTS: false, noData: true,
         recentRegimeApplied: false, recentRegimeInfo: null,
         slowRegimeApplied: false, slowRegimeInfo: null,
+        regime: regimeInfo?.regime || 'unknown',
+        regimeMethod: 'no_data',
+        regimeReason: regimeInfo?.reason || 'No data',
       },
       effectiveDSR: 0,
     };
@@ -401,6 +473,9 @@ export function calcBundleForecast({
       recentRegimeInfo,
       slowRegimeApplied,
       slowRegimeInfo,
+      regime: 'continuous',
+      regimeMethod: 'holt+seasonal',
+      regimeReason: regimeInfo?.reason || 'Continuous demand',
     },
     effectiveDSR: holt.level,
   };
@@ -414,6 +489,7 @@ export function batchBundleForecasts({
   seasonalProfiles,
   settings,
   getTargetDoc,
+  regimeMap,
 }) {
   const abcMap = {};
   (abcA || []).forEach(a => { if (a.j) abcMap[a.j] = a.profABC; });
@@ -433,6 +509,8 @@ export function batchBundleForecasts({
       profABC: abcMap[b.j] || null,
       seasonalProfile: seasonalProfiles?.[b.j],
       settings,
+      regimeInfo: regimeMap?.[b.j],
+      bundleDsrFromSheet: num(b.cd),
     });
   }
   return out;
