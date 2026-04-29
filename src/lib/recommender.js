@@ -1,50 +1,33 @@
 // src/lib/recommender.js
 // ============================================================
-// v3.3 Purchase Recommendation Engine
+// v3.4 Purchase Recommendation Engine
 // ============================================================
-// NEW in v3.3:
-//   [FIX-CONSISTENCY] Regla única effDSR = coverageDemand / targetDoc
-//                     aplicada en TODOS los puntos de decisión:
-//                       - Waterfall Phase A (urgency)
-//                       - Waterfall Phase B (leveling)
-//                       - Step 6 currentCoverDOC
-//                       - Step 7.5 bundleMoqExtraDOC
-//                     Esto garantiza que:
-//                       buyNeed = coverageDemand − total
-//                              = effDSR × (targetDoc − DOC)
-//                     Si DOC ≥ targetDoc → buyNeed = 0 (pool no se usa)
-//                     Si DOC < targetDoc → waterfall llena hasta
-//                         coverageDemand, y si sobra en pool es
-//                         porque ningún bundle puede subir un
-//                         escalón completo más (no queda huérfano).
+// NEW in v3.4:
+//   [FIX-INTERMITTENT] Clasificación de régimen ANTES de forecast.
+//     Cada bundle se clasifica en continuous / intermittent /
+//     new_or_sparse según % de días con venta cero. forecast.js
+//     dispatcha al método correcto. Resultado: para bundles que
+//     venden 4 unidades cada 30 días, ahora la recomendación es
+//     ~24 unidades para 180 días, no 720.
 //
-//                     C.DSR y FIB DOC de la planilla se preservan
-//                     intactos — son info visual, no decisión.
+//   [FIX-CONSISTENCY] Force Cores y Force Bundles ahora son SOLO
+//     un switch de buyMode — el cálculo numérico es idéntico al
+//     de Mix. PurchTab.fillR debe pasar bundleDays/coreDays/abcA
+//     cuando llama directo (ver fix en PurchTab.jsx).
 //
-// NEW in v3.2 (kept):
-//   [FIX-MOQ-CROSS] Bundle-as-bundle purchases credit against
-//                   raw-core MOQ at the same vendor.
-//
-// NEW in v3.1 (kept):
-//   [FIX-YoY] Forecast capped at MAX_YOY_RATIO × historic LY same-period.
-//
-// v3 principles (unchanged):
-//   9.  Baseline forecast uses Hampel + Holt (not raw DSR).
-//   10. Safety stock = Z × σ_LT with Z from service-level-by-ABC.
-//   11. Inventory anomalies detected and corrected before waterfall.
-//   12. Spike detection is visual-only; cálculo nunca oscila.
+// Carried from v3.3:
+//   effDSR = coverageDemand / targetDoc, regla única en todos los
+//   puntos de decisión.
 // ============================================================
 
 import { calcBundleSeasonalProfile, DEFAULT_PROFILE } from './seasonal.js';
 import { calcBundleForecast, calcHistoricSamePeriod } from './forecast.js';
 import { detectVendorAnomalies } from './anomalyDetector.js';
+import { classifyDemandRegime } from './regimeClassifier.js';
 
 export const MAX_YOY_RATIO = 1.5;
 export const MIN_HISTORIC_FOR_YOY = 30;
 
-// ────────────────────────────────────────────────────────────
-// 7g vendor-specific material cost lookup (unchanged)
-// ────────────────────────────────────────────────────────────
 function parseNoteVendor(note) {
   if (!note) return { kind: 'unknown', name: null };
   const n = String(note).trim();
@@ -86,17 +69,11 @@ function getVendorCoreUnitCost(coreId, vendor, paymentHistory) {
   return Number(best.matPrice) / Number(best.pcs);
 }
 
-// ────────────────────────────────────────────────────────────
-// Defaults
-// ────────────────────────────────────────────────────────────
 export const DEFAULT_SPIKE_THRESHOLD = 1.25;
 export const DEFAULT_MOQ_INFLATION_THRESHOLD = 1.5;
 const LEVELING_STEP_DAYS = 10;
 const MAX_WATERFALL_ITER = 100;
 
-// ────────────────────────────────────────────────────────────
-// Helpers
-// ────────────────────────────────────────────────────────────
 function num(x, d = 0) { const n = Number(x); return Number.isFinite(n) ? n : d; }
 function isDomestic(country) {
   const c = (country || '').toLowerCase().trim();
@@ -159,30 +136,6 @@ function isSpikeVisual(b, threshold) {
   return d7 > 0 && cd > 0 && d7 >= t * cd;
 }
 
-// ────────────────────────────────────────────────────────────
-// [FIX-CONSISTENCY] effDSR: la ÚNICA vara de decisión
-// ────────────────────────────────────────────────────────────
-// Regla: effDSR = coverageDemand / targetDoc
-//
-// coverageDemand ya incluye:
-//   - Holt level (tendencia base)
-//   - Trend (crecimiento)
-//   - Seasonal (multiplicador mensual)
-//   - Safety stock (Z × σ_LT)
-//
-// Dividirlo por targetDoc lo normaliza a "unidades/día" sobre el
-// horizonte de decisión. Así:
-//
-//   DOC = total / effDSR
-//   Si DOC >= targetDoc → buyNeed = 0 (no compro)
-//   Si DOC <  targetDoc → waterfall llena hasta coverageDemand,
-//                         buyNeed absorbe el resto.
-//
-// Fallbacks (en orden) para casos de datos incompletos:
-//   1. forecastLevel (Holt level sin season/safety) — si hay forecast válido
-//   2. dsr plano (b.dsr) — último recurso
-//   3. 0.01 — evitar división por cero
-// ────────────────────────────────────────────────────────────
 function effDSR(b, targetDoc) {
   if (b.coverageDemand > 0 && targetDoc > 0) {
     return b.coverageDemand / targetDoc;
@@ -192,7 +145,6 @@ function effDSR(b, targetDoc) {
   return 0.01;
 }
 
-// [FIX-YoY] unchanged
 function applyYoYSanityCheck(forecast, bundleId, bundleDays, targetDoc) {
   if (!forecast || forecast.flags.noData) return null;
 
@@ -241,9 +193,6 @@ function applyYoYSanityCheck(forecast, bundleId, bundleDays, targetDoc) {
   };
 }
 
-// ────────────────────────────────────────────────────────────
-// Waterfall helpers
-// ────────────────────────────────────────────────────────────
 function maxBundleUnitsFromPools(b, corePools) {
   let max = Infinity;
   for (const { coreId, qty } of b.coresUsed) {
@@ -266,13 +215,7 @@ function applyBundleGive(b, give, corePools) {
   }
 }
 
-// [FIX-CONSISTENCY] Waterfall ahora usa effDSR único.
-// Phase A llena hasta replenFloor (urgencia).
-// Phase B llena hasta targetDoc en steps de LEVELING_STEP_DAYS.
-// Al llegar a targetDoc, el bundle tiene exactamente coverageDemand
-// de total → buyNeed = 0. Si no alcanza, buyNeed absorbe el resto.
 function distributeRawToBundles(prepped, corePools, targetDoc, replenFloor) {
-  // PHASE A — urgency
   const byUrgency = [...prepped].sort((a, b) => {
     const ad = a.assignedInv / effDSR(a, targetDoc);
     const bd = b.assignedInv / effDSR(b, targetDoc);
@@ -293,7 +236,6 @@ function distributeRawToBundles(prepped, corePools, targetDoc, replenFloor) {
     applyBundleGive(b, give, corePools);
   }
 
-  // PHASE B — leveling hasta targetDoc
   let level = replenFloor + LEVELING_STEP_DAYS;
   let iter = 0;
   while (level <= targetDoc && iter < MAX_WATERFALL_ITER) {
@@ -324,9 +266,6 @@ function distributeRawToBundles(prepped, corePools, targetDoc, replenFloor) {
   }
 }
 
-// ────────────────────────────────────────────────────────────
-// MOQ + casepack (unchanged from v3.2)
-// ────────────────────────────────────────────────────────────
 function applyMoqAndCasePack(needPieces, moq, casePack, moqThreshold, moqCredit = 0) {
   if (needPieces <= 0) {
     return { finalQty: 0, moqInflated: false, excessFromMoq: 0, moqInflationRatio: 0, moqCredit: 0, effectiveMoq: 0 };
@@ -352,9 +291,6 @@ function applyMoqAndCasePack(needPieces, moq, casePack, moqThreshold, moqCredit 
   };
 }
 
-// ────────────────────────────────────────────────────────────
-// ABC lookup
-// ────────────────────────────────────────────────────────────
 function buildAbcMap(abcA) {
   const m = {};
   (abcA || []).forEach(a => { if (a?.j) m[a.j] = a.profABC || null; });
@@ -402,14 +338,19 @@ export function calcVendorRecommendation({
 
   const abcMap = buildAbcMap(abcA);
 
-  // ──────────────────────────────────────────────────────────
-  // Step 0: Inventory anomaly detection
-  // ──────────────────────────────────────────────────────────
   const anomalyMap = detectVendorAnomalies({
     vendor, cores: vendorCores, coreDays,
     receivingRows: receivingFull,
     settings,
   });
+
+  // ──────────────────────────────────────────────────────────
+  // [v3.4] Step 1.5: Clasificar régimen de cada bundle
+  // ──────────────────────────────────────────────────────────
+  const regimeMap = {};
+  for (const b of vendorBundles) {
+    regimeMap[b.j] = classifyDemandRegime(b.j, bundleDays);
+  }
 
   // ──────────────────────────────────────────────────────────
   // Steps 1-3: forecast + profile + assigned inv per bundle
@@ -421,6 +362,9 @@ export function calcVendorRecommendation({
       catch { profile = DEFAULT_PROFILE; }
     }
 
+    const regimeInfo = regimeMap[b.j];
+    const fallbackDsr = num(b.cd);
+
     const forecast = calcBundleForecast({
       bundleId: b.j,
       bundleDays,
@@ -429,12 +373,13 @@ export function calcVendorRecommendation({
       profABC: abcMap[b.j] || null,
       seasonalProfile: profile,
       settings,
+      regimeInfo,
+      bundleDsrFromSheet: fallbackDsr,
     });
 
     const yoyInfo = null;
 
     const ai = bundleAssignedInv(b, replenMap, missingMap);
-    const fallbackDsr = num(b.cd);
 
     return {
       raw: b,
@@ -456,6 +401,7 @@ export function calcVendorRecommendation({
       urgent: false,
       forecast,
       yoyInfo,
+      regimeInfo,
       forecastLevel: forecast.flags.noData ? fallbackDsr : (forecast.level || fallbackDsr),
       dsr: forecast.flags.noData ? fallbackDsr : Math.max(forecast.level, fallbackDsr * 0.01),
       spikeVisual: isSpikeVisual(b, spikeThreshold),
@@ -467,28 +413,24 @@ export function calcVendorRecommendation({
   // Step 4: demand projection from forecast
   // ──────────────────────────────────────────────────────────
   for (const b of prepped) {
-  // Fallback para bundles con poca historia: usar DSR plano × targetDoc
-  // Razón: forecast.coverageDemand=0 cuando shortHistory=true, pero b.dsr
-  // puede tener un valor real de la planilla (composite DSR del bundle).
-  // Sin este fallback, bundles nuevos quedan invisibles para el recomendador.
-  let coverageDemand = b.forecast.coverageDemand + b.forecast.safetyStock;
-  let flatDemand = b.forecast.flatDemand;
+    let coverageDemand = b.forecast.coverageDemand + b.forecast.safetyStock;
+    let flatDemand = b.forecast.flatDemand;
 
-  if (coverageDemand <= 0 && b.dsr > 0) {
-    coverageDemand = b.dsr * targetDoc;
-    flatDemand = b.dsr * targetDoc;
-    b.usedFlatFallback = true;
+    if (coverageDemand <= 0 && b.dsr > 0) {
+      coverageDemand = b.dsr * targetDoc;
+      flatDemand = b.dsr * targetDoc;
+      b.usedFlatFallback = true;
+    }
+
+    b.coverageDemand = Math.round(coverageDemand);
+    b.flatDemand = Math.round(flatDemand);
+    b.ltDemand = Math.max(0, Math.round(b.forecastLevel * lt));
+    b.effectiveDSR = effDSR(b, targetDoc);
+    b.seasonalDSR = b.effectiveDSR;
   }
 
-  b.coverageDemand = Math.round(coverageDemand);
-  b.flatDemand = Math.round(flatDemand);
-  b.ltDemand = Math.max(0, Math.round(b.forecastLevel * lt));
-  b.effectiveDSR = effDSR(b, targetDoc);
-  b.seasonalDSR = b.effectiveDSR;
-}
-
   // ──────────────────────────────────────────────────────────
-  // Step 5: waterfall usando effDSR único
+  // Step 5: waterfall
   // ──────────────────────────────────────────────────────────
   const corePools = {};
   const corePendingInbound = {};
@@ -510,12 +452,7 @@ export function calcVendorRecommendation({
   distributeRawToBundles(waterfallBundles, corePools, targetDoc, replenFloor);
 
   // ──────────────────────────────────────────────────────────
-  // Step 6: buy need con effDSR único
-  // [FIX-CONSISTENCY] currentCoverDOC = total / effDSR
-  //                   buyNeed = max(0, coverageDemand − total)
-  //   Identidad garantizada:
-  //     Si DOC ≥ targetDoc → total ≥ coverageDemand → buyNeed = 0
-  //     Si DOC < targetDoc → waterfall intentó llenar; buyNeed = residuo
+  // Step 6: buy need
   // ──────────────────────────────────────────────────────────
   for (const b of prepped) {
     const total = b.assignedInv + b.rawAssigned;
@@ -536,7 +473,7 @@ export function calcVendorRecommendation({
   }
 
   // ──────────────────────────────────────────────────────────
-  // Step 7.5: Bundle MOQ override con effDSR único
+  // Step 7.5: Bundle MOQ override
   // ──────────────────────────────────────────────────────────
   const bMoq = num(bundleMoqOverride, 0);
   const moqDocThresh = num(moqExtraDocThreshold, 30);
@@ -570,7 +507,6 @@ export function calcVendorRecommendation({
     }
   }
 
-  // [FIX-MOQ-CROSS] (unchanged from v3.2)
   const coreMoqCreditFromBundles = {};
   const coreCreditBundlesMap = {};
   for (const b of prepped) {
@@ -584,7 +520,6 @@ export function calcVendorRecommendation({
     }
   }
 
-  // Step 8.5: sanity — core ya cubierto global
   for (const coreId of Object.keys(coreNeedMap)) {
     const core = vCoreById[coreId];
     if (!core) continue;
@@ -637,7 +572,6 @@ export function calcVendorRecommendation({
     });
   }
 
-  // Bundle-mode items
   const bundleItems = [];
   for (const b of prepped) {
     if (b.buyNeed <= 0 || b.buyMode !== 'bundle') continue;
@@ -677,7 +611,6 @@ export function calcVendorRecommendation({
   const meetsVendorMoq = vendorMoqDollar <= 0 || totalCost >= vendorMoqDollar;
   const vendorMoqGap = Math.max(0, vendorMoqDollar - totalCost);
 
-  // Price map
   const priceMap = {};
   for (const c of vendorCores) {
     const histUnitCost = getVendorCoreUnitCost(c.id, vendor, priceCompFull);
@@ -695,23 +628,13 @@ export function calcVendorRecommendation({
     priceMap[b.j] = price;
   }
 
-  // ──────────────────────────────────────────────────────────
-  // Bundle details
-  // [FIX-CONSISTENCY] effectiveDSR expuesto explícitamente para que
-  // todos los componentes (PurchTab, CoreTab, Calc Breakdown,
-  // DashboardSummary, BundleTab) usen el mismo número.
-  // ──────────────────────────────────────────────────────────
   const bundleDetails = prepped.map(b => ({
     bundleId: b.id,
     assignedInv: b.assignedInv,
     rawAssignedFromWaterfall: b.rawAssigned,
     totalAvailable: b.totalAvailable,
-    // [FIX-CONSISTENCY] effectiveDSR = coverageDemand / targetDoc
     effectiveDSR: b.effectiveDSR,
-    // Alias para back-compat; son el mismo número ahora
     seasonalDSR: b.effectiveDSR,
-    // forecastLevel se preserva aparte por si algún componente lo necesita
-    // como info (Holt level plano). NO usar para decisión.
     forecastLevelRaw: b.forecastLevel,
     currentCoverDOC: b.currentCoverDOC,
     targetDOC: targetDoc,
@@ -744,6 +667,9 @@ export function calcVendorRecommendation({
     demandBreakdown: b.forecast.demandBreakdown,
     spikeVisual: b.spikeVisual,
     yoyInfo: b.yoyInfo,
+    // [v3.4] Régimen visible para UI
+    regime: b.regimeInfo?.regime || 'unknown',
+    regimeInfo: b.regimeInfo || null,
     flags: {
       trackingSignalExceeded: b.forecast.flags.trackingSignalExceeded,
       trackingSignal: b.forecast.flags.trackingSignal,
@@ -755,13 +681,13 @@ export function calcVendorRecommendation({
       yoyCapApplied: b.forecast.flags.yoyCapApplied || false,
       yoyHistoric: b.forecast.flags.yoyHistoric,
       yoyOriginalForecast: b.forecast.flags.yoyOriginalForecast,
-      usedFlatFallback: b.usedFlatFallback || false,  
+      usedFlatFallback: b.usedFlatFallback || false,
+      regime: b.forecast.flags.regime,
+      regimeMethod: b.forecast.flags.regimeMethod,
+      regimeReason: b.forecast.flags.regimeReason,
     },
   }));
 
-  // ──────────────────────────────────────────────────────────
-  // Core details
-  // ──────────────────────────────────────────────────────────
   const coreDetails = vendorCores.map(c => {
     const item = coreItems.find(i => i.id === c.id);
     const pending = corePendingInbound[c.id] || 0;
@@ -811,11 +737,12 @@ export function calcVendorRecommendation({
     meetsVendorMoq,
     vendorMoqGap,
     anomalyMap,
+    regimeMap,
   };
 }
 
 // ============================================================
-// Batch helper (unchanged)
+// Batch helper
 // ============================================================
 export function batchVendorRecommendations({
   vendors,
