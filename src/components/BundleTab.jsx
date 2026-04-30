@@ -239,7 +239,20 @@ export default function BundleTab({ data, stg, hist, daily, bundleId, onBack, go
             <tbody>
               {yD.map((r, i) => <tr key={i} className={i % 2 === 0 ? "bg-gray-800/20" : ""}>
                 <td className="py-0.5 px-1 text-gray-300">{r.month}</td>
-                {uYrs.map(y => <SC key={y} v={r["u_" + y]} className="py-0.5 px-1 text-right text-white">{r["u_" + y] != null ? R(r["u_" + y]) : ""}</SC>)}
+                {uYrs.map((y, yi) => {
+                  const val = r["u_" + y];
+                  const prevY = uYrs[yi - 1];
+                  const prevVal = prevY != null ? r["u_" + prevY] : null;
+                  const isCurrentYear = yi === uYrs.length - 1;
+                  const showPct = isCurrentYear && val != null && prevVal != null && prevVal > 0;
+                  const pct = showPct ? ((val - prevVal) / prevVal * 100) : null;
+                  return (
+                    <SC key={y} v={val} className="py-0.5 px-1 text-right text-white">
+                      <span>{val != null ? R(val) : ""}</span>
+                      {pct != null && <span className={`ml-1 text-[9px] ${pct >= 0 ? "text-emerald-400" : "text-red-400"}`} title={`vs ${prevY}: ${prevVal}`}>{pct >= 0 ? "+" : ""}{pct.toFixed(0)}%</span>}
+                    </SC>
+                  );
+                })}
               </tr>)}
               <tr className="border-t border-gray-700 font-semibold">
                 <td className="py-1 px-1">Total</td>
