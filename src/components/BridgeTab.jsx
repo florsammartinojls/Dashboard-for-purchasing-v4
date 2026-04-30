@@ -11,6 +11,14 @@ const fmt$ = (n) => (n == null || isNaN(n)) ? "—" : "$" + Math.round(n).toLoca
 const fmt$3 = (n) => (n == null || isNaN(n)) ? "—" : "$" + Number(n).toFixed(3);
 const fmtPct = (n) => (n == null || isNaN(n)) ? "—" : (n > 0 ? "+" : "") + Math.round(n) + "%";
 const fmt1 = (n) => (n == null || isNaN(n)) ? "—" : Number(n).toFixed(1);
+const fmtPP = (n) => (n == null || isNaN(n)) ? "—" : (n > 0 ? "−" : n < 0 ? "+" : "") + Math.abs(n).toFixed(1) + "pp";
+const marginDropColor = (pp) => {
+  if (pp == null) return "text-gray-500";
+  if (pp <= 0) return "text-emerald-300";   // negative drop = USA cheaper = improvement
+  if (pp < 5) return "text-gray-300";
+  if (pp < 15) return "text-amber-300";
+  return "text-red-300";
+};
 
 const FLAG_META = {
   VIABLE: { icon: "🟢", label: "Viable", color: "text-emerald-400", bg: "bg-emerald-500/15", border: "border-emerald-500/30" },
@@ -70,7 +78,7 @@ function BridgeBreakdownModal({ rec, settings, onClose }) {
           <h3 className="text-sm font-semibold text-white mb-2">Step 1 — Bundle gap analysis</h3>
           <p className="text-gray-400 text-xs mb-3">For each bundle using this core, the gap is the pieces needed to cover until China is FBA-live (China ETA + {pipeline_days} pipeline days), minus current non-inbound stock.</p>
           <div className="overflow-x-auto">
-            <table className="w-full text-xs">
+           <table className="w-full text-xs">
               <thead>
                 <tr className="text-gray-500 uppercase border-b border-gray-700">
                   <th className="py-1.5 text-left">Bundle</th>
@@ -82,6 +90,9 @@ function BridgeBreakdownModal({ rec, settings, onClose }) {
                   <th className="py-1.5 text-right">Gap (pcs)</th>
                   <th className="py-1.5 text-right">Gap (DOC)</th>
                   <th className="py-1.5 text-right">Core qty</th>
+                  <th className="py-1.5 text-right border-l border-gray-700 pl-3">Margin now</th>
+                  <th className="py-1.5 text-right">Margin USA</th>
+                  <th className="py-1.5 text-right" title="Drop = margin loss in percentage points if this core is bridged USA. Green = USA is cheaper (improvement).">Δ pp</th>
                 </tr>
               </thead>
               <tbody>
@@ -96,6 +107,9 @@ function BridgeBreakdownModal({ rec, settings, onClose }) {
                     <td className="py-1.5 text-right text-amber-300 font-semibold">{fmtN(b.gap_pieces)}</td>
                     <td className="py-1.5 text-right text-amber-300">{fmtN(b.gap_DOC)}d</td>
                     <td className="py-1.5 text-right text-cyan-300 font-semibold">{fmtN(b.pieces_contributed)}</td>
+                    <td className="py-1.5 text-right text-gray-300 border-l border-gray-800 pl-3">{b.margin_actual != null ? fmt1(b.margin_actual) + "%" : "—"}</td>
+                    <td className="py-1.5 text-right text-gray-300">{b.margin_usa != null ? fmt1(b.margin_usa) + "%" : "—"}</td>
+                    <td className={`py-1.5 text-right font-semibold ${marginDropColor(b.margin_drop_pp)}`}>{fmtPP(b.margin_drop_pp)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -251,8 +265,9 @@ export default function BridgeTab({ data, stg, vendorRecs, goCore, goBundle }) {
     vendorRecs: vendorRecs || {},
     receivingFull: data.receivingFull || [],
     inbound: data.inbound || [],
+    fees: data.fees || [],
     settings: stg,
-  }), [data.vendors, data.cores, data.bundles, vendorRecs, data.receivingFull, data.inbound, stg]);
+  }), [data.vendors, data.cores, data.bundles, vendorRecs, data.receivingFull, data.inbound, data.fees, stg]);
 
   const [breakdown, setBreakdown] = useState(null);
   const [expanded, setExpanded] = useState(new Set());
