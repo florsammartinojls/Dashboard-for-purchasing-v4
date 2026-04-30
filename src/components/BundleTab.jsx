@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect } from "react";
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
 import { R, D1, $, $2, P, MN, YC, TTP, gS, gY, cMo, fD } from "../lib/utils";
-import { Dot, TH, AbcBadge, HealthBadge, KillBadge, SumCtx } from "./Shared";
+import { Dot, TH, AbcBadge, HealthBadge, KillBadge, SumCtx, CopyableId } from "./Shared";
 
 function SC({ v, children, className }) {
   const { addCell } = React.useContext(SumCtx);
@@ -168,7 +168,7 @@ export default function BundleTab({ data, stg, hist, daily, bundleId, onBack, go
     {/* Header */}
     <div className="bg-gray-900 rounded-xl p-4 mb-4 border border-gray-800">
       <div className="flex flex-wrap items-center gap-3 mb-2">
-        <span className="text-xl font-bold text-white">{b.j}</span>
+        <CopyableId value={b.j} className="text-xl font-bold text-white" />
         <Dot status={bStatus} />
         {core && <button onClick={() => goCore(core.id)} className="text-blue-400 text-xs bg-blue-400/10 px-2 py-0.5 rounded">→{core.id}</button>}
         {bAbc && <AbcBadge grade={bAbc.profABC} />}
