@@ -18,7 +18,7 @@
 // Carried from v3.3:
 //   effDSR = coverageDemand / targetDoc, regla única en todos los
 //   puntos de decisión.
-// ============================================================
+// ===========================================================
 
 import { calcBundleSeasonalProfile, DEFAULT_PROFILE } from './seasonal.js';
 import { calcBundleForecast, calcHistoricSamePeriod } from './forecast.js';
