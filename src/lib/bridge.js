@@ -2,11 +2,12 @@
 // Bridge Tab — pure module. Computes USA bridge recommendations.
 // Consumes v3 vendorRecs + data layer. Does NOT modify any engine code.
 //
-// Algorithm phases:
-//   1. Per-bundle gap calculation (China_eta + pipeline_days vs effDSR cover)
-//   2. Bundle → Core aggregation (multi-bundle cores sum demand)
-//   3. USA vendor selection + flag determination
-//   4. Bundle group construction (visual grouping w/ INCOMPLETE_BRIDGE meta-flag)
+// IMPORTANT: inbound info is NOT on the bundle object directly. It lives in
+// `data.inbound` (the 7f receiving table), keyed by core or JLS#. We aggregate
+// the same way BundleTab does: match inbound rows where row.core ∈ {bundle.j,
+// bundle.core1, bundle.core2, bundle.core3} (case-insensitive). ETA is the
+// LATEST eta (so the gap window covers all in-transit pieces). Days-to-arrival
+// is derived from that ETA date.
 
 const DEFAULT_PIPELINE_DAYS = 25;
 const PREVENTIVE_DOC_THRESHOLD = 90;
@@ -27,36 +28,42 @@ const isChinaVendor = (v) => {
   return c === 'china' || c === 'cn';
 };
 
-// Try to extract China inbound info for a bundle from multiple possible sources.
-// Returns { inbound_pieces, china_eta_days } — china_eta_days is null if unknown.
+// Convert ISO-ish date string to days from today (rounded up).
+// Returns null if invalid or in the past.
+const etaToDays = (etaStr) => {
+  if (!etaStr) return null;
+  const d = new Date(etaStr);
+  if (isNaN(d.getTime())) return null;
+  const days = Math.ceil((d - new Date()) / 86400000);
+  return days > 0 ? days : null;
+};
+
+// Mirror of BundleTab's inbound aggregation logic.
+// Match inbound rows where row.core matches the bundle's JLS or any of its cores.
 const getBundleInboundInfo = (bundle, inboundData) => {
-  let inbound_pieces = 0;
-  let china_eta = null;
-
-  // Direct bundle fields (multiple possible names)
-  const directInb = bundle.inboundPieces ?? bundle.bundleInboundPieces ?? bundle.inbound ?? bundle.bundleInbound;
-  if (directInb != null) inbound_pieces = num(directInb);
-
-  const directEta = bundle.daysBeforeArrival ?? bundle.chinaEta ?? bundle.china_eta_days ?? bundle.daysToArrival;
-  if (directEta != null && !isNaN(Number(directEta))) china_eta = Number(directEta);
-
-  // Fallback to inbound table
-  if ((inbound_pieces === 0 || china_eta == null) && Array.isArray(inboundData) && inboundData.length > 0) {
-    const matches = inboundData.filter(i =>
-      i && (i.bundleId === bundle.j || i.j === bundle.j || i.bundleJls === bundle.j)
-    );
-    if (matches.length > 0) {
-      if (inbound_pieces === 0) {
-        inbound_pieces = matches.reduce((s, m) => s + num(m.pieces), 0);
-      }
-      if (china_eta == null) {
-        const etas = matches
-          .map(m => num(m.daysBeforeArrival ?? m.daysToArrival ?? m.eta))
-          .filter(d => d > 0);
-        if (etas.length > 0) china_eta = Math.min(...etas);
-      }
-    }
+  if (!bundle || !Array.isArray(inboundData) || inboundData.length === 0) {
+    return { inbound_pieces: 0, china_eta: null };
   }
+
+  const cores = [bundle.core1, bundle.core2, bundle.core3].filter(Boolean);
+  const ids = new Set(
+    [bundle.j, ...cores]
+      .filter(Boolean)
+      .map(x => String(x).trim().toLowerCase())
+  );
+  if (ids.size === 0) return { inbound_pieces: 0, china_eta: null };
+
+  const matches = inboundData.filter(i =>
+    i && ids.has(String(i.core || '').trim().toLowerCase())
+  );
+  if (matches.length === 0) return { inbound_pieces: 0, china_eta: null };
+
+  const inbound_pieces = matches.reduce((s, m) => s + num(m.pieces), 0);
+
+  // Use the LATEST eta — that's how long we need bridge cover for
+  const etas = matches.map(m => m.eta).filter(Boolean).sort();
+  const latestEta = etas.length > 0 ? etas[etas.length - 1] : null;
+  const china_eta = etaToDays(latestEta);
 
   return { inbound_pieces, china_eta };
 };
@@ -74,6 +81,25 @@ export function computeBridgeRecommendations({
   const pipeline_days = num(settings.pipeline_days) || DEFAULT_PIPELINE_DAYS;
   const moqInflationThreshold = num(settings.moqInflationThreshold) || 1.5;
 
+  // ─── Diagnostic counters (kept always; helps any future debugging) ───
+  const diag = {
+    vendorsCount: vendors.length,
+    coresCount: cores.length,
+    bundlesCount: bundles.length,
+    vendorRecsCount: Object.keys(vendorRecs || {}).length,
+    inboundCount: (inbound || []).length,
+    receivingFullCount: (receivingFull || []).length,
+    inboundSample: (inbound || []).slice(0, 2),
+    bundleDetailsTotal: 0,
+    bundlesNotInMap: 0,
+    bundlesWithZeroDSR: 0,
+    bundlesWithNoChinaEta: 0,
+    bundlesWithNoInboundPieces: 0,
+    bundlesWithNoCurrentDOC: 0,
+    bundlesWithNoGap: 0,
+    bundlesWithGap: 0,
+  };
+
   // Lookup maps
   const coreMap = {};
   for (const c of cores) if (c && c.id) coreMap[c.id] = c;
@@ -84,6 +110,16 @@ export function computeBridgeRecommendations({
   const bundleMap = {};
   for (const b of bundles) if (b && b.j) bundleMap[b.j] = b;
 
+  // Build BOM map per bundle from core1..core20 (PurchTab iterates 1..20)
+  const getBundleCores = (bundle) => {
+    const out = [];
+    for (let i = 1; i <= 20; i++) {
+      const cid = bundle['core' + i];
+      if (cid) out.push({ coreId: cid, qty: 1 }); // qty per bundle = 1 unless your data carries it
+    }
+    return out;
+  };
+
   // ─── Phase 1: per-bundle gap ──────────────────────────────────
   const bundlesWithGap = [];
   const allBundleSnapshots = []; // for preventive section
@@ -93,25 +129,28 @@ export function computeBridgeRecommendations({
     if (!vRec || !Array.isArray(vRec.bundleDetails)) continue;
 
     for (const bd of vRec.bundleDetails) {
+      diag.bundleDetailsTotal++;
       const bundle = bundleMap[bd.bundleId];
-      if (!bundle) continue;
+      if (!bundle) { diag.bundlesNotInMap++; continue; }
 
       const effDSR = num(bd.effectiveDSR);
       const assignedInv = num(bd.assignedInv);
       const rawFromWaterfall = num(bd.rawAssignedFromWaterfall);
       const non_inbound_pieces = assignedInv + rawFromWaterfall;
 
-      // Use v3's currentCoverDOC if available (post-waterfall)
       const current_DOC = bd.currentCoverDOC != null
         ? num(bd.currentCoverDOC)
         : (effDSR > 0 ? non_inbound_pieces / effDSR : null);
 
       const { inbound_pieces, china_eta } = getBundleInboundInfo(bundle, inbound);
 
-      // Snapshot for "other actions" section (all active bundles)
+      const coresUsed = (bd.coresUsed && bd.coresUsed.length > 0)
+        ? bd.coresUsed
+        : getBundleCores(bundle);
+
       allBundleSnapshots.push({
         bundleId: bd.bundleId,
-        bundleName: bundle.title || bundle.name || bd.bundleId,
+        bundleName: bundle.t || bundle.title || bundle.name || bd.bundleId,
         effDSR,
         non_inbound_pieces,
         inbound_pieces,
@@ -121,23 +160,24 @@ export function computeBridgeRecommendations({
         bd,
       });
 
-      // Skip non-classic-bridge cases
-      if (effDSR <= 0) continue;
-      if (china_eta == null || china_eta <= 0) continue;
-      if (inbound_pieces <= 0) continue;
-      if (current_DOC == null) continue;
+      // Filter & count reasons
+      if (effDSR <= 0) { diag.bundlesWithZeroDSR++; continue; }
+      if (china_eta == null || china_eta <= 0) { diag.bundlesWithNoChinaEta++; continue; }
+      if (inbound_pieces <= 0) { diag.bundlesWithNoInboundPieces++; continue; }
+      if (current_DOC == null) { diag.bundlesWithNoCurrentDOC++; continue; }
 
       const total_cover_needed_DOC = china_eta + pipeline_days;
       const target_pieces = total_cover_needed_DOC * effDSR;
       const gap_pieces = Math.max(0, target_pieces - non_inbound_pieces);
 
-      if (gap_pieces <= 0) continue;
+      if (gap_pieces <= 0) { diag.bundlesWithNoGap++; continue; }
+      diag.bundlesWithGap++;
 
       const gap_DOC = gap_pieces / effDSR;
 
       bundlesWithGap.push({
         bundleId: bd.bundleId,
-        bundleName: bundle.title || bundle.name || bd.bundleId,
+        bundleName: bundle.t || bundle.title || bundle.name || bd.bundleId,
         effDSR,
         forecastLevel: bd.forecast?.level ?? effDSR,
         non_inbound_pieces,
@@ -148,7 +188,7 @@ export function computeBridgeRecommendations({
         gap_pieces,
         current_DOC,
         gap_DOC,
-        coresUsed: bd.coresUsed || [],
+        coresUsed,
         bundle,
         bd,
       });
@@ -287,7 +327,6 @@ export function computeBridgeRecommendations({
     let needed_DOC = null;
     let excess_DOC_overhead = 0;
 
-    // Weighted DSR consumption rate of this core
     const weighted_dsr = demand.contributing_bundles.reduce(
       (s, b) => s + (b.effDSR * b.qty_per_bundle), 0
     );
@@ -308,7 +347,6 @@ export function computeBridgeRecommendations({
         : 0;
     }
 
-    // Price delta (positive % = USA more expensive)
     let delta_pct = null;
     if (last_china_price && last_usa_price && last_china_price > 0) {
       delta_pct = ((last_usa_price - last_china_price) / last_china_price) * 100;
@@ -395,6 +433,27 @@ export function computeBridgeRecommendations({
     cores_no_history: recommendations.filter(r => r.flag === 'NO_USA_HISTORY').length,
     cores_too_late: recommendations.filter(r => r.flag === 'BRIDGE_TOO_LATE').length,
   };
+
+  // ─── Diagnostic log + window expose ─────────────────────────
+  // Always logs once per analysis run. Helps debug "why is everything in preventive?".
+  // Exposes __bridgeDiag on window for inspection.
+  if (typeof console !== 'undefined') {
+    console.log('[BRIDGE] Analysis complete:', {
+      ...diag,
+      summary,
+      preventiveCount: preventive.length,
+      recommendationsCount: recommendations.length,
+    });
+  }
+  if (typeof window !== 'undefined') {
+    window.__bridgeDiag = {
+      ...diag,
+      summary,
+      preventiveCount: preventive.length,
+      sampleSnapshots: allBundleSnapshots.slice(0, 5),
+      recommendations,
+    };
+  }
 
   return {
     generated_at: new Date().toISOString(),
