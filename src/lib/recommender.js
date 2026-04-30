@@ -158,10 +158,78 @@ function effDSR(b, targetDoc) {
 // Filosofía: si vendés MENOS que el año pasado, no podés
 // comprar MÁS que el año pasado. Si crece, dejamos margen.
 // ────────────────────────────────────────────────────────────
-function applyYoYSanityCheck(forecast, bundleId, bundleDays, targetDoc) {
+
+// ────────────────────────────────────────────────────────────
+// Calcula histórico desde bundleSales (mensual)
+// ────────────────────────────────────────────────────────────
+// bundleSales tiene una fila por bundle/mes con campo `units`.
+// Para un horizonte de N días empezando hoy:
+//   1. Tomamos el período "hace 1 año" → "hace 1 año + N días"
+//   2. Sumamos las unidades de los meses que caen en ese rango,
+//      prorrateando los meses parciales
+// ────────────────────────────────────────────────────────────
+function calcHistoricFromMonthlySales(bundleSales, bundleId, horizonDays) {
+  if (!Array.isArray(bundleSales) || !bundleId || !(horizonDays > 0)) return null;
+
+  const today = new Date();
+  const startDate = new Date(today);
+  startDate.setFullYear(startDate.getFullYear() - 1);
+  const endDate = new Date(startDate);
+  endDate.setDate(endDate.getDate() + horizonDays);
+
+  const rows = bundleSales.filter(r => r && r.j === bundleId);
+  if (rows.length === 0) return null;
+
+  let total = 0;
+  let monthsTouched = 0;
+
+  // Iterar mes por mes desde startDate hasta endDate
+  const cur = new Date(startDate.getFullYear(), startDate.getMonth(), 1);
+  const last = new Date(endDate.getFullYear(), endDate.getMonth(), 1);
+
+  while (cur <= last) {
+    const y = cur.getFullYear();
+    const m = cur.getMonth() + 1; // 1-12
+
+    // Buscar fila para este (year, month)
+    const row = rows.find(r => r.y === y && r.m === m);
+    const monthUnits = row?.units > 0 ? row.units :
+                       (row?.avgDsr > 0 && row?.dataDays > 0 ? Math.round(row.avgDsr * row.dataDays) : 0);
+
+    if (monthUnits > 0) {
+      // Días del mes
+      const daysInMonth = new Date(y, m, 0).getDate();
+      // Días que efectivamente caen en nuestro rango [startDate, endDate]
+      const monthStart = new Date(y, m - 1, 1);
+      const monthEnd = new Date(y, m - 1, daysInMonth);
+      const effStart = monthStart < startDate ? startDate : monthStart;
+      const effEnd = monthEnd > endDate ? endDate : monthEnd;
+      const daysInRange = Math.max(0, Math.round((effEnd - effStart) / 86400000) + 1);
+
+      const prorated = monthUnits * (daysInRange / daysInMonth);
+      total += prorated;
+      monthsTouched++;
+    }
+
+    // Avanzar al próximo mes
+    cur.setMonth(cur.getMonth() + 1);
+  }
+
+  if (monthsTouched === 0) return null;
+
+  return {
+    total: Math.round(total),
+    monthsTouched,
+    horizonDays,
+    startDate: startDate.toISOString().split('T')[0],
+    endDate: endDate.toISOString().split('T')[0],
+  };
+}
+
+function applyYoYSanityCheck(forecast, bundleId, bundleSales, targetDoc) {
   if (!forecast || forecast.flags.noData) return null;
 
-  const historic = calcHistoricSamePeriod(bundleDays, bundleId, targetDoc);
+  const historic = calcHistoricFromMonthlySales(bundleSales, bundleId, targetDoc);
   if (!historic) return { applied: false, reason: 'no_history' };
   if (historic.total < MIN_HISTORIC_FOR_YOY) {
     return { applied: false, reason: 'historic_too_small', historic: historic.total };
@@ -170,8 +238,8 @@ function applyYoYSanityCheck(forecast, bundleId, bundleDays, targetDoc) {
   // Nivel actual = level del forecast (avg últimos 60d, ya calculado)
   const levelActual = num(forecast.level, 0);
   // Nivel histórico = promedio diario del mismo período año pasado
-  const levelHistorico = historic.daysCovered > 0
-    ? historic.total / historic.daysCovered
+  const levelHistorico = targetDoc > 0
+    ? historic.total / targetDoc
     : 0;
 
   // Determinar cap según tendencia
@@ -425,7 +493,7 @@ export function calcVendorRecommendation({
       bundleDsrFromSheet: fallbackDsr,
     });
 
-    const yoyInfo = applyYoYSanityCheck(forecast, b.j, bundleDays, targetDoc);
+    const yoyInfo = applyYoYSanityCheck(forecast, b.j, bundleSales, targetDoc);
 
     const ai = bundleAssignedInv(b, replenMap, missingMap);
 
