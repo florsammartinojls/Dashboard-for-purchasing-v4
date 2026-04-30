@@ -232,31 +232,38 @@ export default function BundleTab({ data, stg, hist, daily, bundleId, onBack, go
         </div>
         <div className="lg:w-72 overflow-x-auto">
           <table className="w-full text-xs">
-            <thead><tr className="text-gray-500">
+          <thead><tr className="text-gray-500">
               <th className="py-1 px-1 text-left">Mo</th>
-              {uYrs.map(y => <th key={y} className="py-1 px-1 text-right" style={{ color: YC[y] || "#6b7280" }}>{y}</th>)}
+              {uYrs.map((y, yi) => <th key={y} className="py-1 px-1 text-right" style={{ color: YC[y] || "#6b7280" }}>{y}</th>)}
+              {uYrs.length >= 2 && <th className="py-1 px-1 text-right text-gray-500 text-[9px]">Var %<br/>{uYrs[uYrs.length - 1]}vs{uYrs[uYrs.length - 2]}</th>}
             </tr></thead>
             <tbody>
               {yD.map((r, i) => <tr key={i} className={i % 2 === 0 ? "bg-gray-800/20" : ""}>
                 <td className="py-0.5 px-1 text-gray-300">{r.month}</td>
-                {uYrs.map((y, yi) => {
-                  const val = r["u_" + y];
-                  const prevY = uYrs[yi - 1];
-                  const prevVal = prevY != null ? r["u_" + prevY] : null;
-                  const isCurrentYear = yi === uYrs.length - 1;
-                  const showPct = isCurrentYear && val != null && prevVal != null && prevVal > 0;
-                  const pct = showPct ? ((val - prevVal) / prevVal * 100) : null;
-                  return (
-                    <SC key={y} v={val} className="py-0.5 px-1 text-right text-white">
-                      <span>{val != null ? R(val) : ""}</span>
-                      {pct != null && <span className={`ml-1 text-[9px] ${pct >= 0 ? "text-emerald-400" : "text-red-400"}`} title={`vs ${prevY}: ${prevVal}`}>{pct >= 0 ? "+" : ""}{pct.toFixed(0)}%</span>}
-                    </SC>
-                  );
-                })}
+              {uYrs.map((y) => (
+                  <SC key={y} v={r["u_" + y]} className="py-0.5 px-1 text-right text-white">{r["u_" + y] != null ? R(r["u_" + y]) : ""}</SC>
+                ))}
+                {uYrs.length >= 2 && (() => {
+                  const curY = uYrs[uYrs.length - 1];
+                  const prevY = uYrs[uYrs.length - 2];
+                  const cur = r["u_" + curY];
+                  const prev = r["u_" + prevY];
+                  const showPct = cur != null && prev != null && prev > 0;
+                  const pct = showPct ? ((cur - prev) / prev * 100) : null;
+                  return <td className={`py-0.5 px-1 text-right text-[10px] ${pct == null ? "text-gray-600" : pct >= 0 ? "text-emerald-400" : "text-red-400"}`} title={prev != null ? `${curY}: ${cur ?? "—"} vs ${prevY}: ${prev}` : ""}>{pct != null ? (pct >= 0 ? "+" : "") + pct.toFixed(0) : "—"}</td>;
+                })()}
               </tr>)}
-              <tr className="border-t border-gray-700 font-semibold">
+            <tr className="border-t border-gray-700 font-semibold">
                 <td className="py-1 px-1">Total</td>
                 {uYrs.map(y => <SC key={y} v={uYTot[y]} className="py-1 px-1 text-right text-white">{R(uYTot[y])}</SC>)}
+                {uYrs.length >= 2 && (() => {
+                  const curY = uYrs[uYrs.length - 1];
+                  const prevY = uYrs[uYrs.length - 2];
+                  const cur = uYTot[curY];
+                  const prev = uYTot[prevY];
+                  const pct = prev > 0 ? ((cur - prev) / prev * 100) : null;
+                  return <td className={`py-1 px-1 text-right text-[10px] ${pct == null ? "text-gray-600" : pct >= 0 ? "text-emerald-400" : "text-red-400"}`}>{pct != null ? (pct >= 0 ? "+" : "") + pct.toFixed(0) : "—"}</td>;
+                })()}
               </tr>
             </tbody>
           </table>
