@@ -525,6 +525,7 @@ export function CalcBreakdownV2({ core, vendor, vendorRec, profile, stg, onClose
                   <tr className="text-gray-500 uppercase border-b border-gray-700">
                     <th className="py-1.5 text-left">Bundle</th>
                     <th className="py-1.5 text-right" title="ABC class">ABC</th>
+                    <th className="py-1.5 text-right" title="Complete DSR del bundle (referencia, viene de la sheet)">C.DSR</th>
                     <th className="py-1.5 text-right" title="Holt-smoothed level (units/day)">Level</th>
                     <th className="py-1.5 text-right" title="Holt trend (Δ units/day/day). Positive = rising.">Trend</th>
                     <th className="py-1.5 text-right" title="Outliers cleaned by Hampel filter">Outl</th>
@@ -550,6 +551,7 @@ export function CalcBreakdownV2({ core, vendor, vendorRec, profile, stg, onClose
                           {!f.usedHolt && !fl.shortHistory && <span className="ml-1 text-[9px] text-gray-500" title="No data — fallback to 0">no-data</span>}
                         </td>
                         <td className="py-1.5 text-right">{ss.profABC ? <AbcBadge grade={ss.profABC} /> : <span className="text-gray-600">—</span>}</td>
+                        <td className="py-1.5 text-right text-gray-400">{fmt1(b.completeDSR ?? b.cd)}</td>
                         <td className="py-1.5 text-right text-white font-semibold">{fmt1(f.level)}</td>
                         <td className={`py-1.5 text-right ${trendColor}`}>{f.trend != null ? (f.trend > 0 ? '+' : '') + fmt3(f.trend) : "—"}</td>
                         <td className={`py-1.5 text-right ${f.outliersRemoved > 0 ? "text-amber-300" : "text-gray-600"}`}>{f.outliersRemoved || 0}</td>
