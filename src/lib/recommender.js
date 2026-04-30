@@ -257,11 +257,10 @@ function applyYoYSanityCheck(forecast, bundleId, bundleSales, targetDoc) {
   else if (trendLabel === 'growing') yoyCapMultiplier = 1.5;
   else yoyCapMultiplier = 1.2;
 
-// [Opción A] Capear el TOTAL = coverageDemand + safetyStock
-  // (filosofía: si vendiste X el año pasado y caés, no podés
-  // pedir más de X aún incluyendo el safety stock)
+// forecast.coverageDemand ya incluye safety stock (lo agregó forecast.js)
+  // Capeamos contra histórico × multiplier según tendencia
+  const forecastTotal = forecast.coverageDemand;
   const safetyStock = num(forecast.safetyStock, 0);
-  const forecastTotal = forecast.coverageDemand + safetyStock;
   const maxAllowed = historic.total * yoyCapMultiplier;
 
   if (forecastTotal <= maxAllowed) {
@@ -539,9 +538,10 @@ export function calcVendorRecommendation({
 
   // ──────────────────────────────────────────────────────────
   // Step 4: demand projection from forecast
+  // (forecast.coverageDemand YA incluye safety stock)
   // ──────────────────────────────────────────────────────────
   for (const b of prepped) {
-    let coverageDemand = b.forecast.coverageDemand + b.forecast.safetyStock;
+    let coverageDemand = b.forecast.coverageDemand;
     let flatDemand = b.forecast.flatDemand;
 
     if (coverageDemand <= 0 && b.dsr > 0) {
