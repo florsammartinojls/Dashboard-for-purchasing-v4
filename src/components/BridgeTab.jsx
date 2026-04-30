@@ -1,429 +1,587 @@
-// src/lib/bridge.js
-// Bridge Tab — pure module. Computes USA bridge recommendations.
-// Consumes v3 vendorRecs + data layer. Does NOT modify any engine code.
-//
-// IMPORTANT: inbound info is NOT on the bundle object directly. It lives in
-// `data.inbound` (the 7f receiving table), keyed by core or JLS#. We aggregate
-// the same way BundleTab does: match inbound rows where row.core ∈ {bundle.j,
-// bundle.core1, bundle.core2, bundle.core3} (case-insensitive). ETA is the
-// LATEST eta (so the gap window covers all in-transit pieces). Days-to-arrival
-// is derived from that ETA date.
+// src/components/BridgeTab.jsx
+// Bridge Tab UI — primary core-level table + breakdown modal + "other actions".
+// Read-only view; does not mutate state outside its own.
 
-const DEFAULT_PIPELINE_DAYS = 25;
-const PREVENTIVE_DOC_THRESHOLD = 90;
+import React, { useState, useMemo } from "react";
+import { computeBridgeRecommendations } from "../lib/bridge";
+import { CopyableId } from "./Shared";
 
-// ─── helpers ───────────────────────────────────────────────────
-const num = (x) => { const n = Number(x); return isNaN(n) ? 0 : n; };
-const numOrNull = (x) => { const n = Number(x); return isNaN(n) ? null : n; };
+// ─── formatters ────────────────────────────────────────────────
+const fmtN = (n) => (n == null || isNaN(n)) ? "—" : Math.round(n).toLocaleString("en-US");
+const fmt$ = (n) => (n == null || isNaN(n)) ? "—" : "$" + Math.round(n).toLocaleString("en-US");
+const fmt$3 = (n) => (n == null || isNaN(n)) ? "—" : "$" + Number(n).toFixed(3);
+const fmtPct = (n) => (n == null || isNaN(n)) ? "—" : (n > 0 ? "+" : "") + Math.round(n) + "%";
+const fmt1 = (n) => (n == null || isNaN(n)) ? "—" : Number(n).toFixed(1);
 
-const isUSAVendor = (v) => {
-  if (!v) return false;
-  const c = (v.country || '').toLowerCase().trim();
-  return c === 'us' || c === 'usa' || c === 'united states' || c === '';
+// ─── flag presentation ────────────────────────────────────────
+const FLAG_META = {
+  VIABLE: { icon: "🟢", label: "Viable", color: "text-emerald-400", bg: "bg-emerald-500/15", border: "border-emerald-500/30" },
+  NO_USA_HISTORY: { icon: "🔴", label: "No USA history", color: "text-red-400", bg: "bg-red-500/15", border: "border-red-500/30" },
+  BRIDGE_TOO_LATE: { icon: "🔴", label: "Bridge too late", color: "text-red-400", bg: "bg-red-500/15", border: "border-red-500/30" },
 };
 
-const isChinaVendor = (v) => {
-  if (!v) return false;
-  const c = (v.country || '').toLowerCase().trim();
-  return c === 'china' || c === 'cn';
+const ACTION_TEXT = {
+  VIABLE: "Order USA now",
+  NO_USA_HISTORY: "Raise Amazon price — no USA source",
+  BRIDGE_TOO_LATE: "Raise Amazon price — bridge cannot arrive in time",
 };
 
-// Convert ISO-ish date string to days from today (rounded up).
-// Returns null if invalid or in the past.
-const etaToDays = (etaStr) => {
-  if (!etaStr) return null;
-  const d = new Date(etaStr);
-  if (isNaN(d.getTime())) return null;
-  const days = Math.ceil((d - new Date()) / 86400000);
-  return days > 0 ? days : null;
+const deltaColor = (pct) => {
+  if (pct == null) return "text-gray-500";
+  if (pct > 20) return "text-red-400";
+  if (pct > 0) return "text-amber-400";
+  return "text-emerald-400";
 };
 
-// Mirror of BundleTab's inbound aggregation logic.
-// Match inbound rows where row.core matches the bundle's JLS or any of its cores.
-const getBundleInboundInfo = (bundle, inboundData) => {
-  if (!bundle || !Array.isArray(inboundData) || inboundData.length === 0) {
-    return { inbound_pieces: 0, china_eta: null };
-  }
+// ─── Breakdown modal ──────────────────────────────────────────
+function BridgeBreakdownModal({ rec, settings, onClose }) {
+  if (!rec) return null;
+  const meta = FLAG_META[rec.flag];
+  const pipeline_days = settings.pipeline_days ?? 25;
 
-  const cores = [bundle.core1, bundle.core2, bundle.core3].filter(Boolean);
-  const ids = new Set(
-    [bundle.j, ...cores]
-      .filter(Boolean)
-      .map(x => String(x).trim().toLowerCase())
+  const totalCost = rec.pieces_to_buy && rec.usa_vendor
+    ? rec.pieces_to_buy * rec.usa_vendor.last_price
+    : null;
+  const chinaCost = rec.pieces_to_buy && rec.price_comparison.last_china_price
+    ? rec.pieces_to_buy * rec.price_comparison.last_china_price
+    : null;
+  const premiumPaid = totalCost && chinaCost ? totalCost - chinaCost : null;
+
+  return (
+    <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4 overflow-auto" onClick={onClose}>
+      <div className="bg-gray-900 border border-gray-700 rounded-xl p-5 w-full max-w-3xl max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+        <div className="flex justify-between items-start mb-4">
+          <div>
+            <h2 className="text-lg font-bold text-white">
+              Bridge for {rec.core_id} — Why this recommendation?
+            </h2>
+            <p className="text-gray-400 text-sm mt-1">{rec.core_name}</p>
+            {rec.usa_vendor && (
+              <p className="text-gray-500 text-xs mt-1">
+                {rec.usa_vendor.name} · LT {rec.usa_vendor.lt}d · MOQ {fmtN(rec.usa_vendor.moq)} pcs · Last price {fmt$3(rec.usa_vendor.last_price)}/pc
+              </p>
+            )}
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-white text-xl">✕</button>
+        </div>
+
+        <div className={`rounded-lg p-3 mb-4 ${meta.bg} border ${meta.border}`}>
+          <div className="flex items-center gap-2">
+            <span className="text-lg">{meta.icon}</span>
+            <span className={`font-semibold ${meta.color}`}>{meta.label}</span>
+            <span className="text-gray-400 text-sm ml-2">— {ACTION_TEXT[rec.flag]}</span>
+          </div>
+        </div>
+
+        <div className="bg-gray-800/50 rounded-lg p-4 mb-3">
+          <h3 className="text-sm font-semibold text-white mb-2">Step 1 — Bundle gap analysis</h3>
+          <p className="text-gray-400 text-xs mb-3">
+            For each bundle using this core, the gap is the pieces needed to cover until China is FBA-live (China ETA + {pipeline_days} pipeline days), minus current non-inbound stock.
+          </p>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="text-gray-500 uppercase border-b border-gray-700">
+                  <th className="py-1.5 text-left">Bundle</th>
+                  <th className="py-1.5 text-right">effDSR</th>
+                  <th className="py-1.5 text-right">Non-inb stock</th>
+                  <th className="py-1.5 text-right">Curr DOC</th>
+                  <th className="py-1.5 text-right">China ETA</th>
+                  <th className="py-1.5 text-right">Cover need</th>
+                  <th className="py-1.5 text-right">Gap (pcs)</th>
+                  <th className="py-1.5 text-right">Gap (DOC)</th>
+                  <th className="py-1.5 text-right">Core qty</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rec.contributing_bundles.map(b => (
+                  <tr key={b.bundle_id} className="border-t border-gray-800/40">
+                    <td className="py-1.5 text-blue-300 font-mono">{b.bundle_id}</td>
+                    <td className="py-1.5 text-right text-gray-300">{fmt1(b.effDSR)}</td>
+                    <td className="py-1.5 text-right text-gray-300">{fmtN(b.non_inbound_pieces)}</td>
+                    <td className="py-1.5 text-right text-gray-300">{fmtN(b.current_DOC)}d</td>
+                    <td className="py-1.5 text-right text-gray-300">{fmtN(b.china_eta)}d</td>
+                    <td className="py-1.5 text-right text-gray-300">{fmtN(b.total_cover_needed_DOC)}d</td>
+                    <td className="py-1.5 text-right text-amber-300 font-semibold">{fmtN(b.gap_pieces)}</td>
+                    <td className="py-1.5 text-right text-amber-300">{fmtN(b.gap_DOC)}d</td>
+                    <td className="py-1.5 text-right text-cyan-300 font-semibold">{fmtN(b.pieces_contributed)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className="bg-gray-800/50 rounded-lg p-4 mb-3">
+          <h3 className="text-sm font-semibold text-white mb-2">Step 2 — Aggregate to core need</h3>
+          <p className="text-gray-400 text-xs mb-2">
+            Sum of all (bundle gap × pieces per bundle) for this core.
+          </p>
+          <div className="flex items-center gap-2 text-sm">
+            <span className="text-gray-400">Total raw pieces needed:</span>
+            <span className="text-white font-bold text-lg">{fmtN(rec.raw_pieces_needed)}</span>
+            {rec.needed_DOC != null && (
+              <span className="text-gray-500 text-xs ml-2">(≈ {fmtN(rec.needed_DOC)} DOC at combined consumption rate)</span>
+            )}
+          </div>
+        </div>
+
+        <div className="bg-gray-800/50 rounded-lg p-4 mb-3">
+          <h3 className="text-sm font-semibold text-white mb-2">Step 3 — USA vendor selection</h3>
+          {rec.usa_vendor ? (
+            <div className="text-xs text-gray-300 space-y-1">
+              <div>
+                <span className="text-gray-500">Selected:</span>{" "}
+                <span className="text-white font-semibold">{rec.usa_vendor.name}</span>{" "}
+                <span className="text-gray-500">(most recent USA receipt: {rec.usa_vendor.last_purchase_date || "—"})</span>
+              </div>
+              <div className="text-gray-500">
+                Total USA receipts in history: {rec.usa_vendor.total_history_count}
+              </div>
+            </div>
+          ) : (
+            <div className="text-red-300 text-xs">
+              ✗ No USA vendor with historical purchases of this core. Bridge not viable from USA.
+            </div>
+          )}
+        </div>
+
+        <div className={`rounded-lg p-4 mb-3 ${rec.flag === 'BRIDGE_TOO_LATE' ? "bg-red-500/10 border border-red-500/30" : "bg-gray-800/50"}`}>
+          <h3 className="text-sm font-semibold text-white mb-2">Step 4 — Feasibility check (lead time vs urgency)</h3>
+          {rec.usa_vendor ? (
+            <div className="text-xs space-y-1">
+              <div className="text-gray-400">
+                Most-urgent contributing bundle DOC: <span className="text-white font-semibold">{fmtN(rec.urgency_score)}d</span>
+              </div>
+              <div className="text-gray-400">
+                USA vendor lead time: <span className="text-white font-semibold">{rec.usa_vendor.lt}d</span>
+              </div>
+              {rec.flag === 'BRIDGE_TOO_LATE' ? (
+                <div className="text-red-300 mt-2 font-semibold">
+                  ✗ {fmtN(rec.urgency_score)}d &lt; {rec.usa_vendor.lt}d — bridge cannot arrive in time. See Step 6.
+                </div>
+              ) : (
+                <div className="text-emerald-300 mt-2">
+                  ✓ {fmtN(rec.urgency_score)}d &gt; {rec.usa_vendor.lt}d — bridge can arrive in time.
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="text-gray-500 text-xs italic">N/A — no USA vendor</div>
+          )}
+        </div>
+
+        <div className="bg-gray-800/50 rounded-lg p-4 mb-3">
+          <h3 className="text-sm font-semibold text-white mb-2">Step 5 — Price comparison</h3>
+          <div className="grid grid-cols-3 gap-3 text-center text-xs">
+            <div className="bg-gray-900 rounded p-2">
+              <div className="text-gray-500 text-[10px] uppercase">Last China price</div>
+              <div className="text-white font-bold">{fmt$3(rec.price_comparison.last_china_price)}/pc</div>
+            </div>
+            <div className="bg-gray-900 rounded p-2">
+              <div className="text-gray-500 text-[10px] uppercase">Last USA price</div>
+              <div className="text-white font-bold">{fmt$3(rec.price_comparison.last_usa_price)}/pc</div>
+            </div>
+            <div className="bg-gray-900 rounded p-2">
+              <div className="text-gray-500 text-[10px] uppercase">Δ vs China</div>
+              <div className={`font-bold ${deltaColor(rec.price_comparison.delta_pct)}`}>
+                {fmtPct(rec.price_comparison.delta_pct)}
+              </div>
+            </div>
+          </div>
+          <p className="text-gray-500 text-[10px] mt-2 italic">
+            Positive % = USA more expensive than China. Informational only — judge case by case.
+          </p>
+        </div>
+
+        {rec.flag === 'VIABLE' ? (
+          <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-lg p-4">
+            <h3 className="text-sm font-semibold text-emerald-300 mb-2">Step 6 — MOQ applied & final order</h3>
+            <div className="grid grid-cols-4 gap-3 text-center text-xs mb-3">
+              <div>
+                <div className="text-gray-500 text-[10px] uppercase">Raw need</div>
+                <div className="text-white font-bold text-base">{fmtN(rec.raw_pieces_needed)}</div>
+              </div>
+              <div>
+                <div className="text-gray-500 text-[10px] uppercase">USA MOQ</div>
+                <div className="text-gray-300 font-bold text-base">{fmtN(rec.usa_vendor.moq)}</div>
+              </div>
+              <div>
+                <div className="text-gray-500 text-[10px] uppercase">Casepack</div>
+                <div className="text-gray-300 font-bold text-base">{fmtN(rec.usa_vendor.casePack || 1)}</div>
+              </div>
+              <div>
+                <div className="text-gray-500 text-[10px] uppercase">Final order</div>
+                <div className={`font-bold text-base ${rec.moq_inflated ? "text-orange-300" : "text-emerald-400"}`}>
+                  {fmtN(rec.pieces_to_buy)}
+                </div>
+              </div>
+            </div>
+            {rec.moq_inflated && (
+              <div className="text-orange-300 text-xs mb-2">
+                ⚠ MOQ inflated — buying {Math.round(rec.inflation_ratio * 100)}% of real need · excess {fmtN(rec.excess_pieces)} pcs (~{fmtN(rec.excess_DOC_overhead)} extra DOC)
+              </div>
+            )}
+            <div className="border-t border-emerald-500/20 pt-3 mt-3">
+              <p className="text-gray-300 text-sm leading-relaxed">
+                <span className="text-emerald-300 font-semibold">FINAL RECOMMENDATION: </span>
+                Buy <span className="text-white font-bold">{fmtN(rec.pieces_to_buy)} units</span> of <span className="text-blue-300 font-mono">{rec.core_id}</span> from <span className="text-white font-bold">{rec.usa_vendor.name}</span>.
+              </p>
+              <div className="grid grid-cols-3 gap-3 mt-2 text-xs">
+                <div className="text-gray-400">
+                  Bridge DOC added: <span className="text-emerald-300 font-bold">~{fmtN(rec.bridge_DOC_added)}d</span>
+                </div>
+                <div className="text-gray-400">
+                  Cost: <span className="text-amber-300 font-bold">{fmt$(totalCost)}</span>
+                </div>
+                {premiumPaid != null && (
+                  <div className="text-gray-400">
+                    Premium vs China: <span className={premiumPaid > 0 ? "text-red-300 font-bold" : "text-emerald-300 font-bold"}>
+                      {premiumPaid > 0 ? "+" : ""}{fmt$(premiumPaid)}
+                    </span>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4">
+            <h3 className="text-sm font-semibold text-red-300 mb-2">Step 6 — Mitigation: Amazon price increase</h3>
+            <p className="text-gray-300 text-xs mb-3">
+              Bridge from USA is not feasible. Throttle demand by raising Amazon price until China lands.
+            </p>
+            {rec.throttle_suggestion && (
+              <div className="bg-gray-900 rounded p-3">
+                <div className="grid grid-cols-2 gap-3 text-xs">
+                  <div>
+                    <div className="text-gray-500 text-[10px] uppercase">Days until China FBA-live</div>
+                    <div className="text-white font-bold">{fmtN(rec.throttle_suggestion.days_until_china_live)}d</div>
+                  </div>
+                  <div>
+                    <div className="text-gray-500 text-[10px] uppercase">Worst-case bundle</div>
+                    <div className="text-blue-300 font-mono text-sm">{rec.throttle_suggestion.worst_bundle}</div>
+                  </div>
+                  <div>
+                    <div className="text-gray-500 text-[10px] uppercase">Current effDSR</div>
+                    <div className="text-white font-bold">{fmt1(rec.throttle_suggestion.current_DSR)}</div>
+                  </div>
+                  <div>
+                    <div className="text-gray-500 text-[10px] uppercase">Target DSR (to survive)</div>
+                    <div className="text-emerald-300 font-bold">{fmt1(rec.throttle_suggestion.target_DSR)}</div>
+                  </div>
+                </div>
+                <div className="mt-3 pt-3 border-t border-gray-700 text-sm text-red-200">
+                  → Raise Amazon price to reduce DSR by ~<span className="font-bold">{Math.round(rec.throttle_suggestion.reduction_pct)}%</span> until China is FBA-live.
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
   );
-  if (ids.size === 0) return { inbound_pieces: 0, china_eta: null };
+}
 
-  const matches = inboundData.filter(i =>
-    i && ids.has(String(i.core || '').trim().toLowerCase())
+// ─── Main BridgeTab component (DEFAULT EXPORT) ────────────────
+export default function BridgeTab({ data, stg, vendorRecs, goCore, goBundle }) {
+  const analysis = useMemo(() => computeBridgeRecommendations({
+    vendors: data.vendors || [],
+    cores: data.cores || [],
+    bundles: data.bundles || [],
+    vendorRecs: vendorRecs || {},
+    receivingFull: data.receivingFull || [],
+    inbound: data.inbound || [],
+    settings: stg,
+  }), [data.vendors, data.cores, data.bundles, vendorRecs, data.receivingFull, data.inbound, stg]);
+
+  const [breakdown, setBreakdown] = useState(null);
+  const [expanded, setExpanded] = useState(new Set());
+  const [onlyViable, setOnlyViable] = useState(false);
+
+  const toggleRow = (id) => {
+    setExpanded(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const recs = useMemo(() => {
+    if (!onlyViable) return analysis.primary_recommendations;
+    return analysis.primary_recommendations.filter(r => r.flag === 'VIABLE');
+  }, [analysis.primary_recommendations, onlyViable]);
+
+  const s = analysis.summary;
+
+  return (
+    <div className="p-4 max-w-7xl mx-auto">
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <h2 className="text-xl font-bold text-white">Bridge Tab <span className="text-xs text-blue-400 ml-2">classic bridge</span></h2>
+          <p className="text-xs text-gray-500 mt-1">
+            USA bridge buys to cover the gap until China shipments land in FBA. Pipeline = {analysis.settings_used.pipeline_days} days · {analysis.generated_at.split('T')[0]}
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <button
+            onClick={() => setOnlyViable(!onlyViable)}
+            className={`text-xs px-3 py-1.5 rounded ${onlyViable ? "bg-emerald-600 text-white" : "bg-gray-800 border border-gray-700 text-gray-400"}`}
+          >
+            {onlyViable ? "Viable only ✓" : "Show all"}
+          </button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-5 gap-3 mb-5">
+        <div className="bg-gray-900/60 border border-gray-800 rounded-lg p-3 text-center">
+          <div className="text-[10px] uppercase text-gray-500">Bundles in gap</div>
+          <div className="text-2xl font-bold text-white">{s.bundles_in_gap}</div>
+        </div>
+        <div className="bg-gray-900/60 border border-gray-800 rounded-lg p-3 text-center">
+          <div className="text-[10px] uppercase text-gray-500">Cores viable</div>
+          <div className="text-2xl font-bold text-emerald-400">{s.cores_viable}</div>
+        </div>
+        <div className="bg-gray-900/60 border border-gray-800 rounded-lg p-3 text-center">
+          <div className="text-[10px] uppercase text-gray-500">Cores blocked</div>
+          <div className="text-2xl font-bold text-red-400">{s.cores_blocked}</div>
+          <div className="text-[10px] text-gray-500 mt-0.5">
+            {s.cores_no_history} no hist · {s.cores_too_late} too late
+          </div>
+        </div>
+        <div className="bg-gray-900/60 border border-gray-800 rounded-lg p-3 text-center">
+          <div className="text-[10px] uppercase text-gray-500">Total pieces</div>
+          <div className="text-2xl font-bold text-blue-400">{fmtN(s.total_bridge_pieces)}</div>
+        </div>
+        <div className="bg-gray-900/60 border border-gray-800 rounded-lg p-3 text-center">
+          <div className="text-[10px] uppercase text-gray-500">Total cost</div>
+          <div className="text-2xl font-bold text-amber-400">{fmt$(s.total_bridge_cost)}</div>
+        </div>
+      </div>
+
+      {recs.length === 0 ? (
+        <div className="bg-gray-900/40 border border-gray-800 rounded-lg p-8 text-center">
+          <p className="text-gray-400 text-sm">
+            {analysis.primary_recommendations.length === 0
+              ? "✓ No bundles currently have a bridge gap. China shipments cover demand within the pipeline window."
+              : "No recommendations match the current filter."}
+          </p>
+        </div>
+      ) : (
+        <div className="bg-gray-900/40 border border-gray-800 rounded-lg overflow-hidden mb-6">
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead className="bg-gray-900 border-b border-gray-700">
+                <tr className="text-gray-500 uppercase">
+                  <th className="py-2 px-3 text-left">Flag</th>
+                  <th className="py-2 px-3 text-left">Core</th>
+                  <th className="py-2 px-3 text-right">Buy (pcs)</th>
+                  <th className="py-2 px-3 text-right">DOC added</th>
+                  <th className="py-2 px-3 text-left">USA vendor</th>
+                  <th className="py-2 px-3 text-right">Δ vs China</th>
+                  <th className="py-2 px-3 text-center">Bundles</th>
+                  <th className="py-2 px-3 text-left">Action</th>
+                  <th className="py-2 px-3 text-center">Why?</th>
+                </tr>
+              </thead>
+              <tbody>
+                {recs.map(r => {
+                  const meta = FLAG_META[r.flag];
+                  const isOpen = expanded.has(r.core_id);
+                  return (
+                    <React.Fragment key={r.core_id}>
+                      <tr className={`border-t border-gray-800/40 hover:bg-gray-800/30 ${r.flag !== 'VIABLE' ? "bg-red-900/5" : ""}`}>
+                        <td className="py-2 px-3">
+                          <span className={`text-xs px-1.5 py-0.5 rounded ${meta.bg} ${meta.color} font-semibold`}>
+                            {meta.icon} {meta.label}
+                          </span>
+                        </td>
+                        <td className="py-2 px-3">
+                          <button onClick={() => goCore && goCore(r.core_id)} className="text-blue-300 font-mono hover:underline">
+                            <CopyableId value={r.core_id} />
+                          </button>
+                          <div className="text-gray-500 text-[10px] truncate max-w-[200px]">{r.core_name}</div>
+                        </td>
+                        <td className="py-2 px-3 text-right">
+                          <span className={`font-bold text-base ${r.pieces_to_buy ? "text-white" : "text-gray-600"}`}>
+                            {fmtN(r.pieces_to_buy)}
+                          </span>
+                          {r.moq_inflated && (
+                            <span className="ml-1 text-[10px] text-orange-400" title={`MOQ inflated ${Math.round(r.inflation_ratio * 100)}% · excess ${fmtN(r.excess_pieces)} pcs`}>⚠$</span>
+                          )}
+                        </td>
+                        <td className="py-2 px-3 text-right">
+                          <span className={`font-bold ${r.bridge_DOC_added ? "text-emerald-300" : "text-gray-600"}`}>
+                            {r.bridge_DOC_added != null ? `~${fmtN(r.bridge_DOC_added)}d` : "—"}
+                          </span>
+                        </td>
+                        <td className="py-2 px-3">
+                          {r.usa_vendor ? (
+                            <>
+                              <div className="text-white">{r.usa_vendor.name}</div>
+                              <div className="text-gray-500 text-[10px]">LT {r.usa_vendor.lt}d · {fmt$3(r.usa_vendor.last_price)}/pc</div>
+                            </>
+                          ) : (
+                            <span className="text-red-400 text-[10px]">no USA history</span>
+                          )}
+                        </td>
+                        <td className={`py-2 px-3 text-right font-semibold ${deltaColor(r.price_comparison.delta_pct)}`}>
+                          {fmtPct(r.price_comparison.delta_pct)}
+                        </td>
+                        <td className="py-2 px-3 text-center">
+                          <button onClick={() => toggleRow(r.core_id)} className="text-gray-400 hover:text-white text-xs">
+                            {r.contributing_bundles.length} {isOpen ? "▾" : "▸"}
+                          </button>
+                        </td>
+                        <td className="py-2 px-3">
+                          <span className={`text-xs ${r.flag === 'VIABLE' ? "text-emerald-300" : "text-red-300"}`}>
+                            {ACTION_TEXT[r.flag]}
+                          </span>
+                        </td>
+                        <td className="py-2 px-3 text-center">
+                          <button onClick={() => setBreakdown(r)} className="text-gray-400 hover:text-white" title="Show breakdown">📊</button>
+                        </td>
+                      </tr>
+                      {isOpen && (
+                        <tr className="bg-gray-900/40">
+                          <td colSpan={9} className="py-2 px-6">
+                            <div className="text-[10px] uppercase text-gray-500 mb-1">Contributing bundles</div>
+                            <table className="w-full text-xs">
+                              <thead>
+                                <tr className="text-gray-500 border-b border-gray-800">
+                                  <th className="py-1 text-left">Bundle</th>
+                                  <th className="py-1 text-right">effDSR</th>
+                                  <th className="py-1 text-right">Curr DOC</th>
+                                  <th className="py-1 text-right">China ETA</th>
+                                  <th className="py-1 text-right">Gap (pcs)</th>
+                                  <th className="py-1 text-right">Qty/bdl</th>
+                                  <th className="py-1 text-right">Core pcs</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {r.contributing_bundles.map(b => (
+                                  <tr key={b.bundle_id} className="border-t border-gray-800/30">
+                                    <td className="py-1">
+                                      <button onClick={() => goBundle && goBundle(b.bundle_id)} className="text-blue-300 font-mono hover:underline">
+                                        {b.bundle_id}
+                                      </button>
+                                    </td>
+                                    <td className="py-1 text-right text-gray-300">{fmt1(b.effDSR)}</td>
+                                    <td className="py-1 text-right text-gray-300">{fmtN(b.current_DOC)}d</td>
+                                    <td className="py-1 text-right text-gray-300">{fmtN(b.china_eta)}d</td>
+                                    <td className="py-1 text-right text-amber-300">{fmtN(b.gap_pieces)}</td>
+                                    <td className="py-1 text-right text-gray-500">×{b.qty_per_bundle}</td>
+                                    <td className="py-1 text-right text-cyan-300">{fmtN(b.pieces_contributed)}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                            {r.flag !== 'VIABLE' && r.throttle_suggestion && (
+                              <div className="mt-3 p-2 bg-red-500/10 border border-red-500/30 rounded text-xs">
+                                <span className="text-red-300 font-semibold">Mitigation: </span>
+                                <span className="text-gray-300">
+                                  Raise Amazon price to reduce DSR by ~{Math.round(r.throttle_suggestion.reduction_pct)}% (from {fmt1(r.throttle_suggestion.current_DSR)} to {fmt1(r.throttle_suggestion.target_DSR)} units/day) for {fmtN(r.throttle_suggestion.days_until_china_live)} days until China FBA-live.
+                                </span>
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      <div className="mt-8">
+        <h3 className="text-lg font-bold text-white mb-2">Other actions to consider</h3>
+        <p className="text-xs text-gray-500 mb-4">
+          Situations outside the classic-bridge case (no China inbound yet, AGL acceleration, etc.).
+        </p>
+
+        <div className="bg-gray-900/40 border border-gray-800 rounded-lg p-4 mb-3">
+          <h4 className="text-sm font-semibold text-amber-300 mb-2">
+            Preventive bridge candidates ({analysis.other_actions.preventive.length})
+          </h4>
+          <p className="text-[11px] text-gray-500 mb-3">
+            Bundles below 90 DOC with NO China inbound yet. Plan a China PO soon — and consider USA bridge proactively if margin allows.
+          </p>
+          {analysis.other_actions.preventive.length === 0 ? (
+            <p className="text-gray-500 text-xs italic">None — all low-cover bundles already have China inbound.</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead className="text-gray-500 uppercase">
+                  <tr className="border-b border-gray-800">
+                    <th className="py-1.5 text-left">Bundle</th>
+                    <th className="py-1.5 text-right">Current DOC</th>
+                    <th className="py-1.5 text-right">effDSR</th>
+                    <th className="py-1.5 text-right">Stock</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {analysis.other_actions.preventive.slice(0, 15).map(p => (
+                    <tr key={p.bundle_id} className="border-t border-gray-800/40">
+                      <td className="py-1.5">
+                        <button onClick={() => goBundle && goBundle(p.bundle_id)} className="text-blue-300 font-mono hover:underline">
+                          {p.bundle_id}
+                        </button>
+                        <span className="text-gray-500 text-[10px] ml-2">{p.bundle_name}</span>
+                      </td>
+                      <td className={`py-1.5 text-right font-semibold ${p.current_DOC < 30 ? "text-red-400" : p.current_DOC < 60 ? "text-amber-400" : "text-gray-300"}`}>
+                        {fmtN(p.current_DOC)}d
+                      </td>
+                      <td className="py-1.5 text-right text-gray-300">{fmt1(p.effDSR)}</td>
+                      <td className="py-1.5 text-right text-gray-300">{fmtN(p.non_inbound_pieces)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {analysis.other_actions.preventive.length > 15 && (
+                <p className="text-gray-500 text-[10px] mt-2 italic">+ {analysis.other_actions.preventive.length - 15} more</p>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div className="bg-gray-900/40 border border-gray-800 rounded-lg p-4 mb-3">
+          <h4 className="text-sm font-semibold text-cyan-300 mb-1">AGL acceleration</h4>
+          <p className="text-[11px] text-gray-500">
+            Phase 2 — If a China shipment is in ocean freight, AGL (Amazon Global Logistics) can shorten the gap. Data integration pending.
+          </p>
+        </div>
+
+        <div className="bg-gray-900/40 border border-gray-800 rounded-lg p-4">
+          <h4 className="text-sm font-semibold text-red-300 mb-1">
+            Buy China + price increase ({analysis.other_actions.no_usa_history.length + analysis.other_actions.bridge_too_late.length})
+          </h4>
+          <p className="text-[11px] text-gray-500 mb-2">
+            Cores where USA bridge is structurally infeasible. Place the next China PO now, raise Amazon price to throttle demand.
+          </p>
+          {(analysis.other_actions.no_usa_history.length + analysis.other_actions.bridge_too_late.length) === 0 ? (
+            <p className="text-gray-500 text-xs italic">None — all gap cores have a viable USA path.</p>
+          ) : (
+            <div className="text-xs space-y-1">
+              {[...analysis.other_actions.no_usa_history, ...analysis.other_actions.bridge_too_late].slice(0, 10).map(r => (
+                <div key={r.core_id} className="flex items-center gap-2 bg-gray-900/40 rounded px-2 py-1">
+                  <span className="text-blue-300 font-mono">{r.core_id}</span>
+                  <span className="text-gray-500 text-[10px]">{r.flag === 'NO_USA_HISTORY' ? "no USA history" : "USA too slow"}</span>
+                  {r.throttle_suggestion && (
+                    <span className="ml-auto text-red-300 text-[10px]">
+                      ↓ DSR ~{Math.round(r.throttle_suggestion.reduction_pct)}% for {fmtN(r.throttle_suggestion.days_until_china_live)}d
+                    </span>
+                  )}
+                  <button onClick={() => setBreakdown(r)} className="text-gray-400 hover:text-white" title="Details">📊</button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {breakdown && <BridgeBreakdownModal rec={breakdown} settings={stg} onClose={() => setBreakdown(null)} />}
+    </div>
   );
-  if (matches.length === 0) return { inbound_pieces: 0, china_eta: null };
-
-  const inbound_pieces = matches.reduce((s, m) => s + num(m.pieces), 0);
-
-  // Use the LATEST eta — that's how long we need bridge cover for
-  const etas = matches.map(m => m.eta).filter(Boolean).sort();
-  const latestEta = etas.length > 0 ? etas[etas.length - 1] : null;
-  const china_eta = etaToDays(latestEta);
-
-  return { inbound_pieces, china_eta };
-};
-
-// ─── main entry ────────────────────────────────────────────────
-export function computeBridgeRecommendations({
-  vendors = [],
-  cores = [],
-  bundles = [],
-  vendorRecs = {},
-  receivingFull = [],
-  inbound = [],
-  settings = {},
-}) {
-  const pipeline_days = num(settings.pipeline_days) || DEFAULT_PIPELINE_DAYS;
-  const moqInflationThreshold = num(settings.moqInflationThreshold) || 1.5;
-
-  // Lookup maps
-  const coreMap = {};
-  for (const c of cores) if (c && c.id) coreMap[c.id] = c;
-
-  const vendorMap = {};
-  for (const v of vendors) if (v && v.name) vendorMap[v.name] = v;
-
-  const bundleMap = {};
-  for (const b of bundles) if (b && b.j) bundleMap[b.j] = b;
-
-  // Build BOM map per bundle from core1..core20 (PurchTab iterates 1..20)
-  const getBundleCores = (bundle) => {
-    const out = [];
-    for (let i = 1; i <= 20; i++) {
-      const cid = bundle['core' + i];
-      if (cid) out.push({ coreId: cid, qty: 1 }); // qty per bundle = 1 unless your data carries it
-    }
-    return out;
-  };
-
-  // ─── Phase 1: per-bundle gap ──────────────────────────────────
-  const bundlesWithGap = [];
-  const allBundleSnapshots = []; // for preventive section
-
-  for (const vendorName of Object.keys(vendorRecs || {})) {
-    const vRec = vendorRecs[vendorName];
-    if (!vRec || !Array.isArray(vRec.bundleDetails)) continue;
-
-    for (const bd of vRec.bundleDetails) {
-      const bundle = bundleMap[bd.bundleId];
-      if (!bundle) continue;
-
-      const effDSR = num(bd.effectiveDSR);
-      const assignedInv = num(bd.assignedInv);
-      const rawFromWaterfall = num(bd.rawAssignedFromWaterfall);
-      const non_inbound_pieces = assignedInv + rawFromWaterfall;
-
-      const current_DOC = bd.currentCoverDOC != null
-        ? num(bd.currentCoverDOC)
-        : (effDSR > 0 ? non_inbound_pieces / effDSR : null);
-
-      const { inbound_pieces, china_eta } = getBundleInboundInfo(bundle, inbound);
-
-      // Cores from the bundle BOM (core1..core20). Prefer bd.coresUsed if v3 provides it.
-      const coresUsed = (bd.coresUsed && bd.coresUsed.length > 0)
-        ? bd.coresUsed
-        : getBundleCores(bundle);
-
-      allBundleSnapshots.push({
-        bundleId: bd.bundleId,
-        bundleName: bundle.t || bundle.title || bundle.name || bd.bundleId,
-        effDSR,
-        non_inbound_pieces,
-        inbound_pieces,
-        china_eta,
-        current_DOC,
-        bundle,
-        bd,
-      });
-
-      // Skip non-classic-bridge cases
-      if (effDSR <= 0) continue;
-      if (china_eta == null || china_eta <= 0) continue;
-      if (inbound_pieces <= 0) continue;
-      if (current_DOC == null) continue;
-
-      const total_cover_needed_DOC = china_eta + pipeline_days;
-      const target_pieces = total_cover_needed_DOC * effDSR;
-      const gap_pieces = Math.max(0, target_pieces - non_inbound_pieces);
-
-      if (gap_pieces <= 0) continue;
-
-      const gap_DOC = gap_pieces / effDSR;
-
-      bundlesWithGap.push({
-        bundleId: bd.bundleId,
-        bundleName: bundle.t || bundle.title || bundle.name || bd.bundleId,
-        effDSR,
-        forecastLevel: bd.forecast?.level ?? effDSR,
-        non_inbound_pieces,
-        inbound_pieces,
-        china_eta,
-        total_cover_needed_DOC,
-        target_pieces,
-        gap_pieces,
-        current_DOC,
-        gap_DOC,
-        coresUsed,
-        bundle,
-        bd,
-      });
-    }
-  }
-
-  // ─── Phase 2: aggregate to cores ──────────────────────────────
-  const coreDemand = {};
-
-  for (const bg of bundlesWithGap) {
-    for (const cu of (bg.coresUsed || [])) {
-      const core_id = cu.coreId;
-      if (!core_id) continue;
-      const qty_per_bundle = num(cu.qty) || 1;
-      const pieces_contributed = bg.gap_pieces * qty_per_bundle;
-
-      if (!coreDemand[core_id]) {
-        coreDemand[core_id] = { pieces_needed: 0, contributing_bundles: [] };
-      }
-      coreDemand[core_id].pieces_needed += pieces_contributed;
-      coreDemand[core_id].contributing_bundles.push({
-        bundle_id: bg.bundleId,
-        bundle_name: bg.bundleName,
-        gap_pieces: bg.gap_pieces,
-        gap_DOC: bg.gap_DOC,
-        qty_per_bundle,
-        pieces_contributed,
-        urgency_DOC: bg.current_DOC,
-        effDSR: bg.effDSR,
-        current_DOC: bg.current_DOC,
-        china_eta: bg.china_eta,
-        non_inbound_pieces: bg.non_inbound_pieces,
-        target_pieces: bg.target_pieces,
-        total_cover_needed_DOC: bg.total_cover_needed_DOC,
-      });
-    }
-  }
-
-  // ─── Phase 3: USA vendor selection + recommendation ───────────
-  const recommendations = [];
-
-  for (const coreId of Object.keys(coreDemand)) {
-    const core = coreMap[coreId];
-    if (!core) continue;
-    const demand = coreDemand[coreId];
-
-    // Find historical receipts for this core
-    const allReceipts = (receivingFull || []).filter(r =>
-      r && (r.core === coreId || r.coreId === coreId)
-    );
-    const usaReceipts = allReceipts.filter(r => isUSAVendor(vendorMap[r.vendor]));
-    const chinaReceipts = allReceipts.filter(r => isChinaVendor(vendorMap[r.vendor]));
-
-    // Last China price
-    const chinaSorted = [...chinaReceipts].sort((a, b) =>
-      (b.date || '').localeCompare(a.date || '')
-    );
-    const last_china_price = chinaSorted.length > 0
-      ? (numOrNull(chinaSorted[0].price) ?? numOrNull(chinaSorted[0].pricePerUnit))
-      : null;
-
-    // Pick most recent USA vendor (with valid vendor object)
-    let usa_vendor = null;
-    let last_usa_price = null;
-    if (usaReceipts.length > 0) {
-      const sorted = [...usaReceipts].sort((a, b) =>
-        (b.date || '').localeCompare(a.date || '')
-      );
-      for (const recent of sorted) {
-        const v = vendorMap[recent.vendor];
-        if (v) {
-          usa_vendor = {
-            name: v.name,
-            lt: num(v.lt) || 30,
-            moq: num(v.moq) || 0,
-            casePack: num(core.casePack) || 1,
-            last_price: numOrNull(recent.price) ?? numOrNull(recent.pricePerUnit) ?? 0,
-            last_purchase_date: recent.date,
-            total_history_count: usaReceipts.length,
-          };
-          last_usa_price = usa_vendor.last_price;
-          break;
-        }
-      }
-    }
-
-    // Aggregate metrics for throttle / urgency
-    const min_urgency_DOC = Math.min(
-      ...demand.contributing_bundles.map(b => b.urgency_DOC ?? Infinity)
-    );
-    const max_china_eta = Math.max(
-      ...demand.contributing_bundles.map(b => b.china_eta ?? 0)
-    );
-    const days_until_china_live = max_china_eta + pipeline_days;
-
-    // Determine flag
-    let flag, suggested_action;
-    if (!usa_vendor) {
-      flag = 'NO_USA_HISTORY';
-      suggested_action = 'price_increase';
-    } else if (min_urgency_DOC < usa_vendor.lt) {
-      flag = 'BRIDGE_TOO_LATE';
-      suggested_action = 'price_increase';
-    } else {
-      flag = 'VIABLE';
-      suggested_action = 'order';
-    }
-
-    // Throttle suggestion (worst-bundle perspective)
-    let throttle_suggestion = null;
-    if (flag !== 'VIABLE') {
-      const worst = demand.contributing_bundles.reduce((a, b) =>
-        (a.urgency_DOC ?? Infinity) < (b.urgency_DOC ?? Infinity) ? a : b
-      );
-      const days_for_worst = (worst.china_eta || max_china_eta) + pipeline_days;
-      const target_DSR = days_for_worst > 0 ? worst.non_inbound_pieces / days_for_worst : 0;
-      const reduction_pct = worst.effDSR > 0
-        ? Math.max(0, (1 - target_DSR / worst.effDSR) * 100)
-        : 0;
-      throttle_suggestion = {
-        target_DSR,
-        current_DSR: worst.effDSR,
-        reduction_pct,
-        days_until_china_live: days_for_worst,
-        worst_bundle: worst.bundle_id,
-      };
-    }
-
-    // MOQ application
-    let pieces_to_buy = null;
-    let raw_pieces_needed = Math.round(demand.pieces_needed);
-    let moq_inflated = false;
-    let inflation_ratio = 1;
-    let excess_pieces = 0;
-    let bridge_DOC_added = null;
-    let needed_DOC = null;
-    let excess_DOC_overhead = 0;
-
-    const weighted_dsr = demand.contributing_bundles.reduce(
-      (s, b) => s + (b.effDSR * b.qty_per_bundle), 0
-    );
-    needed_DOC = weighted_dsr > 0 ? raw_pieces_needed / weighted_dsr : null;
-
-    if (flag === 'VIABLE' && usa_vendor) {
-      const moq = usa_vendor.moq || 0;
-      const casePack = usa_vendor.casePack || 1;
-      let final = Math.max(raw_pieces_needed, moq);
-      if (casePack > 1) final = Math.ceil(final / casePack) * casePack;
-      pieces_to_buy = final;
-      excess_pieces = Math.max(0, final - raw_pieces_needed);
-      inflation_ratio = raw_pieces_needed > 0 ? final / raw_pieces_needed : 1;
-      moq_inflated = inflation_ratio >= moqInflationThreshold;
-      bridge_DOC_added = weighted_dsr > 0 ? final / weighted_dsr : null;
-      excess_DOC_overhead = bridge_DOC_added != null && needed_DOC != null
-        ? Math.max(0, bridge_DOC_added - needed_DOC)
-        : 0;
-    }
-
-    let delta_pct = null;
-    if (last_china_price && last_usa_price && last_china_price > 0) {
-      delta_pct = ((last_usa_price - last_china_price) / last_china_price) * 100;
-    }
-
-    recommendations.push({
-      core_id: coreId,
-      core_name: core.ti || core.name || coreId,
-      flag,
-      suggested_action,
-      pieces_to_buy,
-      raw_pieces_needed,
-      bridge_DOC_added,
-      needed_DOC,
-      moq_inflated,
-      inflation_ratio,
-      excess_pieces,
-      excess_DOC_overhead,
-      usa_vendor,
-      price_comparison: { last_china_price, last_usa_price, delta_pct },
-      contributing_bundles: demand.contributing_bundles,
-      throttle_suggestion,
-      urgency_score: min_urgency_DOC,
-      core,
-      max_china_eta,
-      days_until_china_live,
-      weighted_dsr,
-    });
-  }
-
-  recommendations.sort((a, b) => (a.urgency_score ?? 999) - (b.urgency_score ?? 999));
-
-  // ─── Phase 4: bundle groups ───────────────────────────────────
-  const bundleGroups = bundlesWithGap.map(bg => {
-    const required_cores = (bg.coresUsed || []).map(c => c.coreId).filter(Boolean);
-    const recs_for_this = recommendations.filter(r => required_cores.includes(r.core_id));
-    const blocked_cores = recs_for_this.filter(r => r.flag !== 'VIABLE').map(r => r.core_id);
-    const has_blocked = blocked_cores.length > 0;
-
-    return {
-      bundle_id: bg.bundleId,
-      bundle_name: bg.bundleName,
-      current_DOC_non_inbound: bg.current_DOC,
-      gap_DOC: bg.gap_DOC,
-      gap_pieces: bg.gap_pieces,
-      china_eta: bg.china_eta,
-      effDSR: bg.effDSR,
-      required_cores,
-      recommendations: recs_for_this,
-      meta_flag: has_blocked ? 'INCOMPLETE_BRIDGE' : 'COMPLETE',
-      meta_message: has_blocked
-        ? `Bridge incomplete — ${blocked_cores.join(', ')} cannot be sourced from USA in time. Buying remaining cores alone will not prevent stockout.`
-        : null,
-    };
-  });
-
-  // ─── Other actions: preventive bridge candidates ──────────────
-  const preventive = [];
-  for (const ab of allBundleSnapshots) {
-    if (ab.inbound_pieces > 0) continue;
-    if (ab.effDSR <= 0) continue;
-    if (ab.current_DOC == null) continue;
-    if (ab.current_DOC > PREVENTIVE_DOC_THRESHOLD) continue;
-    preventive.push({
-      bundle_id: ab.bundleId,
-      bundle_name: ab.bundleName,
-      current_DOC: ab.current_DOC,
-      effDSR: ab.effDSR,
-      non_inbound_pieces: ab.non_inbound_pieces,
-    });
-  }
-  preventive.sort((a, b) => a.current_DOC - b.current_DOC);
-
-  const summary = {
-    bundles_in_gap: bundlesWithGap.length,
-    total_bridge_pieces: recommendations
-      .filter(r => r.flag === 'VIABLE')
-      .reduce((s, r) => s + (r.pieces_to_buy || 0), 0),
-    total_bridge_cost: recommendations
-      .filter(r => r.flag === 'VIABLE')
-      .reduce((s, r) => s + ((r.pieces_to_buy || 0) * (r.usa_vendor?.last_price || 0)), 0),
-    cores_viable: recommendations.filter(r => r.flag === 'VIABLE').length,
-    cores_blocked: recommendations.filter(r => r.flag !== 'VIABLE').length,
-    cores_no_history: recommendations.filter(r => r.flag === 'NO_USA_HISTORY').length,
-    cores_too_late: recommendations.filter(r => r.flag === 'BRIDGE_TOO_LATE').length,
-  };
-
-  return {
-    generated_at: new Date().toISOString(),
-    settings_used: { pipeline_days },
-    primary_recommendations: recommendations,
-    bundle_groups: bundleGroups,
-    other_actions: {
-      preventive,
-      no_usa_history: recommendations.filter(r => r.flag === 'NO_USA_HISTORY'),
-      bridge_too_late: recommendations.filter(r => r.flag === 'BRIDGE_TOO_LATE'),
-    },
-    summary,
-  };
 }
