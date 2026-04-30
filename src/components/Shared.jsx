@@ -179,6 +179,22 @@ export function Stg({ s, setS, onClose }) {
           </div>
         </div>
 
+        {/* ─── BRIDGE TAB (NEW) ─── */}
+        <div className="border-t border-gray-700 pt-4">
+          <h3 className="text-sm font-semibold text-cyan-400 mb-1">Bridge Tab</h3>
+          <p className="text-[10px] text-gray-500 mb-3">Settings for the USA bridge analysis tab. Used only in BridgeTab; does not affect v3 recommender.</p>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-sm text-gray-400 block mb-1" title="Days from China warehouse arrival to FBA-live (processing + shipping to Amazon). Default 25.">
+                Pipeline Days
+              </label>
+              <input type="number" step="1" min="0" max="90" value={l.pipeline_days ?? 25} onChange={e => setL({ ...l, pipeline_days: +e.target.value })} className="bg-gray-800 border border-gray-600 text-white rounded px-3 py-2 w-full" />
+              <p className="text-[10px] text-gray-500 mt-1">Default 25 · processing + shipping to Amazon</p>
+            </div>
+          </div>
+        </div>
+
         {/* ─── LEGACY / UI TUNABLES ─── */}
         <div className="border-t border-gray-700 pt-4">
           <h3 className="text-sm font-semibold text-amber-400 mb-3">UI & MOQ Tunables</h3>
@@ -402,7 +418,6 @@ export function VendorNotes({ vendor, comments, onSave, buyer }) {
 // === CALC BREAKDOWN LEGACY (v2) — kept for backward compat ===
 export function CalcBreakdown({ data: d, onClose }) {
   if (!d) return null;
-  const shC = v => v > 1.3 ? "bg-emerald-500/20 text-emerald-400" : v > 1.1 ? "bg-blue-500/20 text-blue-300" : v < 0.7 ? "bg-red-500/20 text-red-400" : v < 0.9 ? "bg-amber-500/20 text-amber-400" : "bg-gray-700 text-gray-400";
   return <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center overflow-auto p-4" onClick={onClose}>
     <div className="bg-gray-900 border border-gray-700 rounded-xl p-5 w-full max-w-3xl max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
       <div className="flex justify-between items-start mb-3">
@@ -611,7 +626,7 @@ export function CalcBreakdownV2({ core, vendor, vendorRec, profile, stg, onClose
           )}
         </div>
 
-        {/* Seasonal Shape Heatmap (unchanged) */}
+        {/* Seasonal Shape Heatmap */}
         {profile?.hasHistory && Array.isArray(profile.lastYearShape) && (
           <div className="bg-gray-800/40 rounded-lg p-3 mb-4">
             <div className="flex items-center justify-between mb-2">
