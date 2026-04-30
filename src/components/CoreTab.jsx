@@ -361,7 +361,7 @@ export default function CoreTab({ data, stg, hist, daily, coreId, onBack, goBund
       {/* Header */}
       <div className="bg-gray-900 rounded-xl p-4 mb-4 border border-gray-800">
         <div className="flex flex-wrap items-center gap-3 mb-2">
-          <span className="text-xl font-bold text-white">{core.id}</span>
+          <CopyableId value={core.id} className="text-xl font-bold text-white" />
           <Dot status={status} />
           <span className={`text-xs px-2 py-0.5 rounded font-semibold ${status === "critical" ? "bg-red-500/20 text-red-400" : status === "warning" ? "bg-amber-500/20 text-amber-400" : "bg-emerald-500/20 text-emerald-400"}`}>
             {status.toUpperCase()}
