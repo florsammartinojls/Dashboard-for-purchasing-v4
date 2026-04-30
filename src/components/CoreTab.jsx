@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect } from "react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceArea, ReferenceDot } from "recharts";
 import { R, D1, $, $2, P, MN, YC, TTP, BL, TL, gS, cAI, cNQ, cOQ, cDA, gTD, dc, fE, fD, cMo, gY, cSeas } from "../lib/utils";
-import { Dot, TH, SumCtx } from "./Shared";
+import { Dot, TH, SumCtx, CopyableId } from "./Shared";
 import { batchProfiles, calcCoverageNeed, calcPurchaseFrequency, DEFAULT_PROFILE } from "../lib/seasonal";
 import { calcVendorRecommendation } from "../lib/recommender";
 
