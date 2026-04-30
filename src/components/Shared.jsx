@@ -8,7 +8,27 @@ export const SumCtx = createContext({ addCell: () => {} });
 export function Dot({ status }) { return <span className={`inline-block w-3 h-3 rounded-full flex-shrink-0 ${dotCls(status)}`} /> }
 export function Loader({ text }) { return <div className="flex items-center justify-center py-20"><div className="text-center"><div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-3" /><p className="text-gray-400 text-sm">{text}</p></div></div> }
 export function Toast({ msg, onClose, persist }) { useEffect(() => { if (persist) return; const t = setTimeout(onClose, 2500); return () => clearTimeout(t) }, [onClose, persist]); return <div className="fixed bottom-4 right-4 bg-emerald-600 text-white px-4 py-3 rounded-lg shadow-xl z-50 flex items-center gap-3">{msg}<button onClick={onClose} className="text-white/70 hover:text-white text-lg ml-2">✕</button></div> }
-
+export function CopyableId({ value, className, prefix }) {
+  const [copied, setCopied] = useState(false);
+  if (!value) return null;
+  const handleCopy = (e) => {
+    e.stopPropagation();
+    e.preventDefault();
+    navigator.clipboard.writeText(value).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1200);
+    });
+  };
+  return (
+    <span
+      onClick={handleCopy}
+      title={copied ? "¡Copiado!" : `Click para copiar ${value}`}
+      className={`cursor-pointer hover:bg-blue-500/20 rounded px-1 transition-colors select-none ${copied ? "bg-emerald-500/30" : ""} ${className || ""}`}
+    >
+      {prefix}{value}{copied && <span className="ml-1 text-[9px] text-emerald-400">✓</span>}
+    </span>
+  );
+}
 export function getEffectiveWfStatus(workflow, id) {
   const wf = (workflow || []).find(w => w.id === id);
   if (!wf || !wf.status) return "";
