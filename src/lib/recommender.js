@@ -257,7 +257,11 @@ function applyYoYSanityCheck(forecast, bundleId, bundleSales, targetDoc) {
   else if (trendLabel === 'growing') yoyCapMultiplier = 1.5;
   else yoyCapMultiplier = 1.2;
 
-  const forecastTotal = forecast.coverageDemand;
+// [Opción A] Capear el TOTAL = coverageDemand + safetyStock
+  // (filosofía: si vendiste X el año pasado y caés, no podés
+  // pedir más de X aún incluyendo el safety stock)
+  const safetyStock = num(forecast.safetyStock, 0);
+  const forecastTotal = forecast.coverageDemand + safetyStock;
   const maxAllowed = historic.total * yoyCapMultiplier;
 
   if (forecastTotal <= maxAllowed) {
@@ -274,21 +278,27 @@ function applyYoYSanityCheck(forecast, bundleId, bundleSales, targetDoc) {
   }
 
   const scale = maxAllowed / forecastTotal;
-  const cappedTotal = maxAllowed;
   const originalTotal = forecastTotal;
+  // El cap se distribuye proporcionalmente entre coverageDemand y safetyStock
+  const newCoverageDemand = forecast.coverageDemand * scale;
+  const newSafetyStock = safetyStock * scale;
 
-  forecast.coverageDemand = cappedTotal;
+  forecast.coverageDemand = newCoverageDemand;
+  forecast.safetyStock = newSafetyStock;
+
   if (forecast.demandBreakdown) {
     forecast.demandBreakdown = {
       fromLevel: Math.round((forecast.demandBreakdown.fromLevel || 0) * scale),
       fromTrend: Math.round((forecast.demandBreakdown.fromTrend || 0) * scale),
       fromSeasonal: Math.round((forecast.demandBreakdown.fromSeasonal || 0) * scale),
-      total: Math.round(cappedTotal),
+      total: Math.round(newCoverageDemand),
     };
   }
   forecast.flags.yoyCapApplied = true;
   forecast.flags.yoyHistoric = Math.round(historic.total);
   forecast.flags.yoyOriginalForecast = Math.round(originalTotal);
+  forecast.flags.yoyOriginalCoverageDemand = Math.round(originalTotal - safetyStock);
+  forecast.flags.yoyOriginalSafetyStock = Math.round(safetyStock);
   forecast.flags.yoyScale = scale;
   forecast.flags.yoyTrendLabel = trendLabel;
   forecast.flags.yoyTrendRatio = trendRatio;
@@ -298,7 +308,9 @@ function applyYoYSanityCheck(forecast, bundleId, bundleSales, targetDoc) {
     applied: true,
     historic: historic.total,
     originalForecast: originalTotal,
-    cappedForecast: cappedTotal,
+    cappedForecast: maxAllowed,
+    cappedCoverageDemand: Math.round(newCoverageDemand),
+    cappedSafetyStock: Math.round(newSafetyStock),
     ratio: originalTotal / historic.total,
     scale,
     trendLabel,
