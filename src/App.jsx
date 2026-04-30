@@ -9,6 +9,7 @@ import CoreTab from "./components/CoreTab";
 import BundleTab from "./components/BundleTab";
 import OrdersTab from "./components/OrdersTab";
 import PerformanceTab from "./components/PerformanceTab";
+import BridgeTab from "./components/BridgeTab";
 import { batchVendorRecommendations } from "./lib/recommender";
 import { calcPurchaseFrequency, calcBundleSeasonalProfile, DEFAULT_PROFILE } from "./lib/seasonal";
 
@@ -69,9 +70,6 @@ function VendorsTab({ data, stg, goVendor, workflow, saveWorkflow, deleteWorkflo
 }
 
 // === Glossary Tab ===
-// Organized in blocks: status → forecast engine → demand regime →
-// waterfall → buy mode → MOQ → flags → settings tunable.
-// Separators are entries with empty desc — rendered as section headers below.
 const DEFAULT_GL = [
   // ─── BLOCK 1: BASIC STATUS METRICS ───────────────────────────
   { term: "—— BASIC STATUS ——", desc: "" },
@@ -99,7 +97,7 @@ const DEFAULT_GL = [
   { term: "Slow regime shift", desc: "Triggers if last 90 days average more than 15% below the prior 90 days. Same effect as fast regime: replace level with recent, trend = 0. Catches gradual decline that fast regime misses." },
   { term: "YoY sanity cap", desc: "If forecast > 1.5× same period last year, cap it. Prevents the engine from projecting wild growth that wasn't seen historically. Only applies when prior-year history exists." },
 
-  // ─── BLOCK 3: DEMAND REGIME (NEW IN v3.4) ─────────────────────
+  // ─── BLOCK 3: DEMAND REGIME ─────────────────────
   { term: "—— DEMAND REGIME ——", desc: "" },
   { term: "Regime: continuous", desc: "Bundle that sells almost every day. Forecast uses Holt + seasonal (the engine described above). Most bundles fall here. No special badge in the UI." },
   { term: "Regime: intermittent", desc: "Bundle that sells sporadically — more than 50% of days have ZERO sales. If you sold 4 units in 30 days, the real rate is 0.13/day, NOT 4/day. Holt would overestimate because it filters out zero days. The intermittent path uses (total units ÷ total days) including zeros, so a single sales day doesn't inflate the recommendation. Marked with a sky-blue ~ badge." },
@@ -169,7 +167,17 @@ const DEFAULT_GL = [
   { term: "CPP (Cost Per Piece)", desc: "Total landed cost ÷ pieces, including material + inbound shipping + tariffs. Shown in the History panel. Differs from sheet cost (material only) — CPP is the real economic cost." },
   { term: "CPP benchmark", desc: "Comparison of current vendor's CPP vs an alternate source (China container price or named domestic vendor). Shown as ±% under the cost column. Negative % = current vendor is cheaper. Calculated from total-cost CPP, not just material." },
 
-  // ─── BLOCK 11: SETTINGS (TUNABLE) ─────────────────────────────
+  // ─── BLOCK 11: BRIDGE TAB (NEW) ───────────────────────────────
+  { term: "—— BRIDGE TAB ——", desc: "" },
+  { term: "Bridge Cover (Classic)", desc: "USA bridge buy that covers the gap between current non-inbound stock and when the next China shipment goes FBA-live (China ETA + pipeline_days). Triggered when non-inbound DOC < China ETA + pipeline." },
+  { term: "Pipeline Days", desc: "Setting for the Bridge Tab. Days from when a China shipment arrives at the warehouse to when it's actually sellable on Amazon (processing + shipping to FBA). Default 25." },
+  { term: "Bridge flag: VIABLE 🟢", desc: "USA vendor exists with prior history of this core, and the vendor's lead time fits within the most-urgent bundle's current DOC. Order USA now." },
+  { term: "Bridge flag: NO_USA_HISTORY 🔴", desc: "No USA vendor has ever delivered this core. Bridge is structurally not available. Mitigation: raise Amazon price to throttle demand until China lands." },
+  { term: "Bridge flag: BRIDGE_TOO_LATE 🔴", desc: "USA vendor exists but lead time exceeds the most-urgent bundle's current DOC. Even if you order now, USA won't arrive in time. Mitigation: raise Amazon price." },
+  { term: "Bridge: throttle target", desc: "When bridge is infeasible, the throttle target is the DSR you'd need to slow down to in order to survive until China is FBA-live. Computed as non_inbound_pieces / days_until_china_live." },
+  { term: "Bridge: bundle group / INCOMPLETE_BRIDGE", desc: "When a bundle requires multiple cores and at least one has NO_USA_HISTORY or BRIDGE_TOO_LATE, the bundle's bridge is structurally incomplete — buying only the available cores will not prevent stockout. Visible as a red meta-flag in the bundle group expansion." },
+
+  // ─── BLOCK 12: SETTINGS (TUNABLE) ─────────────────────────────
   { term: "—— TUNABLE SETTINGS ——", desc: "" },
   { term: "spikeThreshold", desc: "Multiplier for the spike (⚡) flag. Default 1.25. If 7d DSR ≥ this × composite DSR, mark as spike. Visual only." },
   { term: "moqInflationThreshold", desc: "Ratio above which MOQ is considered inflated. Default 1.5 (i.e., buying 1.5× real need). Triggers the orange $ badge." },
@@ -180,13 +188,15 @@ const DEFAULT_GL = [
   { term: "hampelWindow / hampelThreshold", desc: "Outlier detection: window=7 days on each side, threshold=3× MAD. A point is replaced if its deviation from local median exceeds threshold × MAD." },
   { term: "serviceLevelA / serviceLevelOther", desc: "Target service level per ABC class. A items default 97% (Z=1.88), others 95% (Z=1.65). Higher = more safety stock." },
   { term: "inventoryAnomalyMultiplier / anomalyLookbackDays", desc: "Anomaly detection: if raw on-hand > N× recent avg within M days, treat excess as pending. Defaults: 3×, 7 days." },
+  { term: "pipeline_days", desc: "Bridge Tab setting. Days from China warehouse arrival to FBA-live. Default 25. Used only in BridgeTab, does not affect v3 recommender." },
 
-  // ─── BLOCK 12: TROUBLESHOOTING ────────────────────────────────
+  // ─── BLOCK 13: TROUBLESHOOTING ────────────────────────────────
   { term: "—— TROUBLESHOOTING ——", desc: "" },
   { term: "Why did the recommendation change a lot vs yesterday?", desc: "Click the '+X% vs MM-DD' badge at the vendor header for the breakdown by contributor (level change, trend change, inventory change, safety stock change, new bundle). Snapshots are saved once per day per vendor in browser localStorage, last 14 days. Big changes from 0.0 → something usually mean the snapshot was saved before data finished loading — NOT a real demand change." },
   { term: "Why does Force Cores give different $ than Mix?", desc: "Total UNITS should match. Total $ may legitimately differ if assembled-bundle pricing ≠ sum of component pricing. If unit totals don't match, that's a bug — file it." },
   { term: "Why is buyNeed 0 even when DOC < target?", desc: "Either (1) the waterfall already filled coverage from raw on-hand, or (2) the core sanity check zeroed it (core has independent DOC > 1.2× target). Open Calc Breakdown 📊 to verify." },
   { term: "Why is the forecast much higher than my gut?", desc: "Check the regime badge. If continuous, look at fromTrend in demandBreakdown — runaway trend gets capped but can still be aggressive. If no badge, but recently shifted, check 'recentRegimeApplied' in flags — you may want to manually override." },
+  { term: "Bridge tab shows no recommendations?", desc: "Either no bundles have a gap (China shipments cover demand), or the bridge data isn't being detected. Check that bundles have China inbound info (inboundPieces + daysBeforeArrival) — the tab only analyzes bundles with active China shipments. Preventive bridge candidates appear in the 'Other actions' section below." },
 ];
 
 function GlossTab() {
@@ -200,7 +210,6 @@ function GlossTab() {
   const upd = (i, field, val) => { const n = [...gl]; n[i] = { ...n[i], [field]: val }; save(n) };
   const reset = () => { if (confirm('Reset glossary to defaults? Your custom entries will be lost.')) save(DEFAULT_GL); };
 
-  // Filter by search (matches term or description)
   const filtered = useMemo(() => {
     if (!search.trim()) return gl.map((g, i) => ({ ...g, _idx: i }));
     const q = search.toLowerCase();
@@ -220,7 +229,6 @@ function GlossTab() {
     <p className="text-xs text-gray-500 mb-3">Concepts and terms used across the dashboard. Hover any term in the app for a quick tooltip; come here for the full explanation. Click ✎ to edit, ✕ to remove. Add custom entries at the bottom.</p>
     {filtered.map((g) => {
       const i = g._idx;
-      // Render block separators (entries with empty desc) as headers
       if (g.desc === "") {
         return <div key={i} className="mt-5 mb-1 px-1 text-[10px] uppercase tracking-wider text-gray-500 font-semibold border-b border-gray-800 pb-1">
           <span className="flex-1">{g.term.replace(/^—— /, '').replace(/ ——$/, '')}</span>
@@ -255,6 +263,7 @@ function GlossTab() {
 const TABS = [
   { id: "dashboard", l: "Dashboard" },
   { id: "purchasing", l: "Purchasing" },
+  { id: "bridge", l: "Bridge" },
   { id: "core", l: "Core Detail" },
   { id: "bundle", l: "Bundle Detail" },
   { id: "orders", l: "Orders" },
@@ -289,6 +298,7 @@ const DEFAULT_SETTINGS = {
   inventoryAnomalyMultiplier: 3,
   anomalyLookbackDays: 7,
   baseWindowDays: 60,
+  pipeline_days: 25,
 };
 
 export default function App() {
@@ -332,12 +342,9 @@ export default function App() {
   const addCell = useCallback((v, remove) => { if (remove) setSumCells(p => p.filter(x => x !== v)); else setSumCells(p => [...p, v]) }, []);
   const clearSum = useCallback(() => setSumCells([]), []);
 
-  // [SCROLL-FIX] Save scroll position when opening a panel, restore when closing.
-  // Stores per-tab scroll positions so that navigating between tabs doesn't lose context.
   const scrollPositions = useRef({});
   const savedScrollBeforePanel = useRef(null);
 
-  // Save scroll when panel opens
   const openPanelCore = useCallback((id) => {
     savedScrollBeforePanel.current = window.scrollY;
     setPanelCoreId(id);
@@ -357,7 +364,6 @@ export default function App() {
     setPanelCoreId(null);
     setPanelBundleId(null);
     clearSum();
-    // Restore scroll position after React re-renders
     const target = savedScrollBeforePanel.current;
     savedScrollBeforePanel.current = null;
     if (target !== null && target !== undefined) {
@@ -367,7 +373,6 @@ export default function App() {
     }
   }, [clearSum]);
 
-  // Save scroll per tab on tab change
   const changeTab = useCallback((newTab) => {
     scrollPositions.current[tab] = window.scrollY;
     startTransition(() => {
@@ -702,6 +707,7 @@ export default function App() {
         <div style={{ display: tab === "purchasing" ? "block" : "none" }}>
           <PurchTab data={dataH} stg={stg} vendorRecs={vendorRecs} goCore={goCore} goBundle={goBundle} goVendor={goVendor} ov={ov} setOv={setOv} initV={initV} clearIV={clearIV} saveWorkflow={saveWorkflow} deleteWorkflow={deleteWorkflow} saveVendorComment={saveVendorComment} activeBundleCores={activeBundleCores} />
         </div>
+        {tab === "bridge" && <BridgeTab data={dataH} stg={stg} vendorRecs={vendorRecs} goCore={goCore} goBundle={goBundle} />}
         {tab === "core" && <CoreTab data={data} stg={stg} hist={{ coreInv: data.coreInv, bundleSales: data.bundleSales, priceHist: data.priceHist }} daily={{ coreDays: data.coreDays, bundleDays: data.bundleDays }} coreId={coreId} onBack={handleBackFromCore} goBundle={goBundle} />}
         {tab === "bundle" && <BundleTab data={data} stg={stg} hist={{ coreInv: data.coreInv, bundleSales: data.bundleSales, bundleInv: data.bundleInv, priceHist: data.priceHist }} daily={{ coreDays: data.coreDays, bundleDays: data.bundleDays }} bundleId={bundleId} onBack={handleBackFromBundle} goCore={goCore} />}
         {tab === "orders" && <OrdersTab data={data} />}
