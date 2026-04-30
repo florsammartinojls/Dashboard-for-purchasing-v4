@@ -235,7 +235,7 @@ export default function BundleTab({ data, stg, hist, daily, bundleId, onBack, go
           <thead><tr className="text-gray-500">
               <th className="py-1 px-1 text-left">Mo</th>
               {uYrs.map((y, yi) => <th key={y} className="py-1 px-1 text-right" style={{ color: YC[y] || "#6b7280" }}>{y}</th>)}
-              {uYrs.length >= 2 && <th className="py-1 px-1 text-right text-gray-500 text-[9px]">Var %<br/>{uYrs[uYrs.length - 1]}vs{uYrs[uYrs.length - 2]}</th>}
+              {uYrs.length >= 2 && <th className="py-1 px-1 text-right text-gray-500">Var %<br/>{String(uYrs[uYrs.length - 1]).slice(-2)} vs {String(uYrs[uYrs.length - 2]).slice(-2)}</th>}
             </tr></thead>
             <tbody>
               {yD.map((r, i) => <tr key={i} className={i % 2 === 0 ? "bg-gray-800/20" : ""}>
@@ -250,7 +250,7 @@ export default function BundleTab({ data, stg, hist, daily, bundleId, onBack, go
                   const prev = r["u_" + prevY];
                   const showPct = cur != null && prev != null && prev > 0;
                   const pct = showPct ? ((cur - prev) / prev * 100) : null;
-                  return <td className={`py-0.5 px-1 text-right text-[10px] ${pct == null ? "text-gray-600" : pct >= 0 ? "text-emerald-400" : "text-red-400"}`} title={prev != null ? `${curY}: ${cur ?? "—"} vs ${prevY}: ${prev}` : ""}>{pct != null ? (pct >= 0 ? "+" : "") + pct.toFixed(0) : "—"}</td>;
+                  return <td className={`py-0.5 px-1 text-right ${pct == null ? "text-gray-600" : pct >= 0 ? "text-emerald-400" : "text-red-400"}`} title={prev != null ? `${curY}: ${cur ?? "—"} vs ${prevY}: ${prev}` : ""}>{pct != null ? (pct >= 0 ? "+" : "") + pct.toFixed(0) : "—"}</td>;
                 })()}
               </tr>)}
             <tr className="border-t border-gray-700 font-semibold">
@@ -262,7 +262,7 @@ export default function BundleTab({ data, stg, hist, daily, bundleId, onBack, go
                   const cur = uYTot[curY];
                   const prev = uYTot[prevY];
                   const pct = prev > 0 ? ((cur - prev) / prev * 100) : null;
-                  return <td className={`py-1 px-1 text-right text-[10px] ${pct == null ? "text-gray-600" : pct >= 0 ? "text-emerald-400" : "text-red-400"}`}>{pct != null ? (pct >= 0 ? "+" : "") + pct.toFixed(0) : "—"}</td>;
+                  return <td className={`py-1 px-1 text-right ${pct == null ? "text-gray-600" : pct >= 0 ? "text-emerald-400" : "text-red-400"}`}>{pct != null ? (pct >= 0 ? "+" : "") + pct.toFixed(0) : "—"}</td>;
                 })()}
               </tr>
             </tbody>
