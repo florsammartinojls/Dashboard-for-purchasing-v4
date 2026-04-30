@@ -33,7 +33,15 @@ function parseNoteVendor(note) {
   const n = String(note).trim();
   const m = n.match(/^(.+?)\s+-\s+/);
   if (m) return { kind: 'named', name: m[1].trim() };
-  return { kind: 'container', name: null };
+  return { kind: 'unnamed', name: null };
+}
+
+// Detecta si una compra es de China basado en costos de import
+// (en vez del formato del note, que no es confiable)
+function isChinaPurchase(row) {
+  const inb = Number(row?.inbShip) || 0;
+  const tar = Number(row?.tariffs) || 0;
+  return inb > 0 || tar > 0;
 }
 
 function isChinaVendor(vendor) {
@@ -53,11 +61,15 @@ function getVendorCoreUnitCost(coreId, vendor, paymentHistory) {
     const pcs = Number(r.pcs);
     const mat = Number(r.matPrice);
     if (!(pcs > 0) || !(mat > 0)) continue;
-    const parsed = parseNoteVendor(r.note);
+
     let matches = false;
     if (china) {
-      matches = parsed.kind === 'container';
+      // Vendor actual es China → buscar compras con tariffs/inbShip > 0
+      matches = isChinaPurchase(r);
     } else {
+      // Vendor actual es USA → buscar por nombre en la nota, y que NO sea China
+      if (isChinaPurchase(r)) continue;
+      const parsed = parseNoteVendor(r.note);
       if (parsed.kind !== 'named' || !parsed.name) continue;
       const noteName = parsed.name.toLowerCase();
       matches = noteName === vName || noteName.includes(vName) || vName.includes(noteName);
