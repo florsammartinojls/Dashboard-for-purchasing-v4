@@ -549,11 +549,12 @@ export default function CoreTab({ data, stg, hist, daily, coreId, onBack, goBund
 
             <div className="lg:w-80 overflow-x-auto">
               <table className="w-full text-xs">
-                <thead><tr className="text-gray-500 border-b border-gray-700">
+            <thead><tr className="text-gray-500 border-b border-gray-700">
                   <th className="py-1.5 px-1 text-left">Mo</th>
                   {yrs.map(y => (
                     <th key={y} className="py-1.5 px-2 text-right font-semibold" style={{ color: YC[y] || "#6b7280" }}>{y}</th>
                   ))}
+                  {yrs.length >= 2 && <th className="py-1.5 px-1 text-right text-gray-500 text-[9px]">Var %<br/>{yrs[yrs.length - 1]}vs{yrs[yrs.length - 2]}</th>}
                 </tr></thead>
                 <tbody>
                   {dsrCh.map((r, i) => {
@@ -561,49 +562,64 @@ export default function CoreTab({ data, stg, hist, daily, coreId, onBack, goBund
                     return (
                       <tr key={i} className={`${i % 2 === 0 ? "bg-gray-800/20" : ""} ${hasOos ? "border-l-2 border-red-500/60" : ""}`}>
                         <td className="py-0.5 px-1 text-gray-400">{r.month}</td>
-                        {yrs.map((y, yi) => {
+                      {yrs.map(y => {
                           const oos = r["oos_" + y] || 0;
                           const val = r["d_" + y];
-                          const prevY = yrs[yi - 1];
-                          const prevVal = prevY != null ? r["d_" + prevY] : null;
-                          const isCurrentYear = yi === yrs.length - 1;
-                          const showPct = isCurrentYear && val != null && prevVal != null && prevVal > 0;
-                          const pct = showPct ? ((val - prevVal) / prevVal * 100) : null;
                           return (
                             <SC key={y} v={val} className="py-0.5 px-2 text-right">
                               <span className="text-white">{val != null ? R(val) : ""}</span>
-                              {pct != null && <span className={`ml-1 text-[9px] ${pct >= 0 ? "text-emerald-400" : "text-red-400"}`} title={`vs ${prevY}: ${prevVal}`}>{pct >= 0 ? "+" : ""}{pct.toFixed(0)}%</span>}
                               {oos > 0 && <span className="ml-1 text-red-400 text-[9px]" title={oos + " OOS days"}>●</span>}
                             </SC>
                           );
                         })}
+                        {yrs.length >= 2 && (() => {
+                          const curY = yrs[yrs.length - 1];
+                          const prevY = yrs[yrs.length - 2];
+                          const cur = r["d_" + curY];
+                          const prev = r["d_" + prevY];
+                          const showPct = cur != null && prev != null && prev > 0;
+                          const pct = showPct ? ((cur - prev) / prev * 100) : null;
+                          return <td className={`py-0.5 px-1 text-right text-[10px] ${pct == null ? "text-gray-600" : pct >= 0 ? "text-emerald-400" : "text-red-400"}`} title={prev != null ? `${curY}: ${cur ?? "—"} vs ${prevY}: ${prev}` : ""}>{pct != null ? (pct >= 0 ? "+" : "") + pct.toFixed(0) : "—"}</td>;
+                        })()}
                       </tr>
                     );
                   })}
-                  <tr className="border-t border-gray-600 font-semibold">
+               <tr className="border-t border-gray-600 font-semibold">
                     <td className="py-1.5 px-1 text-gray-300">Avg</td>
-                    {yrs.map(y => {
-                      const vals = cHF.filter(h => h.y === y && h.units > 0);
-                      const avg = vals.length > 0
-                        ? vals.reduce((s, x) => s + (x.units || 0), 0) / vals.length
-                        : 0;
-                      return (
-                        <SC key={y} v={avg} className="py-1.5 px-2 text-right text-white">
-                          {avg > 0 ? R(avg) : ""}
-                        </SC>
-                      );
-                    })}
+                    {(() => {
+                      const avgs = {};
+                      yrs.forEach(y => {
+                        const vals = cHF.filter(h => h.y === y && h.units > 0);
+                        avgs[y] = vals.length > 0 ? vals.reduce((s, x) => s + (x.units || 0), 0) / vals.length : 0;
+                      });
+                      return <>
+                        {yrs.map(y => <SC key={y} v={avgs[y]} className="py-1.5 px-2 text-right text-white">{avgs[y] > 0 ? R(avgs[y]) : ""}</SC>)}
+                        {yrs.length >= 2 && (() => {
+                          const curY = yrs[yrs.length - 1];
+                          const prevY = yrs[yrs.length - 2];
+                          const pct = avgs[prevY] > 0 ? ((avgs[curY] - avgs[prevY]) / avgs[prevY] * 100) : null;
+                          return <td className={`py-1.5 px-1 text-right text-[10px] ${pct == null ? "text-gray-600" : pct >= 0 ? "text-emerald-400" : "text-red-400"}`}>{pct != null ? (pct >= 0 ? "+" : "") + pct.toFixed(0) : "—"}</td>;
+                        })()}
+                      </>;
+                    })()}
                   </tr>
                   <tr className="border-t border-gray-700/50">
                     <td className="py-1 px-1 text-gray-400">Total</td>
-                    {yrs.map(y => {
-                      const tot = cHF.filter(h => h.y === y).reduce((s, x) => s + (x.units || 0), 0);
-                      return (
-                        <SC key={y} v={tot} className="py-1 px-2 text-right text-gray-300">
-                          {tot > 0 ? R(tot) : ""}
-                        </SC>
-                      );
-                    })}
+                    {(() => {
+                      const tots = {};
+                      yrs.forEach(y => {
+                        tots[y] = cHF.filter(h => h.y === y).reduce((s, x) => s + (x.units || 0), 0);
+                      });
+                      return <>
+                        {yrs.map(y => <SC key={y} v={tots[y]} className="py-1 px-2 text-right text-gray-300">{tots[y] > 0 ? R(tots[y]) : ""}</SC>)}
+                        {yrs.length >= 2 && (() => {
+                          const curY = yrs[yrs.length - 1];
+                          const prevY = yrs[yrs.length - 2];
+                          const pct = tots[prevY] > 0 ? ((tots[curY] - tots[prevY]) / tots[prevY] * 100) : null;
+                          return <td className={`py-1 px-1 text-right text-[10px] ${pct == null ? "text-gray-600" : pct >= 0 ? "text-emerald-400" : "text-red-400"}`}>{pct != null ? (pct >= 0 ? "+" : "") + pct.toFixed(0) : "—"}</td>;
+                        })()}
+                      </>;
+                    })()}
                   </tr>
                   {cHF.some(x => x.oosDays > 0) && (
                     <tr className="border-t border-gray-700/50">
@@ -616,8 +632,10 @@ export default function CoreTab({ data, stg, hist, daily, coreId, onBack, goBund
                           </td>
                         );
                       })}
+                      {yrs.length >= 2 && <td />}
                     </tr>
                   )}
+                  
                 </tbody>
               </table>
             </div>
