@@ -145,6 +145,19 @@ function effDSR(b, targetDoc) {
   return 0.01;
 }
 
+// ────────────────────────────────────────────────────────────
+// YoY Sanity Check con cap DINÁMICO según tendencia
+// ────────────────────────────────────────────────────────────
+// Compara el nivel actual (level del forecast = avg últimos 60d)
+// vs el nivel histórico del mismo período año pasado.
+//
+//   levelActual / levelHistorico < 0.9  → tendencia BAJA  → cap × 1.0
+//   levelActual / levelHistorico 0.9–1.1 → ESTABLE         → cap × 1.2
+//   levelActual / levelHistorico > 1.1   → CRECE           → cap × 1.5
+//
+// Filosofía: si vendés MENOS que el año pasado, no podés
+// comprar MÁS que el año pasado. Si crece, dejamos margen.
+// ────────────────────────────────────────────────────────────
 function applyYoYSanityCheck(forecast, bundleId, bundleDays, targetDoc) {
   if (!forecast || forecast.flags.noData) return null;
 
@@ -154,8 +167,30 @@ function applyYoYSanityCheck(forecast, bundleId, bundleDays, targetDoc) {
     return { applied: false, reason: 'historic_too_small', historic: historic.total };
   }
 
+  // Nivel actual = level del forecast (avg últimos 60d, ya calculado)
+  const levelActual = num(forecast.level, 0);
+  // Nivel histórico = promedio diario del mismo período año pasado
+  const levelHistorico = historic.daysCovered > 0
+    ? historic.total / historic.daysCovered
+    : 0;
+
+  // Determinar cap según tendencia
+  let trendRatio = 1.0;
+  let trendLabel = 'unknown';
+  if (levelHistorico > 0) {
+    trendRatio = levelActual / levelHistorico;
+    if (trendRatio < 0.9) { trendLabel = 'declining'; }
+    else if (trendRatio > 1.1) { trendLabel = 'growing'; }
+    else { trendLabel = 'stable'; }
+  }
+
+  let yoyCapMultiplier;
+  if (trendLabel === 'declining') yoyCapMultiplier = 1.0;
+  else if (trendLabel === 'growing') yoyCapMultiplier = 1.5;
+  else yoyCapMultiplier = 1.2;
+
   const forecastTotal = forecast.coverageDemand;
-  const maxAllowed = historic.total * MAX_YOY_RATIO;
+  const maxAllowed = historic.total * yoyCapMultiplier;
 
   if (forecastTotal <= maxAllowed) {
     return {
@@ -164,6 +199,9 @@ function applyYoYSanityCheck(forecast, bundleId, bundleDays, targetDoc) {
       historic: historic.total,
       forecast: forecastTotal,
       ratio: forecastTotal / historic.total,
+      trendLabel,
+      trendRatio,
+      yoyCapMultiplier,
     };
   }
 
@@ -172,16 +210,21 @@ function applyYoYSanityCheck(forecast, bundleId, bundleDays, targetDoc) {
   const originalTotal = forecastTotal;
 
   forecast.coverageDemand = cappedTotal;
-  forecast.demandBreakdown = {
-    fromLevel: Math.round(forecast.demandBreakdown.fromLevel * scale),
-    fromTrend: Math.round(forecast.demandBreakdown.fromTrend * scale),
-    fromSeasonal: Math.round(forecast.demandBreakdown.fromSeasonal * scale),
-    total: Math.round(cappedTotal),
-  };
+  if (forecast.demandBreakdown) {
+    forecast.demandBreakdown = {
+      fromLevel: Math.round((forecast.demandBreakdown.fromLevel || 0) * scale),
+      fromTrend: Math.round((forecast.demandBreakdown.fromTrend || 0) * scale),
+      fromSeasonal: Math.round((forecast.demandBreakdown.fromSeasonal || 0) * scale),
+      total: Math.round(cappedTotal),
+    };
+  }
   forecast.flags.yoyCapApplied = true;
   forecast.flags.yoyHistoric = Math.round(historic.total);
   forecast.flags.yoyOriginalForecast = Math.round(originalTotal);
   forecast.flags.yoyScale = scale;
+  forecast.flags.yoyTrendLabel = trendLabel;
+  forecast.flags.yoyTrendRatio = trendRatio;
+  forecast.flags.yoyCapMultiplier = yoyCapMultiplier;
 
   return {
     applied: true,
@@ -190,6 +233,11 @@ function applyYoYSanityCheck(forecast, bundleId, bundleDays, targetDoc) {
     cappedForecast: cappedTotal,
     ratio: originalTotal / historic.total,
     scale,
+    trendLabel,
+    trendRatio,
+    yoyCapMultiplier,
+    levelActual,
+    levelHistorico,
   };
 }
 
@@ -377,7 +425,7 @@ export function calcVendorRecommendation({
       bundleDsrFromSheet: fallbackDsr,
     });
 
-    const yoyInfo = null;
+    const yoyInfo = applyYoYSanityCheck(forecast, b.j, bundleDays, targetDoc);
 
     const ai = bundleAssignedInv(b, replenMap, missingMap);
 
