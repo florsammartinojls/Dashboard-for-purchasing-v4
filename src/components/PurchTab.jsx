@@ -349,9 +349,10 @@ if (!vendorRecs || !Object.keys(vendorRecs).length) vendorRecs = {};
       const n = String(note).trim();
       const m = n.match(/^(.+?)\s+-\s+/);
       if (m) return { kind: 'named', name: m[1].trim() };
-      return { kind: 'container', name: null };
+      return { kind: 'unnamed', name: null };
     };
-    const rows = priceHistoryFull
+const isChinaRow = (r) => (Number(r?.inbShip) || 0) > 0 || (Number(r?.tariffs) || 0) > 0;
+const rows = priceHistoryFull
       .filter(r => r && (r.core || '').toLowerCase().trim() === cid)
       .map(r => {
         const pcs = Number(r.pcs);
@@ -359,7 +360,7 @@ if (!vendorRecs || !Object.keys(vendorRecs).length) vendorRecs = {};
         if (!(pcs > 0) || !(total > 0)) return null;
         const cpp = total / pcs;
         const parsed = parseNote(r.note);
-        return { date: r.date || '', cpp, note: r.note, parsed };
+        return { date: r.date || '', cpp, note: r.note, parsed, isChina: isChinaRow(r), raw: r };
       })
       .filter(Boolean)
       .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
@@ -367,8 +368,9 @@ if (!vendorRecs || !Object.keys(vendorRecs).length) vendorRecs = {};
     let currentRow = null;
     for (const r of rows) {
       if (isChinaCurrent) {
-        if (r.parsed.kind === 'container') { currentRow = r; break; }
+        if (r.isChina) { currentRow = r; break; }
       } else {
+        if (r.isChina) continue;
         if (r.parsed.kind === 'named' && r.parsed.name) {
           const nl = r.parsed.name.toLowerCase();
           if (nl === vNameLower || nl.includes(vNameLower) || vNameLower.includes(nl)) {
@@ -382,6 +384,7 @@ if (!vendorRecs || !Object.keys(vendorRecs).length) vendorRecs = {};
     let benchLabel = '';
     if (isChinaCurrent) {
       for (const r of rows) {
+        if (r.isChina) continue;
         if (r.parsed.kind === 'named' && r.parsed.name) {
           benchRow = r;
           benchLabel = r.parsed.name;
@@ -391,13 +394,10 @@ if (!vendorRecs || !Object.keys(vendorRecs).length) vendorRecs = {};
     } else {
       for (const r of rows) {
         if (r === currentRow) continue;
-        if (r.parsed.kind === 'container') {
-          benchRow = r; benchLabel = 'China'; break;
-        }
-        if (r.parsed.kind === 'named' && r.parsed.name) {
-          const nl = r.parsed.name.toLowerCase();
-          const isSameVendor = nl === vNameLower || nl.includes(vNameLower) || vNameLower.includes(nl);
-          if (!isSameVendor) { benchRow = r; benchLabel = r.parsed.name; break; }
+        if (r.isChina) {
+          benchRow = r;
+          benchLabel = 'China';
+          break;
         }
       }
     }
