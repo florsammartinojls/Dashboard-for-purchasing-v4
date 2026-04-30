@@ -561,12 +561,18 @@ export default function CoreTab({ data, stg, hist, daily, coreId, onBack, goBund
                     return (
                       <tr key={i} className={`${i % 2 === 0 ? "bg-gray-800/20" : ""} ${hasOos ? "border-l-2 border-red-500/60" : ""}`}>
                         <td className="py-0.5 px-1 text-gray-400">{r.month}</td>
-                        {yrs.map(y => {
+                        {yrs.map((y, yi) => {
                           const oos = r["oos_" + y] || 0;
                           const val = r["d_" + y];
+                          const prevY = yrs[yi - 1];
+                          const prevVal = prevY != null ? r["d_" + prevY] : null;
+                          const isCurrentYear = yi === yrs.length - 1;
+                          const showPct = isCurrentYear && val != null && prevVal != null && prevVal > 0;
+                          const pct = showPct ? ((val - prevVal) / prevVal * 100) : null;
                           return (
                             <SC key={y} v={val} className="py-0.5 px-2 text-right">
                               <span className="text-white">{val != null ? R(val) : ""}</span>
+                              {pct != null && <span className={`ml-1 text-[9px] ${pct >= 0 ? "text-emerald-400" : "text-red-400"}`} title={`vs ${prevY}: ${prevVal}`}>{pct >= 0 ? "+" : ""}{pct.toFixed(0)}%</span>}
                               {oos > 0 && <span className="ml-1 text-red-400 text-[9px]" title={oos + " OOS days"}>●</span>}
                             </SC>
                           );
