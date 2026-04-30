@@ -554,7 +554,7 @@ export default function CoreTab({ data, stg, hist, daily, coreId, onBack, goBund
                   {yrs.map(y => (
                     <th key={y} className="py-1.5 px-2 text-right font-semibold" style={{ color: YC[y] || "#6b7280" }}>{y}</th>
                   ))}
-                  {yrs.length >= 2 && <th className="py-1.5 px-1 text-right text-gray-500 text-[9px]">Var %<br/>{yrs[yrs.length - 1]}vs{yrs[yrs.length - 2]}</th>}
+                  {yrs.length >= 2 && <th className="py-1.5 px-1 text-right text-gray-500">Var %<br/>{String(yrs[yrs.length - 1]).slice(-2)} vs {String(yrs[yrs.length - 2]).slice(-2)}</th>}
                 </tr></thead>
                 <tbody>
                   {dsrCh.map((r, i) => {
@@ -579,7 +579,7 @@ export default function CoreTab({ data, stg, hist, daily, coreId, onBack, goBund
                           const prev = r["d_" + prevY];
                           const showPct = cur != null && prev != null && prev > 0;
                           const pct = showPct ? ((cur - prev) / prev * 100) : null;
-                          return <td className={`py-0.5 px-1 text-right text-[10px] ${pct == null ? "text-gray-600" : pct >= 0 ? "text-emerald-400" : "text-red-400"}`} title={prev != null ? `${curY}: ${cur ?? "—"} vs ${prevY}: ${prev}` : ""}>{pct != null ? (pct >= 0 ? "+" : "") + pct.toFixed(0) : "—"}</td>;
+                          return <td className={`py-0.5 px-1 text-right ${pct == null ? "text-gray-600" : pct >= 0 ? "text-emerald-400" : "text-red-400"}`} title={prev != null ? `${curY}: ${cur ?? "—"} vs ${prevY}: ${prev}` : ""}>{pct != null ? (pct >= 0 ? "+" : "") + pct.toFixed(0) : "—"}</td>;
                         })()}
                       </tr>
                     );
@@ -598,7 +598,7 @@ export default function CoreTab({ data, stg, hist, daily, coreId, onBack, goBund
                           const curY = yrs[yrs.length - 1];
                           const prevY = yrs[yrs.length - 2];
                           const pct = avgs[prevY] > 0 ? ((avgs[curY] - avgs[prevY]) / avgs[prevY] * 100) : null;
-                          return <td className={`py-1.5 px-1 text-right text-[10px] ${pct == null ? "text-gray-600" : pct >= 0 ? "text-emerald-400" : "text-red-400"}`}>{pct != null ? (pct >= 0 ? "+" : "") + pct.toFixed(0) : "—"}</td>;
+                          return <td className={`py-1.5 px-1 text-right ${pct == null ? "text-gray-600" : pct >= 0 ? "text-emerald-400" : "text-red-400"}`}>{pct != null ? (pct >= 0 ? "+" : "") + pct.toFixed(0) : "—"}</td>;
                         })()}
                       </>;
                     })()}
@@ -616,7 +616,7 @@ export default function CoreTab({ data, stg, hist, daily, coreId, onBack, goBund
                           const curY = yrs[yrs.length - 1];
                           const prevY = yrs[yrs.length - 2];
                           const pct = tots[prevY] > 0 ? ((tots[curY] - tots[prevY]) / tots[prevY] * 100) : null;
-                          return <td className={`py-1 px-1 text-right text-[10px] ${pct == null ? "text-gray-600" : pct >= 0 ? "text-emerald-400" : "text-red-400"}`}>{pct != null ? (pct >= 0 ? "+" : "") + pct.toFixed(0) : "—"}</td>;
+                          return <td className={`py-1 px-1 text-right ${pct == null ? "text-gray-600" : pct >= 0 ? "text-emerald-400" : "text-red-400"}`}>{pct != null ? (pct >= 0 ? "+" : "") + pct.toFixed(0) : "—"}</td>;
                         })()}
                       </>;
                     })()}
