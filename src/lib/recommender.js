@@ -630,6 +630,7 @@ export function calcVendorRecommendation({
 
   const bundleDetails = prepped.map(b => ({
     bundleId: b.id,
+    completeDSR: num(b.raw.cd),
     assignedInv: b.assignedInv,
     rawAssignedFromWaterfall: b.rawAssigned,
     totalAvailable: b.totalAvailable,
