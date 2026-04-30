@@ -76,10 +76,16 @@ export function computeBridgeRecommendations({
   vendorRecs = {},
   receivingFull = [],
   inbound = [],
+  fees = [],
   settings = {},
 }) {
   const pipeline_days = num(settings.pipeline_days) || DEFAULT_PIPELINE_DAYS;
   const moqInflationThreshold = num(settings.moqInflationThreshold) || 1.5;
+
+  // Build fee map: bundleId -> {aicogs, gp, pr}
+  // Used for margin impact calculation in contributing_bundles.
+  const feeMap = {};
+  for (const f of fees) if (f && f.j) feeMap[f.j] = f;
 
   // ─── Diagnostic counters (kept always; helps any future debugging) ───
   const diag = {
@@ -161,7 +167,9 @@ export function computeBridgeRecommendations({
       });
 
       // Filter & count reasons
-      if (effDSR <= 0) { diag.bundlesWithZeroDSR++; continue; }
+      // Use 0.05 threshold (not just <=0) to filter out "ghost" bundles with
+      // effectively zero DSR — they cause inconsistent tiny gaps from rounding.
+      if (effDSR < 0.05) { diag.bundlesWithZeroDSR++; continue; }
       if (china_eta == null || china_eta <= 0) { diag.bundlesWithNoChinaEta++; continue; }
       if (inbound_pieces <= 0) { diag.bundlesWithNoInboundPieces++; continue; }
       if (current_DOC == null) { diag.bundlesWithNoCurrentDOC++; continue; }
@@ -196,7 +204,63 @@ export function computeBridgeRecommendations({
   }
 
   // ─── Phase 2: aggregate to cores ──────────────────────────────
+  // We also pre-compute last China & USA prices PER CORE here so we can
+  // include margin impact on each contributing_bundle row.
   const coreDemand = {};
+
+  // Pre-compute price lookups for all cores referenced by bundles-with-gap
+  const corePrices = {};
+  const allReferencedCores = new Set();
+  for (const bg of bundlesWithGap) {
+    for (const cu of (bg.coresUsed || [])) {
+      if (cu.coreId) allReferencedCores.add(cu.coreId);
+    }
+  }
+  for (const coreId of allReferencedCores) {
+    const allReceipts = (receivingFull || []).filter(r =>
+      r && (r.core === coreId || r.coreId === coreId)
+    );
+    const usaR = allReceipts.filter(r => isUSAVendor(vendorMap[r.vendor]));
+    const chinaR = allReceipts.filter(r => isChinaVendor(vendorMap[r.vendor]));
+    const usaSorted = [...usaR].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+    const chinaSorted = [...chinaR].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+    corePrices[coreId] = {
+      usa: usaSorted.length > 0
+        ? (numOrNull(usaSorted[0].price) ?? numOrNull(usaSorted[0].pricePerUnit))
+        : null,
+      china: chinaSorted.length > 0
+        ? (numOrNull(chinaSorted[0].price) ?? numOrNull(chinaSorted[0].pricePerUnit))
+        : null,
+    };
+  }
+
+  // Compute margin impact for one (bundle, core) pair.
+  // Returns {margin_actual, margin_usa, margin_drop_pp} all-or-nothing.
+  // Returns nulls if any input is missing/invalid.
+  const computeMarginImpact = (bundleId, qty_per_bundle, coreId) => {
+    const NULLS = { margin_actual: null, margin_usa: null, margin_drop_pp: null };
+    const fee = feeMap[bundleId];
+    if (!fee) return NULLS;
+    const aicogs = num(fee.aicogs);
+    const gp = num(fee.gp);
+    if (aicogs <= 0 || gp <= 0) return NULLS;
+    const prices = corePrices[coreId];
+    if (!prices) return NULLS;
+    const usa_price = prices.usa;
+    const china_price = prices.china;
+    if (usa_price == null || china_price == null) return NULLS;
+    const delta_unit = (usa_price - china_price) * qty_per_bundle;
+    const gp_usa = gp - delta_unit;
+    const aicogs_usa = aicogs + delta_unit;
+    if (aicogs_usa <= 0) return NULLS; // pathological
+    const margin_actual = (gp / aicogs) * 100;
+    const margin_usa = (gp_usa / aicogs_usa) * 100;
+    return {
+      margin_actual,
+      margin_usa,
+      margin_drop_pp: margin_actual - margin_usa,
+    };
+  };
 
   for (const bg of bundlesWithGap) {
     for (const cu of (bg.coresUsed || [])) {
@@ -204,6 +268,8 @@ export function computeBridgeRecommendations({
       if (!core_id) continue;
       const qty_per_bundle = num(cu.qty) || 1;
       const pieces_contributed = bg.gap_pieces * qty_per_bundle;
+
+      const marginImpact = computeMarginImpact(bg.bundleId, qty_per_bundle, core_id);
 
       if (!coreDemand[core_id]) {
         coreDemand[core_id] = { pieces_needed: 0, contributing_bundles: [] };
@@ -223,6 +289,10 @@ export function computeBridgeRecommendations({
         non_inbound_pieces: bg.non_inbound_pieces,
         target_pieces: bg.target_pieces,
         total_cover_needed_DOC: bg.total_cover_needed_DOC,
+        // Margin impact (per-core, isolated — assumes other cores stay China)
+        margin_actual: marginImpact.margin_actual,
+        margin_usa: marginImpact.margin_usa,
+        margin_drop_pp: marginImpact.margin_drop_pp,
       });
     }
   }
