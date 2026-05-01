@@ -266,24 +266,32 @@ if (!vendorRecs || !Object.keys(vendorRecs).length) vendorRecs = {};
   const effectiveRecs = useMemo(() => ({ ...vendorRecs, ...overrideRecs }), [vendorRecs, overrideRecs]);
 
   useEffect(() => {
-    if (typeof window !== 'undefined') {
+    if (typeof window !== 'undefined' && import.meta.env.DEV) {
       window.__vendorRecs = effectiveRecs;
     }
   }, [effectiveRecs]);
 
   useEffect(() => {
     if (!effectiveRecs || !Object.keys(effectiveRecs).length) return;
-    const deltas = {};
-    for (const [vendorName, rec] of Object.entries(effectiveRecs)) {
-      if (!rec) continue;
-      const prev = loadPreviousSnapshot(vendorName);
-      if (prev) {
-        const delta = computeDelta(rec, prev);
-        if (delta) deltas[vendorName] = delta;
+    let cancelled = false;
+    (async () => {
+      const deltas = {};
+      for (const [vendorName, rec] of Object.entries(effectiveRecs)) {
+        if (!rec) continue;
+        try {
+          const prev = await loadPreviousSnapshot(vendorName);
+          if (prev) {
+            const delta = computeDelta(rec, prev);
+            if (delta) deltas[vendorName] = delta;
+          }
+          await saveSnapshotIfNeeded(vendorName, rec);
+        } catch (e) {
+          if (import.meta.env.DEV) console.warn('Snapshot async failed for', vendorName, e);
+        }
       }
-      saveSnapshotIfNeeded(vendorName, rec);
-    }
-    setVendorDeltas(deltas);
+      if (!cancelled) setVendorDeltas(deltas);
+    })();
+    return () => { cancelled = true; };
   }, [effectiveRecs]);
 
   useEffect(() => {

@@ -1,7 +1,7 @@
 // API client — fetches data via Apps Script in chunks (1 MB each).
 // Cache uses IndexedDB (via idb-keyval) because data is too large for localStorage.
 
-import { get as idbGet, set as idbSet, del as idbDel } from 'https://cdn.jsdelivr.net/npm/idb-keyval@6/+esm';
+import { get as idbGet, set as idbSet, del as idbDel } from 'idb-keyval';
 
 const API = 'https://script.google.com/macros/s/AKfycbyxFvNQjWvF6Ckajd_H-OZ8WsXixoCWtjSxtChs8SmpL5CvidjT5P161tn0RXgYawd3sg/exec';
 

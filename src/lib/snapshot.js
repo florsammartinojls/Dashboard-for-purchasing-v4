@@ -1,14 +1,20 @@
 // src/lib/snapshot.js
 // ============================================================
-// Daily Snapshot + Delta Decomposition — v3
+// Daily Snapshot + Delta Decomposition — v4
 // ============================================================
-// Saves vendor recommendation once per day to localStorage.
-// When today's total cost differs from yesterday's by >15%, provides
-// a per-bundle breakdown of what drove the change: level, trend,
-// inventory, or safety stock.
+// Saves vendor recommendation once per day to IndexedDB (was
+// localStorage in v3 — moved because 14 days × N vendors × ~5KB
+// could blow the 5MB localStorage cap silently). Same compact
+// snapshot, same delta decomposition, async API.
 //
-// Keeps last 14 snapshots per vendor. All automatic, no user action.
+// Storage layout in IndexedDB:
+//   key 'fba_snap_idx_<vendor>'   -> string[] of dates (sorted)
+//   key 'fba_snap_<vendor>_<date>' -> compact snapshot object
+//
+// All functions are async. Callers must await.
 // ============================================================
+
+import { get as idbGet, set as idbSet, del as idbDel } from 'idb-keyval';
 
 const MAX_DAYS_RETAINED = 14;
 const SIGNIFICANT_DELTA_PCT = 15;
@@ -29,15 +35,18 @@ function indexKey(vendorName) {
   return `fba_snap_idx_${safeKey(vendorName)}`;
 }
 
-function getIndex(vendorName) {
+async function getIndex(vendorName) {
   try {
-    const raw = localStorage.getItem(indexKey(vendorName));
-    return raw ? JSON.parse(raw) : [];
+    const raw = await idbGet(indexKey(vendorName));
+    if (!raw) return [];
+    if (Array.isArray(raw)) return raw;
+    if (typeof raw === 'string') return JSON.parse(raw);
+    return [];
   } catch { return []; }
 }
 
-function setIndex(vendorName, dates) {
-  try { localStorage.setItem(indexKey(vendorName), JSON.stringify(dates)); } catch {}
+async function setIndex(vendorName, dates) {
+  try { await idbSet(indexKey(vendorName), dates); } catch {}
 }
 
 // Compact serializable snapshot from full vendor recommendation
@@ -68,41 +77,46 @@ function compactSnapshot(vendorRec) {
 }
 
 // ─── Save snapshot if not already saved today ────────────────────
-export function saveSnapshotIfNeeded(vendorName, vendorRec) {
+export async function saveSnapshotIfNeeded(vendorName, vendorRec) {
   if (!vendorName || !vendorRec) return;
   const d = todayStr();
   const k = snapKey(vendorName, d);
   try {
-    if (localStorage.getItem(k)) return; // already saved today
+    const existing = await idbGet(k);
+    if (existing) return; // already saved today
     const snap = compactSnapshot(vendorRec);
     if (!snap) return;
-    localStorage.setItem(k, JSON.stringify({ date: d, vendor: vendorName, ...snap }));
-    const idx = getIndex(vendorName);
+    await idbSet(k, { date: d, vendor: vendorName, ...snap });
+    const idx = await getIndex(vendorName);
     if (!idx.includes(d)) idx.push(d);
     idx.sort();
     while (idx.length > MAX_DAYS_RETAINED) {
       const old = idx.shift();
-      try { localStorage.removeItem(snapKey(vendorName, old)); } catch {}
+      try { await idbDel(snapKey(vendorName, old)); } catch {}
     }
-    setIndex(vendorName, idx);
+    await setIndex(vendorName, idx);
   } catch (e) {
-    console.warn('Snapshot save failed:', e);
+    if (typeof console !== 'undefined') console.warn('Snapshot save failed:', e);
   }
 }
 
 // ─── Load most recent snapshot BEFORE today ──────────────────────
-export function loadPreviousSnapshot(vendorName) {
-  const idx = getIndex(vendorName);
+export async function loadPreviousSnapshot(vendorName) {
+  const idx = await getIndex(vendorName);
   const today = todayStr();
   const prev = [...idx].reverse().find(d => d < today);
   if (!prev) return null;
   try {
-    const raw = localStorage.getItem(snapKey(vendorName, prev));
-    return raw ? JSON.parse(raw) : null;
+    const raw = await idbGet(snapKey(vendorName, prev));
+    if (!raw) return null;
+    if (typeof raw === 'string') return JSON.parse(raw);
+    return raw;
   } catch { return null; }
 }
 
 // ─── Compute delta & decompose by source ─────────────────────────
+// Pure: input today's recommendation + previous snapshot, returns
+// the human-readable "what changed" summary. No I/O.
 export function computeDelta(vendorRec, previousSnapshot) {
   if (!vendorRec || !previousSnapshot) return null;
   const todayTotal = vendorRec.totalCost || 0;
@@ -172,10 +186,10 @@ export function computeDelta(vendorRec, previousSnapshot) {
 }
 
 // ─── Clear all snapshots for a vendor (debugging utility) ────────
-export function clearVendorSnapshots(vendorName) {
-  const idx = getIndex(vendorName);
-  idx.forEach(d => {
-    try { localStorage.removeItem(snapKey(vendorName, d)); } catch {}
-  });
-  try { localStorage.removeItem(indexKey(vendorName)); } catch {}
+export async function clearVendorSnapshots(vendorName) {
+  const idx = await getIndex(vendorName);
+  for (const d of idx) {
+    try { await idbDel(snapKey(vendorName, d)); } catch {}
+  }
+  try { await idbDel(indexKey(vendorName)); } catch {}
 }

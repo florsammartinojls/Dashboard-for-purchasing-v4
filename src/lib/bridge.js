@@ -507,7 +507,8 @@ export function computeBridgeRecommendations({
   // ─── Diagnostic log + window expose ─────────────────────────
   // Always logs once per analysis run. Helps debug "why is everything in preventive?".
   // Exposes __bridgeDiag on window for inspection.
-  if (typeof console !== 'undefined') {
+  const __dev = (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.DEV);
+  if (__dev && typeof console !== 'undefined') {
     console.log('[BRIDGE] Analysis complete:', {
       ...diag,
       summary,
@@ -515,7 +516,7 @@ export function computeBridgeRecommendations({
       recommendationsCount: recommendations.length,
     });
   }
-  if (typeof window !== 'undefined') {
+  if (__dev && typeof window !== 'undefined') {
     window.__bridgeDiag = {
       ...diag,
       summary,

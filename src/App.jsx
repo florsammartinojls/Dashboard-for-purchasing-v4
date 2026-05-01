@@ -3,6 +3,8 @@ import React, { useState, useMemo, useCallback, useEffect, useTransition, useRef
 import { fetchLive, fetchHistory, refreshHistoryOnServer, fetchInfo, apiPost } from "./lib/api";
 import { R, D1, gS, fTs, gTD, isD, cAI, cNQ } from "./lib/utils";
 import { Loader, Stg, QuickSum, SumCtx, SlidePanel, Dot, WorkflowChip, VendorNotes } from "./components/Shared";
+import ErrorBoundary from "./components/ErrorBoundary";
+import { SkeletonHero, HistoryProgressBanner } from "./components/Skeleton";
 import DashboardSummary from "./components/DashboardSummary";
 import PurchTab from "./components/PurchTab";
 import CoreTab from "./components/CoreTab";
@@ -12,6 +14,9 @@ import PerformanceTab from "./components/PerformanceTab";
 import BridgeTab from "./components/BridgeTab";
 import { batchVendorRecommendations } from "./lib/recommender";
 import { calcPurchaseFrequency, calcBundleSeasonalProfile, DEFAULT_PROFILE } from "./lib/seasonal";
+import { buildAllIndexes } from "./lib/dataIndexes";
+
+const DEV = import.meta.env.DEV;
 
 
 // === Vendors Tab ===
@@ -331,6 +336,7 @@ export default function App() {
 
   const [liveStatus, setLiveStatus] = useState({ loading: true, error: null, version: null });
   const [historyStatus, setHistoryStatus] = useState({ loading: true, error: null, version: null, fromCache: false });
+  const [historyProgress, setHistoryProgress] = useState({ done: 0, total: 0 });
   const [refreshingHistory, setRefreshingHistory] = useState(false);
 
   const [ov, setOv] = useState({});
@@ -423,8 +429,12 @@ export default function App() {
 
   const loadHistory = useCallback(async ({ forceRefresh = false } = {}) => {
     setHistoryStatus(prev => ({ ...prev, loading: true, error: null }));
+    setHistoryProgress({ done: 0, total: 0 });
     try {
-      const history = await fetchHistory({ forceRefresh });
+      const history = await fetchHistory({
+        forceRefresh,
+        onProgress: (done, total) => setHistoryProgress({ done, total }),
+      });
       setData(prev => ({
         ...prev,
         receivingFull: history.receivingFull || [],
@@ -529,9 +539,22 @@ export default function App() {
       catch { cache[b.j] = DEFAULT_PROFILE; }
     }
     const t1 = performance.now();
-    console.log(`[PERF] seasonalProfiles took ${(t1-t0).toFixed(0)}ms for ${Object.keys(cache).length} bundles`);
+    if (DEV) console.log(`[PERF] seasonalProfiles took ${(t1-t0).toFixed(0)}ms for ${Object.keys(cache).length} bundles`);
     return cache;
   }, [data.bundles, data.bundleSales]);
+
+  const dataIndexes = useMemo(() => {
+    const t0 = performance.now();
+    const ix = buildAllIndexes({
+      priceCompFull: data.priceCompFull,
+      priceComp: data.priceComp,
+      receivingFull: data.receivingFull,
+      bundleDays: data.bundleDaysForecast,
+    });
+    const t1 = performance.now();
+    if (DEV) console.log(`[PERF] dataIndexes built in ${(t1-t0).toFixed(0)}ms (${ix.price.countIndexed} priced rows over ${ix.price.pricesByCoreLower.size} cores)`);
+    return ix;
+  }, [data.priceCompFull, data.priceComp, data.receivingFull, data.bundleDaysForecast]);
 
   const vendorRecs = useMemo(() => {
     if (!data.vendors?.length) return {};
@@ -548,14 +571,15 @@ export default function App() {
       replenMap,
       missingMap,
       priceCompFull: (data.priceCompFull?.length ? data.priceCompFull : data.priceComp) || [],
+      priceIndex: dataIndexes.price,
       settings: stg,
       purchFreqMap,
       seasonalProfiles,
     });
     const t1 = performance.now();
-    console.log(`[PERF] vendorRecs took ${(t1-t0).toFixed(0)}ms for ${Object.keys(result).length} vendors`);
+    if (DEV) console.log(`[PERF] vendorRecs took ${(t1-t0).toFixed(0)}ms for ${Object.keys(result).length} vendors`);
     return result;
-  }, [data.vendors, data.cores, data.bundles, data.bundleSales, data.bundleDaysForecast, data.coreDaysForecast, data.abcA, data.receivingFull, replenMap, missingMap, data.priceCompFull, data.priceComp, stg, purchFreqMap, seasonalProfiles]);
+  }, [data.vendors, data.cores, data.bundles, data.bundleSales, data.bundleDaysForecast, data.coreDaysForecast, data.abcA, data.receivingFull, replenMap, missingMap, data.priceCompFull, data.priceComp, dataIndexes, stg, purchFreqMap, seasonalProfiles]);
 
 
   const sc = useMemo(() => {
@@ -674,9 +698,12 @@ export default function App() {
           </div>
         )}
         {historyStatus.loading && !data.coreInv?.length && (
-          <div className="max-w-7xl mx-auto mt-2 px-3 py-1.5 bg-blue-500/10 border border-blue-500/30 rounded text-xs text-blue-300">
-            ⏳ Loading history data in background... Seasonal calculations will be available shortly.
-          </div>
+          <HistoryProgressBanner
+            pct={historyProgress.total > 0 ? (historyProgress.done / historyProgress.total) * 100 : null}
+            message={historyProgress.total > 0
+              ? `Loading history data… ${historyProgress.done}/${historyProgress.total} chunks`
+              : 'Loading history data in background. Seasonal calculations will be available shortly.'}
+          />
         )}
       </header>
 
@@ -701,19 +728,26 @@ export default function App() {
       </nav>
 
       <main className="max-w-7xl mx-auto">
+        {historyStatus.loading && !data.coreInv?.length && tab !== "glossary" && tab !== "orders" && tab !== "vendors" && tab !== "performance" && (
+          <SkeletonHero />
+        )}
         <div style={{ display: tab === "dashboard" ? "block" : "none" }}>
-          <DashboardSummary data={dataH} stg={stg} vendorRecs={vendorRecs} goVendor={goVendor} workflow={data.workflow} saveWorkflow={saveWorkflow} deleteWorkflow={deleteWorkflow} vendorComments={data.vendorComments} saveVendorComment={saveVendorComment} onEnterPurchasing={() => setTab("purchasing")} activeBundleCores={activeBundleCores} />
+          <ErrorBoundary label="Dashboard" compact>
+            <DashboardSummary data={dataH} stg={stg} vendorRecs={vendorRecs} goVendor={goVendor} workflow={data.workflow} saveWorkflow={saveWorkflow} deleteWorkflow={deleteWorkflow} vendorComments={data.vendorComments} saveVendorComment={saveVendorComment} onEnterPurchasing={() => setTab("purchasing")} activeBundleCores={activeBundleCores} />
+          </ErrorBoundary>
         </div>
         <div style={{ display: tab === "purchasing" ? "block" : "none" }}>
-          <PurchTab data={dataH} stg={stg} vendorRecs={vendorRecs} goCore={goCore} goBundle={goBundle} goVendor={goVendor} ov={ov} setOv={setOv} initV={initV} clearIV={clearIV} saveWorkflow={saveWorkflow} deleteWorkflow={deleteWorkflow} saveVendorComment={saveVendorComment} activeBundleCores={activeBundleCores} />
+          <ErrorBoundary label="Purchasing" compact>
+            <PurchTab data={dataH} stg={stg} vendorRecs={vendorRecs} goCore={goCore} goBundle={goBundle} goVendor={goVendor} ov={ov} setOv={setOv} initV={initV} clearIV={clearIV} saveWorkflow={saveWorkflow} deleteWorkflow={deleteWorkflow} saveVendorComment={saveVendorComment} activeBundleCores={activeBundleCores} />
+          </ErrorBoundary>
         </div>
-        {tab === "bridge" && <BridgeTab data={dataH} stg={stg} vendorRecs={vendorRecs} goCore={goCore} goBundle={goBundle} />}
-        {tab === "core" && <CoreTab data={data} stg={stg} hist={{ coreInv: data.coreInv, bundleSales: data.bundleSales, priceHist: data.priceHist }} daily={{ coreDays: data.coreDays, bundleDays: data.bundleDays }} coreId={coreId} onBack={handleBackFromCore} goBundle={goBundle} />}
-        {tab === "bundle" && <BundleTab data={data} stg={stg} hist={{ coreInv: data.coreInv, bundleSales: data.bundleSales, bundleInv: data.bundleInv, priceHist: data.priceHist }} daily={{ coreDays: data.coreDays, bundleDays: data.bundleDays }} bundleId={bundleId} onBack={handleBackFromBundle} goCore={goCore} />}
-        {tab === "orders" && <OrdersTab data={data} />}
-        {tab === "vendors" && <VendorsTab data={data} stg={stg} goVendor={goVendor} workflow={data.workflow} saveWorkflow={saveWorkflow} deleteWorkflow={deleteWorkflow} vendorComments={data.vendorComments} saveVendorComment={saveVendorComment} />}
-        {tab === "performance" && <PerformanceTab />}
-        {tab === "glossary" && <GlossTab />}
+        {tab === "bridge" && <ErrorBoundary label="Bridge" compact><BridgeTab data={dataH} stg={stg} vendorRecs={vendorRecs} goCore={goCore} goBundle={goBundle} /></ErrorBoundary>}
+        {tab === "core" && <ErrorBoundary label="Core" compact><CoreTab data={data} stg={stg} hist={{ coreInv: data.coreInv, bundleSales: data.bundleSales, priceHist: data.priceHist }} daily={{ coreDays: data.coreDays, bundleDays: data.bundleDays }} coreId={coreId} onBack={handleBackFromCore} goBundle={goBundle} /></ErrorBoundary>}
+        {tab === "bundle" && <ErrorBoundary label="Bundle" compact><BundleTab data={data} stg={stg} hist={{ coreInv: data.coreInv, bundleSales: data.bundleSales, bundleInv: data.bundleInv, priceHist: data.priceHist }} daily={{ coreDays: data.coreDays, bundleDays: data.bundleDays }} bundleId={bundleId} onBack={handleBackFromBundle} goCore={goCore} /></ErrorBoundary>}
+        {tab === "orders" && <ErrorBoundary label="Orders" compact><OrdersTab data={data} /></ErrorBoundary>}
+        {tab === "vendors" && <ErrorBoundary label="Vendors" compact><VendorsTab data={data} stg={stg} goVendor={goVendor} workflow={data.workflow} saveWorkflow={saveWorkflow} deleteWorkflow={deleteWorkflow} vendorComments={data.vendorComments} saveVendorComment={saveVendorComment} /></ErrorBoundary>}
+        {tab === "performance" && <ErrorBoundary label="Performance" compact><PerformanceTab /></ErrorBoundary>}
+        {tab === "glossary" && <ErrorBoundary label="Glossary" compact><GlossTab /></ErrorBoundary>}
       </main>
 
       {showS && <Stg s={stg} setS={setStg} onClose={() => setShowS(false)} />}

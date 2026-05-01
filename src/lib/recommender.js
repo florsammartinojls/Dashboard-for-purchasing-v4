@@ -49,25 +49,37 @@ function isChinaVendor(vendor) {
   return c === 'china' || c === 'cn' || c === 'prc';
 }
 
-function getVendorCoreUnitCost(coreId, vendor, paymentHistory) {
-  if (!Array.isArray(paymentHistory) || !coreId || !vendor?.name) return null;
+function getVendorCoreUnitCost(coreId, vendor, paymentHistory, priceIndex) {
+  if (!coreId || !vendor?.name) return null;
   const cid = coreId.toLowerCase().trim();
   const vName = vendor.name.toLowerCase().trim();
   const china = isChinaVendor(vendor);
+
+  // Prefer the pre-built index when available — avoids scanning the
+  // full priceCompFull (potentially 100k+ rows) per call.
+  let candidates = null;
+  if (priceIndex && priceIndex.pricesByCoreLower) {
+    candidates = priceIndex.pricesByCoreLower.get(cid) || null;
+    if (!candidates) return null;
+  } else if (Array.isArray(paymentHistory)) {
+    candidates = paymentHistory;
+  } else {
+    return null;
+  }
+
   let best = null;
-  for (const r of paymentHistory) {
+  for (const r of candidates) {
     if (!r) continue;
-    if ((r.core || '').toLowerCase().trim() !== cid) continue;
+    // If we used the index, core already matches. Otherwise re-check.
+    if (!priceIndex && (r.core || '').toLowerCase().trim() !== cid) continue;
     const pcs = Number(r.pcs);
     const mat = Number(r.matPrice);
     if (!(pcs > 0) || !(mat > 0)) continue;
 
     let matches = false;
     if (china) {
-      // Vendor actual es China → buscar compras con tariffs/inbShip > 0
       matches = isChinaPurchase(r);
     } else {
-      // Vendor actual es USA → buscar por nombre en la nota, y que NO sea China
       if (isChinaPurchase(r)) continue;
       const parsed = parseNoteVendor(r.note);
       if (parsed.kind !== 'named' || !parsed.name) continue;
@@ -451,6 +463,7 @@ export function calcVendorRecommendation({
   replenMap,
   missingMap,
   priceCompFull,
+  priceIndex,
   settings,
   purchFreqSafety,
   forceMode,
@@ -681,7 +694,7 @@ export function calcVendorRecommendation({
   for (const [coreId, needPieces] of Object.entries(coreNeedMap)) {
     const core = vCoreById[coreId];
     if (!core) continue;
-    const histUnitCost = getVendorCoreUnitCost(coreId, vendor, priceCompFull);
+    const histUnitCost = getVendorCoreUnitCost(coreId, vendor, priceCompFull, priceIndex);
     const pricePerPiece = histUnitCost != null ? histUnitCost : num(core.cost);
     const priceSource = histUnitCost != null ? '7g-history' : 'sheet-cost';
 
@@ -721,7 +734,7 @@ export function calcVendorRecommendation({
     for (const { coreId, qty } of b.coresUsed) {
       const c = vCoreById[coreId];
       if (!c) continue;
-      const histUnit = getVendorCoreUnitCost(coreId, vendor, priceCompFull);
+      const histUnit = getVendorCoreUnitCost(coreId, vendor, priceCompFull, priceIndex);
       if (histUnit != null) { pricePerPiece += histUnit * qty; anyFromHistory = true; }
       else { pricePerPiece += num(c.cost) * qty; anyFromSheet = true; }
     }
@@ -761,7 +774,7 @@ export function calcVendorRecommendation({
     for (const { coreId, qty } of coresOf(b)) {
       const c = vCoreById[coreId];
       if (!c) continue;
-      const histUnit = getVendorCoreUnitCost(coreId, vendor, priceCompFull);
+      const histUnit = getVendorCoreUnitCost(coreId, vendor, priceCompFull, priceIndex);
       const unit = histUnit != null ? histUnit : num(c.cost);
       price += unit * qty;
     }
@@ -897,6 +910,7 @@ export function batchVendorRecommendations({
   replenMap,
   missingMap,
   priceCompFull,
+  priceIndex,
   settings,
   purchFreqMap,
 }) {
@@ -924,6 +938,7 @@ export function batchVendorRecommendations({
       replenMap,
       missingMap,
       priceCompFull,
+      priceIndex,
       settings,
       purchFreqSafety: safety,
       bundleMoqOverride: 0,
