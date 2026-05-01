@@ -12,6 +12,7 @@
 import React, { useContext, useMemo, useState } from "react";
 import { R, D1, gS, fSl, genPO, genRFQ, cp7f, cp7g } from "../lib/utils";
 import { Dot, WorkflowChip, VendorNotes } from "./Shared";
+import { getEffectiveWfStatus } from "./Shared";
 import { SegmentCtx, WhyBuyCtx } from "../App";
 import { SegmentBadge } from "./SegmentsTab";
 
@@ -212,7 +213,7 @@ function CriticalPOModal({ open, vendors, vendorRecs, vMap, stg, onClose, onComp
 }
 
 // ─── Vendor Card ─────────────────────────────────────────────
-function VendorCard({ vendor, rec, urgency, segMap, onReview, onWhyBuy }) {
+function VendorCard({ vendor, rec, urgency, segMap, onReview, onWhyBuy, workflow, saveWorkflow, deleteWorkflow, buyer }) {
   const [expanded, setExpanded] = useState(false);
   const items = (rec?.items || []).filter(i => (i.finalQty || 0) > 0);
   const segCounts = {};
@@ -225,24 +226,35 @@ function VendorCard({ vendor, rec, urgency, segMap, onReview, onWhyBuy }) {
   const dotCls = urgency.tier === 'critical'
     ? 'bg-red-500 animate-pulse'
     : urgency.tier === 'warning' ? 'bg-amber-500' : 'bg-emerald-500';
-  const lastPo = (() => {
-    // We don't have receivingFull here; leave blank
-    return null;
-  })();
 
   return (
     <div className="bg-gray-900/50 border border-gray-800 rounded-lg overflow-hidden">
-      <button
-        onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center gap-3 px-4 py-3 hover:bg-gray-800/30 text-left"
-      >
-        <span className={`inline-block w-3 h-3 rounded-full ${dotCls}`} />
-        <span className="text-white font-semibold">{vendor.name}</span>
-        <span className="text-xs text-gray-500">LT {vendor.lt}d</span>
-        <span className="text-xs text-gray-500">{urgency.count} items</span>
-        <span className="text-xs text-amber-300 ml-auto">{dollar(urgency.cost)}</span>
-        <span className="text-gray-400 text-sm">{expanded ? '▾' : '▸'}</span>
-      </button>
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => setExpanded(!expanded)}
+          className="flex-1 flex items-center gap-3 px-4 py-3 hover:bg-gray-800/30 text-left"
+        >
+          <span className={`inline-block w-3 h-3 rounded-full ${dotCls}`} />
+          <span className="text-white font-semibold">{vendor.name}</span>
+          <span className="text-xs text-gray-500">LT {vendor.lt}d</span>
+          <span className="text-xs text-gray-500">{urgency.count} items</span>
+          <span className="text-xs text-amber-300 ml-auto">{dollar(urgency.cost)}</span>
+          <span className="text-gray-400 text-sm">{expanded ? '▾' : '▸'}</span>
+        </button>
+        {saveWorkflow && (
+          <div className="pr-3">
+            <WorkflowChip
+              id={vendor.name}
+              type="vendor"
+              workflow={workflow || []}
+              onSave={saveWorkflow}
+              onDelete={deleteWorkflow}
+              buyer={buyer || ''}
+              country={vendor.country || ''}
+            />
+          </div>
+        )}
+      </div>
 
       {expanded && (
         <div className="px-4 py-3 border-t border-gray-800">
@@ -368,6 +380,7 @@ export default function TodaysActionTab({
   const segCtx = useContext(SegmentCtx);
   const whyBuy = useContext(WhyBuyCtx);
   const [originFilter, setOriginFilter] = useState('all'); // 'all' | 'us' | 'intl'
+  const [workflowFilter, setWorkflowFilter] = useState('all'); // 'all' | 'untriaged' | 'Buy' | 'Reviewing' | 'Done' | 'Ignore'
 
   const vMap = useMemo(() => {
     const m = {};
@@ -496,6 +509,19 @@ export default function TodaysActionTab({
                 <option value="us">US only</option>
                 <option value="intl">International only</option>
               </select>
+              <select
+                value={workflowFilter}
+                onChange={e => setWorkflowFilter(e.target.value)}
+                title="Filter vendors by workflow status"
+                className="bg-gray-800 border border-gray-700 text-gray-200 text-sm rounded px-3 py-2"
+              >
+                <option value="all">All status</option>
+                <option value="untriaged">Untriaged</option>
+                <option value="Buy">Buy</option>
+                <option value="Reviewing">Reviewing</option>
+                <option value="Done">Done</option>
+                <option value="Ignore">Ignore</option>
+              </select>
             </div>
           </div>
           {/* KPI strip */}
@@ -548,17 +574,31 @@ export default function TodaysActionTab({
         </p>
       ) : (
         <div className="space-y-2">
-          {vendorList.map(({ vendor, rec, urgency }) => (
-            <VendorCard
-              key={vendor.name}
-              vendor={vendor}
-              rec={rec}
-              urgency={urgency}
-              segMap={segCtx.effectiveMap}
-              onReview={() => { goVendor && goVendor(vendor.name); }}
-              onWhyBuy={(anchor) => whyBuy.open(anchor)}
-            />
-          ))}
+          {vendorList
+            .filter(({ vendor }) => {
+              if (workflowFilter === 'all') return true;
+              if (workflowFilter === 'untriaged') {
+                const s = getEffectiveWfStatus(workflow || [], vendor.name);
+                return !s;
+              }
+              const s = getEffectiveWfStatus(workflow || [], vendor.name);
+              return s === workflowFilter;
+            })
+            .map(({ vendor, rec, urgency }) => (
+              <VendorCard
+                key={vendor.name}
+                vendor={vendor}
+                rec={rec}
+                urgency={urgency}
+                segMap={segCtx.effectiveMap}
+                onReview={() => { goVendor && goVendor(vendor.name); }}
+                onWhyBuy={(anchor) => whyBuy.open(anchor)}
+                workflow={workflow}
+                saveWorkflow={saveWorkflow}
+                deleteWorkflow={deleteWorkflow}
+                buyer={stg?.buyer}
+              />
+            ))}
         </div>
       )}
 
