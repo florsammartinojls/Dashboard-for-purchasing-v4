@@ -14,6 +14,7 @@ import PerformanceTab from "./components/PerformanceTab";
 import BridgeTab from "./components/BridgeTab";
 import SegmentsTab from "./components/SegmentsTab";
 import WhyBuyPanel from "./components/WhyBuyPanel";
+import TodaysActionTab from "./components/TodaysActionTab";
 import { batchVendorRecommendationsV4 } from "./lib/recommenderV4";
 import { calcPurchaseFrequency, calcBundleSeasonalProfile, DEFAULT_PROFILE } from "./lib/seasonal";
 import { buildAllIndexes } from "./lib/dataIndexes";
@@ -283,7 +284,7 @@ function GlossTab() {
 }
 
 const TABS = [
-  { id: "dashboard", l: "Dashboard" },
+  { id: "today", l: "Today's Action" },
   { id: "purchasing", l: "Purchasing" },
   { id: "bridge", l: "Bridge" },
   { id: "core", l: "Core Detail" },
@@ -292,6 +293,7 @@ const TABS = [
   { id: "orders", l: "Orders" },
   { id: "vendors", l: "Vendors" },
   { id: "performance", l: "Performance" },
+  { id: "classic", l: "Classic" },
   { id: "glossary", l: "Glossary" }
 ];
 
@@ -333,7 +335,7 @@ export default function App() {
 
   const [, startTransition] = useTransition();
 
-  const [tab, setTab] = useState(initCore ? "core" : initBundle ? "bundle" : initVendorParam ? "purchasing" : initTab || "dashboard");
+  const [tab, setTab] = useState(initCore ? "core" : initBundle ? "bundle" : initVendorParam ? "purchasing" : initTab || "today");
   const [showS, setShowS] = useState(false);
   const [stg, setStg] = useState(() => {
     try {
@@ -812,11 +814,16 @@ export default function App() {
       </nav>
 
       <main className="max-w-7xl mx-auto">
-        {historyStatus.loading && !data.coreInv?.length && tab !== "glossary" && tab !== "orders" && tab !== "vendors" && tab !== "performance" && (
+        {historyStatus.loading && !data.coreInv?.length && tab !== "glossary" && tab !== "orders" && tab !== "vendors" && tab !== "performance" && tab !== "classic" && (
           <SkeletonHero />
         )}
-        <div style={{ display: tab === "dashboard" ? "block" : "none" }}>
-          <ErrorBoundary label="Dashboard" compact>
+        <div style={{ display: tab === "today" ? "block" : "none" }}>
+          <ErrorBoundary label="Today's Action" compact>
+            <TodaysActionTab data={dataH} stg={stg} vendorRecs={vendorRecs} goVendor={goVendor} workflow={data.workflow} saveWorkflow={saveWorkflow} deleteWorkflow={deleteWorkflow} vendorComments={data.vendorComments} saveVendorComment={saveVendorComment} onEnterPurchasing={() => setTab("purchasing")} />
+          </ErrorBoundary>
+        </div>
+        <div style={{ display: tab === "classic" ? "block" : "none" }}>
+          <ErrorBoundary label="Classic Dashboard" compact>
             <DashboardSummary data={dataH} stg={stg} vendorRecs={vendorRecs} goVendor={goVendor} workflow={data.workflow} saveWorkflow={saveWorkflow} deleteWorkflow={deleteWorkflow} vendorComments={data.vendorComments} saveVendorComment={saveVendorComment} onEnterPurchasing={() => setTab("purchasing")} activeBundleCores={activeBundleCores} />
           </ErrorBoundary>
         </div>
