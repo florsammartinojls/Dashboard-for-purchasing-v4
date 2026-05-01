@@ -348,8 +348,10 @@ export default function SegmentsTab({ data, vendorRecs, goBundle, openWhyBuy }) 
       <div className="mb-4">
         <h2 className="text-xl font-bold text-white mb-1">Segments</h2>
         <p className="text-xs text-gray-500">
-          Auto-classified per bundle (read-only in the engine until v4 recommender ships).
-          Review-priority sort puts low-confidence + critical segments at the top.
+          Auto-classified per bundle. Review-priority sort puts low-confidence + critical segments at the top.
+        </p>
+        <p className="text-[10px] text-gray-600 mt-1">
+          Showing classification for active bundles only ({allRows.length} of {(data.bundles || []).length}). Inactive / ignored bundles are excluded.
         </p>
       </div>
 
