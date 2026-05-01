@@ -536,6 +536,9 @@ export function computeBridgeRecommendations({
       no_usa_history: recommendations.filter(r => r.flag === 'NO_USA_HISTORY'),
       bridge_too_late: recommendations.filter(r => r.flag === 'BRIDGE_TOO_LATE'),
     },
+    // Diagnostic surface — used by the "why isn't X in bridge?" search.
+    all_bundle_snapshots: allBundleSnapshots,
+    diag,
     summary,
   };
 }

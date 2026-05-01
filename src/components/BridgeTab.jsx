@@ -272,6 +272,77 @@ export default function BridgeTab({ data, stg, vendorRecs, goCore, goBundle }) {
   const [breakdown, setBreakdown] = useState(null);
   const [expanded, setExpanded] = useState(new Set());
   const [onlyViable, setOnlyViable] = useState(false);
+  const [diagQuery, setDiagQuery] = useState('');
+  const [diagResult, setDiagResult] = useState(null);
+
+  const runDiagnostic = (q) => {
+    const query = String(q || '').trim().toLowerCase();
+    if (!query) { setDiagResult(null); return; }
+    const recs = analysis.primary_recommendations || [];
+    const snaps = analysis.all_bundle_snapshots || [];
+
+    // First try exact core match in recommendations
+    const inRec = recs.find(r => (r.core_id || '').toLowerCase() === query);
+    if (inRec) {
+      setDiagResult({
+        kind: 'in-bridge',
+        coreId: inRec.core_id,
+        message: `Core ${inRec.core_id} IS in the bridge (${inRec.flag}). See row below — buy ${fmtN(inRec.pieces_to_buy)} pcs from ${inRec.usa_vendor?.name || 'USA vendor'}.`,
+      });
+      // also expand its row
+      setExpanded(prev => { const n = new Set(prev); n.add(inRec.core_id); return n; });
+      return;
+    }
+
+    // Try bundle search — find bundle snapshot
+    const bundleSnaps = snaps.filter(s => (s.bundleId || '').toLowerCase() === query);
+    if (bundleSnaps.length > 0) {
+      const ss = bundleSnaps[0];
+      const reasons = [];
+      if (ss.effDSR < 0.05) reasons.push(`Bundle has effectively zero DSR (${ss.effDSR.toFixed(3)}). The bridge tab only analyzes bundles with active demand.`);
+      if (ss.china_eta == null || ss.china_eta <= 0) reasons.push('No active China inbound for this bundle. Bridge tab only analyzes items with China shipments arriving soon.');
+      if (ss.inbound_pieces <= 0) reasons.push('China inbound count is zero — no shipment to bridge against.');
+      const td = stg.intlDoc || 180;
+      if (ss.current_DOC != null && ss.current_DOC >= td) reasons.push(`DOC is sufficient (${Math.round(ss.current_DOC)}d, target ${td}d). No bridge needed.`);
+      if (reasons.length === 0) reasons.push('Bundle was analyzed but did not match any "needs bridge" rule. Check the preventive list below.');
+      setDiagResult({
+        kind: 'bundle-not-in-bridge',
+        bundleId: ss.bundleId,
+        bundleName: ss.bundleName,
+        snapshot: ss,
+        reasons,
+      });
+      return;
+    }
+
+    // Try core ID against snapshots' bundles
+    const referencingSnaps = snaps.filter(s => {
+      const cores = s.bd?.coresUsed || [];
+      return cores.some(c => (c.coreId || '').toLowerCase() === query);
+    });
+    if (referencingSnaps.length > 0) {
+      const reasons = [];
+      const td = stg.intlDoc || 180;
+      const allCovered = referencingSnaps.every(s => s.current_DOC != null && s.current_DOC >= td);
+      const noChina = referencingSnaps.every(s => s.china_eta == null || s.china_eta <= 0);
+      if (allCovered) reasons.push(`All bundles using core ${query} have sufficient DOC. No bridge needed.`);
+      else if (noChina) reasons.push(`No China inbound for any bundle using this core.`);
+      else reasons.push(`Bundles using this core were analyzed but didn't trigger bridge — check the preventive list.`);
+      setDiagResult({
+        kind: 'core-not-in-bridge',
+        coreId: query,
+        bundlesAffected: referencingSnaps.map(s => s.bundleId),
+        reasons,
+      });
+      return;
+    }
+
+    setDiagResult({
+      kind: 'not-found',
+      query,
+      message: `No bundle or core matching "${q}" was found in the live snapshot. Check the spelling.`,
+    });
+  };
 
   const toggleRow = (id) => {
     setExpanded(prev => {
@@ -295,12 +366,77 @@ export default function BridgeTab({ data, stg, vendorRecs, goCore, goBundle }) {
           <h2 className="text-xl font-bold text-white">Bridge Tab <span className="text-xs text-blue-400 ml-2">classic bridge</span></h2>
           <p className="text-xs text-gray-500 mt-1">USA bridge buys to cover the gap until China shipments land in FBA. Pipeline = {analysis.settings_used.pipeline_days} days · {analysis.generated_at.split('T')[0]}</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 items-center">
+          <input
+            type="text"
+            value={diagQuery}
+            onChange={(e) => setDiagQuery(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') runDiagnostic(diagQuery); }}
+            placeholder="Search core/bundle to diagnose…"
+            className="bg-gray-800 border border-gray-700 text-gray-200 text-xs rounded px-3 py-1.5 w-64"
+          />
+          <button
+            onClick={() => runDiagnostic(diagQuery)}
+            className="text-xs px-3 py-1.5 rounded bg-blue-600 hover:bg-blue-500 text-white"
+          >
+            Diagnose
+          </button>
           <button onClick={() => setOnlyViable(!onlyViable)} className={`text-xs px-3 py-1.5 rounded ${onlyViable ? "bg-emerald-600 text-white" : "bg-gray-800 border border-gray-700 text-gray-400"}`}>
             {onlyViable ? "Viable only ✓" : "Show all"}
           </button>
         </div>
       </div>
+
+      {diagResult && (
+        <div className={`mb-4 rounded-lg p-3 border ${
+          diagResult.kind === 'in-bridge' ? 'bg-emerald-500/10 border-emerald-500/30' :
+          diagResult.kind === 'not-found' ? 'bg-red-500/10 border-red-500/30' :
+          'bg-amber-500/10 border-amber-500/30'
+        }`}>
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex-1">
+              <div className="text-white font-semibold text-sm mb-1">
+                Diagnostic: {diagResult.coreId || diagResult.bundleId || diagResult.query}
+                {diagResult.bundleName && <span className="text-gray-400 font-normal ml-2 text-xs">{diagResult.bundleName}</span>}
+              </div>
+              {diagResult.message && <p className="text-xs text-gray-200">{diagResult.message}</p>}
+              {diagResult.reasons && diagResult.reasons.length > 0 && (
+                <div className="text-xs text-gray-200">
+                  <p className="text-gray-300 mb-1">
+                    {diagResult.coreId
+                      ? `Core ${diagResult.coreId} is NOT a bridge candidate because:`
+                      : `Bundle ${diagResult.bundleId} is NOT a bridge candidate because:`}
+                  </p>
+                  <ul className="list-disc list-inside space-y-0.5">
+                    {diagResult.reasons.map((r, i) => <li key={i}>{r}</li>)}
+                  </ul>
+                </div>
+              )}
+              {diagResult.snapshot && (
+                <div className="mt-2 text-[11px] text-gray-400 grid grid-cols-2 gap-x-4 gap-y-0.5 max-w-md">
+                  <span>effDSR: <span className="text-white">{fmt1(diagResult.snapshot.effDSR)}</span></span>
+                  <span>Non-inbound pcs: <span className="text-white">{fmtN(diagResult.snapshot.non_inbound_pieces)}</span></span>
+                  <span>Inbound pcs: <span className="text-white">{fmtN(diagResult.snapshot.inbound_pieces)}</span></span>
+                  <span>China ETA (d): <span className="text-white">{diagResult.snapshot.china_eta ?? '—'}</span></span>
+                  <span>Current DOC: <span className="text-white">{fmtN(diagResult.snapshot.current_DOC)}</span></span>
+                </div>
+              )}
+              {diagResult.bundlesAffected && diagResult.bundlesAffected.length > 0 && (
+                <p className="text-[11px] text-gray-400 mt-1">
+                  Bundles using this core: {diagResult.bundlesAffected.slice(0, 5).map(id => (
+                    <button key={id} onClick={() => goBundle && goBundle(id)} className="font-mono text-blue-400 hover:underline mr-2">{id}</button>
+                  ))}
+                  {diagResult.bundlesAffected.length > 5 && <span className="text-gray-500">+{diagResult.bundlesAffected.length - 5} more</span>}
+                </p>
+              )}
+            </div>
+            <button
+              onClick={() => { setDiagResult(null); setDiagQuery(''); }}
+              className="text-gray-400 hover:text-white text-sm flex-shrink-0"
+            >✕</button>
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-5 gap-3 mb-5">
         <div className="bg-gray-900/60 border border-gray-800 rounded-lg p-3 text-center">
