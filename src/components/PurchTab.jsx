@@ -4,6 +4,8 @@ import { Dot, Toast, TH, SS, WorkflowChip, NumInput, SumCtx, VendorNotes, CalcBr
 import { batchProfiles, batchBundleProfiles, calcCoverageNeed, calcPurchaseFrequency, DEFAULT_PROFILE } from "../lib/seasonal";
 import { batchVendorRecommendations, calcVendorRecommendation } from "../lib/recommender";
 import { saveSnapshotIfNeeded, loadPreviousSnapshot, computeDelta } from "../lib/snapshot";
+import { SegmentCtx } from "../App";
+import { SegmentBadge } from "./SegmentsTab";
 
 // === FLAG DEFINITIONS — compact icons, text in tooltip ===
 const FLAG_DEFS = {
@@ -153,6 +155,7 @@ function DeltaModal({ vendorName, delta, onClose }) {
 }
 
 export default function PurchTab({ data, stg, vendorRecs, goCore, goBundle, goVendor, ov, setOv, initV, clearIV, saveWorkflow, deleteWorkflow, saveVendorComment, activeBundleCores }) {
+  const segCtx = useContext(SegmentCtx);
 if (!vendorRecs || !Object.keys(vendorRecs).length) vendorRecs = {};
   const initVendorFromURL = new URLSearchParams(window.location.search).get('vendor');
   const [vm, setVm] = useState(initV || initVendorFromURL ? "vendor" : "core");
@@ -870,6 +873,12 @@ const rows = priceHistoryFull
       <td className={`py-1.5 px-1 text-indigo-200 truncate max-w-[160px] sticky left-[85px] z-10 ${stickyBg}`}>
         <span className="pl-3">↳ {b.t}</span>
         {b.asin && <a href={`https://sellercentral.amazon.com/myinventory/inventory?fulfilledBy=all&page=1&pageSize=25&searchField=all&searchTerm=${b.asin}&sort=date_created_desc&status=all`} target="_blank" rel="noopener noreferrer" className="ml-1 text-gray-500 hover:text-blue-400 text-[9px] font-mono">{b.asin}</a>}
+        {(() => {
+          const segRec = segCtx.effectiveMap[b.j];
+          if (!segRec) return null;
+          if (segRec.effective === 'STABLE' && segRec.confidence === 'high') return null;
+          return <span className="ml-1"><SegmentBadge segment={segRec.segment} override={segRec.override !== segRec.segment ? segRec.override : null} small /></span>;
+        })()}
         {urgentBundle && <Flag type="OOS" />}
         {regime === 'intermittent' && <Flag type="INTERMITTENT" extraTip={regimeReason} />}
         {regime === 'new_or_sparse' && <Flag type="NEW" extraTip={regimeReason} />}

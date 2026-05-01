@@ -1,7 +1,9 @@
-import React, { useState, useMemo, useEffect } from "react";
+import React, { useState, useMemo, useEffect, useContext } from "react";
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
 import { R, D1, $, $2, P, MN, YC, TTP, gS, gY, cMo, fD } from "../lib/utils";
 import { Dot, TH, AbcBadge, HealthBadge, KillBadge, SumCtx, CopyableId } from "./Shared";
+import { SegmentCtx } from "../App";
+import { SegmentBadge, ConfidenceBadge } from "./SegmentsTab";
 
 function SC({ v, children, className }) {
   const { addCell } = React.useContext(SumCtx);
@@ -21,6 +23,8 @@ export default function BundleTab({ data, stg, hist, daily, bundleId, onBack, go
   const [abcLimit, setAbcLimit] = useState(50);
   useEffect(() => { if (bundleId) setSel(bundleId) }, [bundleId]);
 
+  const segCtx = useContext(SegmentCtx);
+  const segRec = sel ? segCtx.effectiveMap[sel] : null;
   const b = sel ? (data.bundles || []).find(x => x.j === sel) : null;
   const fee = b ? (data.fees || []).find(f => f.j === b.j) : null;
   const replen = b ? (data.replenRec || []).find(r => r.j === b.j) : null;
@@ -172,6 +176,12 @@ export default function BundleTab({ data, stg, hist, daily, bundleId, onBack, go
         <Dot status={bStatus} />
         {core && <button onClick={() => goCore(core.id)} className="text-blue-400 text-xs bg-blue-400/10 px-2 py-0.5 rounded">→{core.id}</button>}
         {bAbc && <AbcBadge grade={bAbc.profABC} />}
+        {segRec && (
+          <span className="flex items-center gap-1.5" title={segRec.reason}>
+            <SegmentBadge segment={segRec.segment} override={segRec.override !== segRec.segment ? segRec.override : null} />
+            <ConfidenceBadge confidence={segRec.confidence} />
+          </span>
+        )}
         {bTrend && <><span className="text-xs text-gray-400">Q1'26: {bTrend.q1_26 || "—"}</span><span className="text-xs text-gray-400">Trend: {bTrend.movement || "—"}</span></>}
         {bAged && bAged.fbaHealth !== "Healthy" && <span className={`text-xs font-semibold ${bAged.fbaHealth === "At Risk" ? "text-amber-400" : "text-red-400"}`}>{bAged.fbaHealth}</span>}
         {bAged && bAged.action && <span className="text-xs px-1.5 py-0.5 rounded bg-gray-700 text-gray-300">AMZ: {bAged.action}</span>}

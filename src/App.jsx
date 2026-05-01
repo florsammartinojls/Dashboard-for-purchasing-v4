@@ -12,6 +12,7 @@ import BundleTab from "./components/BundleTab";
 import OrdersTab from "./components/OrdersTab";
 import PerformanceTab from "./components/PerformanceTab";
 import BridgeTab from "./components/BridgeTab";
+import SegmentsTab from "./components/SegmentsTab";
 import { batchVendorRecommendations } from "./lib/recommender";
 import { calcPurchaseFrequency, calcBundleSeasonalProfile, DEFAULT_PROFILE } from "./lib/seasonal";
 import { buildAllIndexes } from "./lib/dataIndexes";
@@ -281,6 +282,7 @@ const TABS = [
   { id: "bridge", l: "Bridge" },
   { id: "core", l: "Core Detail" },
   { id: "bundle", l: "Bundle Detail" },
+  { id: "segments", l: "Segments" },
   { id: "orders", l: "Orders" },
   { id: "vendors", l: "Vendors" },
   { id: "performance", l: "Performance" },
@@ -799,6 +801,7 @@ export default function App() {
         {tab === "bridge" && <ErrorBoundary label="Bridge" compact><BridgeTab data={dataH} stg={stg} vendorRecs={vendorRecs} goCore={goCore} goBundle={goBundle} /></ErrorBoundary>}
         {tab === "core" && <ErrorBoundary label="Core" compact><CoreTab data={data} stg={stg} hist={{ coreInv: data.coreInv, bundleSales: data.bundleSales, priceHist: data.priceHist }} daily={{ coreDays: data.coreDays, bundleDays: data.bundleDays }} coreId={coreId} onBack={handleBackFromCore} goBundle={goBundle} /></ErrorBoundary>}
         {tab === "bundle" && <ErrorBoundary label="Bundle" compact><BundleTab data={data} stg={stg} hist={{ coreInv: data.coreInv, bundleSales: data.bundleSales, bundleInv: data.bundleInv, priceHist: data.priceHist }} daily={{ coreDays: data.coreDays, bundleDays: data.bundleDays }} bundleId={bundleId} onBack={handleBackFromBundle} goCore={goCore} /></ErrorBoundary>}
+        {tab === "segments" && <ErrorBoundary label="Segments" compact><SegmentsTab data={data} vendorRecs={vendorRecs} goBundle={goBundle} /></ErrorBoundary>}
         {tab === "orders" && <ErrorBoundary label="Orders" compact><OrdersTab data={data} /></ErrorBoundary>}
         {tab === "vendors" && <ErrorBoundary label="Vendors" compact><VendorsTab data={data} stg={stg} goVendor={goVendor} workflow={data.workflow} saveWorkflow={saveWorkflow} deleteWorkflow={deleteWorkflow} vendorComments={data.vendorComments} saveVendorComment={saveVendorComment} /></ErrorBoundary>}
         {tab === "performance" && <ErrorBoundary label="Performance" compact><PerformanceTab /></ErrorBoundary>}
