@@ -19,7 +19,7 @@ import { batchVendorRecommendationsV4 } from "./lib/recommenderV4";
 import { calcPurchaseFrequency, calcBundleSeasonalProfile, DEFAULT_PROFILE } from "./lib/seasonal";
 import { buildAllIndexes } from "./lib/dataIndexes";
 import { batchClassifySegments } from "./lib/segmentClassifier";
-import { loadOverrides, buildEffectiveMap, setOverride as setSegmentOverridePersist } from "./lib/segments";
+import { loadOverrides, buildEffectiveMap, setOverride as setSegmentOverridePersist, bulkSetOverrides as bulkSetOverridesPersist, clearAllOverrides as clearAllOverridesPersist, fromRemoteRows, isMigrated, markMigrated, loadLocalOnly } from "./lib/segments";
 import { useVendorRecsWorker } from "./hooks/useVendorRecsWorker";
 
 const DEV = import.meta.env.DEV;
@@ -621,17 +621,91 @@ export default function App() {
     return out;
   }, [data.bundles, data.bundleDaysForecast, data.bundleDays, data.bundleSales]);
 
+  // Remote rows from data.segmentOverrides (Apps Script may or may
+  // not be sending them yet — the loader handles both cases).
   const [overrides, setOverrides] = useState(() => {
     try { return loadOverrides(); } catch { return {}; }
   });
-  const refreshOverrides = useCallback(() => {
-    try { setOverrides(loadOverrides()); } catch {}
-  }, []);
-  const segmentSetOverride = useCallback((bundleId, segment) => {
-    if (!bundleId) return;
-    setSegmentOverridePersist(bundleId, segment);
+  const [overrideMeta, setOverrideMeta] = useState({}); // bid -> { updatedBy, updatedAt, reason }
+
+  // Re-merge whenever the live snapshot changes
+  useEffect(() => {
+    const remote = data.segmentOverrides;
+    if (Array.isArray(remote)) {
+      const { map, meta } = fromRemoteRows(remote);
+      // Only adopt remote when it has data; otherwise keep local fallback
+      if (Object.keys(map).length > 0) {
+        setOverrides(loadOverrides({ remote }));
+        setOverrideMeta(meta);
+        return;
+      }
+    }
     setOverrides(loadOverrides());
-  }, []);
+    setOverrideMeta({});
+  }, [data.segmentOverrides]);
+
+  // One-time migration prompt: local has overrides, remote is empty,
+  // not yet migrated → ask the user. After they decide we mark migrated.
+  useEffect(() => {
+    if (isMigrated()) return;
+    const local = loadLocalOnly();
+    const remote = data.segmentOverrides;
+    if (Object.keys(local).length === 0) { markMigrated(); return; }
+    // Only prompt once we know the live snapshot is loaded (remote can
+    // be undefined while loading; an empty array means "loaded, no rows").
+    if (!Array.isArray(remote)) return;
+    if (remote.length > 0) { markMigrated(); return; }
+    // local has data, remote is empty → prompt
+    const n = Object.keys(local).length;
+    const proceed = window.confirm(
+      `${n} local segment overrides found. Migrate them to the shared backend so other buyers see them?\n\nClick OK to push them, Cancel to keep them local-only.`
+    );
+    if (proceed) {
+      (async () => {
+        for (const [bid, seg] of Object.entries(local)) {
+          try {
+            await apiPost({
+              action: 'saveSegmentOverride',
+              bundleId: bid,
+              segment: seg,
+              updatedBy: stg.buyer || '',
+              reason: 'migrated from local',
+            });
+          } catch (e) {
+            if (DEV) console.warn('migration push failed', bid, e?.message);
+          }
+        }
+        alert(`Pushed ${n} overrides to the backend. They'll appear for other buyers on their next live refresh.`);
+        markMigrated();
+      })();
+    } else {
+      markMigrated();
+    }
+  }, [data.segmentOverrides, stg.buyer]);
+
+  const refreshOverrides = useCallback(() => {
+    try { setOverrides(loadOverrides({ remote: data.segmentOverrides })); } catch {}
+  }, [data.segmentOverrides]);
+
+  const segmentSetOverride = useCallback((bundleId, segment, reason) => {
+    if (!bundleId) return;
+    setSegmentOverridePersist(bundleId, segment, {
+      apiPost,
+      buyer: stg.buyer || '',
+      reason: reason || '',
+    });
+    setOverrides(loadOverrides());
+  }, [stg.buyer]);
+
+  const segmentBulkSet = useCallback((updates, reason) => {
+    bulkSetOverridesPersist(updates, { apiPost, buyer: stg.buyer || '', reason: reason || '' });
+    setOverrides(loadOverrides());
+  }, [stg.buyer]);
+
+  const segmentClearAll = useCallback(() => {
+    clearAllOverridesPersist({ apiPost, buyer: stg.buyer || '' });
+    setOverrides(loadOverrides());
+  }, [stg.buyer]);
 
   const effectiveSegmentMap = useMemo(
     () => buildEffectiveMap(autoSegmentMap, overrides),
@@ -641,10 +715,13 @@ export default function App() {
   const segmentCtxValue = useMemo(() => ({
     autoMap: autoSegmentMap,
     overrides,
+    overrideMeta,
     effectiveMap: effectiveSegmentMap,
     setOverride: segmentSetOverride,
+    bulkSet: segmentBulkSet,
+    clearAll: segmentClearAll,
     refreshOverrides,
-  }), [autoSegmentMap, overrides, effectiveSegmentMap, segmentSetOverride, refreshOverrides]);
+  }), [autoSegmentMap, overrides, overrideMeta, effectiveSegmentMap, segmentSetOverride, segmentBulkSet, segmentClearAll, refreshOverrides]);
 
   const [whyBuyAnchor, setWhyBuyAnchor] = useState(null);
   const openWhyBuy = useCallback((anchor) => setWhyBuyAnchor(anchor || null), []);

@@ -22,8 +22,6 @@ import {
 import {
   exportOverrides,
   importOverrides,
-  clearAllOverrides,
-  bulkSetOverrides,
 } from "../lib/segments";
 
 const ROW_HEIGHT = 44;
@@ -92,7 +90,7 @@ export function ConfidenceBadge({ confidence }) {
 }
 
 export default function SegmentsTab({ data, vendorRecs, goBundle, openWhyBuy }) {
-  const { autoMap, overrides, effectiveMap, setOverride, refreshOverrides } = useContext(SegmentCtx);
+  const { autoMap, overrides, overrideMeta = {}, effectiveMap, setOverride, bulkSet, clearAll, refreshOverrides } = useContext(SegmentCtx);
 
   const [search, setSearch] = useState('');
   const [filterSegment, setFilterSegment] = useState('');
@@ -285,7 +283,7 @@ export default function SegmentsTab({ data, vendorRecs, goBundle, openWhyBuy }) 
     if (selectedIds.size === 0) return;
     const updates = {};
     for (const id of selectedIds) updates[id] = segment;
-    bulkSetOverrides(updates);
+    bulkSet(updates);
     refreshOverrides();
     clearSelection();
   };
@@ -293,7 +291,7 @@ export default function SegmentsTab({ data, vendorRecs, goBundle, openWhyBuy }) 
     if (selectedIds.size === 0) return;
     const updates = {};
     for (const id of selectedIds) updates[id] = null;
-    bulkSetOverrides(updates);
+    bulkSet(updates);
     refreshOverrides();
     clearSelection();
   };
@@ -339,8 +337,8 @@ export default function SegmentsTab({ data, vendorRecs, goBundle, openWhyBuy }) 
     e.target.value = '';
   };
   const handleResetAll = () => {
-    if (!confirm('Reset ALL segment overrides? This will leave every bundle on its auto classification.')) return;
-    clearAllOverrides();
+    if (!confirm('Reset ALL segment overrides? This will leave every bundle on its auto classification. This is shared across buyers.')) return;
+    clearAll();
     refreshOverrides();
     clearSelection();
   };
@@ -501,14 +499,24 @@ export default function SegmentsTab({ data, vendorRecs, goBundle, openWhyBuy }) 
               <span className="flex items-center gap-1.5 truncate" title={r.reason}>
                 <SegmentBadge segment={r.autoSegment} override={r.override !== r.autoSegment ? r.override : null} small />
               </span>
-              <select
-                value={r.override || ''}
-                onChange={e => setOverride(r.bundleId, e.target.value || null)}
-                className="bg-gray-800 border border-gray-700 text-gray-200 rounded px-1.5 py-0.5 text-[11px]"
-              >
-                <option value="">(auto)</option>
-                {SEGMENTS.map(seg => <option key={seg} value={seg}>{SEGMENT_LABELS[seg]}</option>)}
-              </select>
+              <span className="flex flex-col gap-0.5">
+                <select
+                  value={r.override || ''}
+                  onChange={e => setOverride(r.bundleId, e.target.value || null)}
+                  className="bg-gray-800 border border-gray-700 text-gray-200 rounded px-1.5 py-0.5 text-[11px]"
+                >
+                  <option value="">(auto)</option>
+                  {SEGMENTS.map(seg => <option key={seg} value={seg}>{SEGMENT_LABELS[seg]}</option>)}
+                </select>
+                {r.override && overrideMeta[r.bundleId]?.updatedBy && (
+                  <span
+                    className="text-[9px] text-gray-500 truncate"
+                    title={`${overrideMeta[r.bundleId].updatedBy}${overrideMeta[r.bundleId].updatedAt ? ' · ' + overrideMeta[r.bundleId].updatedAt.slice(0, 10) : ''}${overrideMeta[r.bundleId].reason ? ' · ' + overrideMeta[r.bundleId].reason : ''}`}
+                  >
+                    by {overrideMeta[r.bundleId].updatedBy}
+                  </span>
+                )}
+              </span>
               <span className="text-right text-gray-300 font-mono">{fmt1(r.dsr)}</span>
               <span className="text-gray-400">{r.abc || '—'}</span>
               <ConfidenceBadge confidence={r.confidence} />
