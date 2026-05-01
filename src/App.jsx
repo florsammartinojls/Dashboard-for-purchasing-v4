@@ -220,6 +220,39 @@ const DEFAULT_GL = [
   { term: "Why is buyNeed 0 even when DOC < target?", desc: "Either (1) the waterfall already filled coverage from raw on-hand, or (2) the core sanity check zeroed it (core has independent DOC > 1.2× target). Open Calc Breakdown 📊 to verify." },
   { term: "Why is the forecast much higher than my gut?", desc: "Check the regime badge. If continuous, look at fromTrend in demandBreakdown — runaway trend gets capped but can still be aggressive. If no badge, but recently shifted, check 'recentRegimeApplied' in flags — you may want to manually override." },
   { term: "Bridge tab shows no recommendations?", desc: "Either no bundles have a gap (China shipments cover demand), or the bridge data isn't being detected. Check that bundles have China inbound info (inboundPieces + daysBeforeArrival) — the tab only analyzes bundles with active China shipments. Preventive bridge candidates appear in the 'Other actions' section below." },
+
+  // ─── BLOCK 14: V4 ENGINE — segments ───────────────────────────
+  { term: "—— V4 ENGINE: SEGMENTS ——", desc: "" },
+  { term: "v4: Why we replaced the v3 single formula", desc: "v3 used one continuous formula for every bundle (avg 60d × seasonal damp + Holt-style level). It worked OK for STABLE items but underestimated SEASONAL_PEAKED bundles in off-season (the 60-day average pulled in low months) and dampened real growth on GROWING items. v4 splits the catalog into 7 segments and dispatches a different formula per segment. Same engine for all bundles → wrong answers; different engines per archetype → right answers, more cleanly auditable." },
+  { term: "v4: Segment STABLE", desc: "Definition: low CV (<0.25), no significant trend, not seasonal. Formula: level = mean(last 60d). Coverage = level × targetDoc + Z·σ_LT. Trend ignored. Light seasonal damp (0.3) — enough to pick up mild monthly bias but not amplify noise. Example: 5 u/day flat for 6 months, ABC=B, target 90d → coverage ≈ 5×90 + 0×σ ≈ 450 u. ~40-50% of catalog typically falls here." },
+  { term: "v4: Segment SEASONAL_PEAKED", desc: "Definition: top-3-month-share > 50% of yearly volume AND seasonality index > 1.5. Formula: per-month forward projection — for each future month M in the horizon, level_M = avg(M-1, M, M+1 LAST YEAR) × growthFactor (current 60d / last-year same period, clamped 0.7-1.5). DAMP scales with proximity to the peak (0.9 within 60d, 0.7 within 120d, 0.5 beyond). Service-level Z bumped to 99% (Z=2.33) when within 60d of the detected peak. Critical for Q4: in May, for an Oct-Dec horizon, the formula reads last year's Oct-Dec actuals × growth — NOT this year's April-June average. ~5-15% of catalog. The big v4 win." },
+  { term: "v4: Segment GROWING", desc: "Definition: trendRatio > 1.4 (last 90d / prior 90d) AND recent activity > 70%. Formula: level = mean(last 30d) — more reactive than 60d. Trend = (recent30 − prev30)/30, capped to [0, +0.5%·level/day]. DAMP 0.5. Safety stock × 1.2 (higher uncertainty). The cap exists so the engine never extrapolates wild growth. Example: bundle going 4 → 10 over 6 months → level ~9-10, trend +0.05/day capped, coverage stretches above flat." },
+  { term: "v4: Segment DECLINING", desc: "Definition: trendRatio < 0.7 (last 90d ≤ 70% of prior 90d). Formula: level = mean(last 60d). Trend = (recent30 − prev30)/30, capped to [-1%·level/day, 0] (never positive). DAMP 0.5. Safety stock × 0.8 (lower buffer — it is declining, no reason to oversaving). Coverage shrinks faster than flat as we project forward." },
+  { term: "v4: Segment INTERMITTENT", desc: "Definition: zero-day ratio ≥ 50%. Formula: rate = totalUnits365 / totalDays365 (zeros included). Coverage = rate × targetDoc + avgWhenSelling (1 average sale of cushion). No Z·σ — the noise is structural. Crucial fix: the v3 path filtered out zero days and overstated demand for sporadic items. INTERMITTENT MOQ status: if MOQ inflates need >2x, the core gets flagged 'inflated_excess' (recommend wait)." },
+  { term: "v4: Segment NEW_OR_SPARSE", desc: "Definition: < 30 days of history. Formula: level = min(sheetDsr, 1.0) — conservative cap. Coverage = level × targetDoc. No safety stock (no σ to estimate). UI shows badge prominently: 'NEW — review manually'. Don't trust the auto number." },
+  { term: "v4: Segment DORMANT_REVIVED", desc: "Definition: historical activity < 30% AND recent activity > 50% (or inverse — going dormant). Formula: level = mean(last 30d) only — ignore older history because it's misleading. DAMP 0.3. Safety × 1.5 (high uncertainty about whether this revival is real)." },
+  { term: "v4: Segment override", desc: "Each bundle's auto segment can be overridden in the Segments tab via the dropdown. Overrides live in localStorage (key fba_segment_overrides_v1) and persist across reloads. They take precedence over the auto classification. Reset to auto by selecting '(auto)' in the dropdown. Bulk: select multiple rows in Segments tab and use the bulk action menu." },
+  { term: "v4: Confidence (high/medium/low)", desc: "Reflects how clearly the bundle's features fall inside the rule that classified it. high = features are well inside the rule's bounds. medium = near a boundary. low = <60d of history OR contradicting signals (e.g. high CV but no clear peak). Low-confidence + critical segments are surfaced first in the Segments tab so the user can review them quickly." },
+
+  // ─── BLOCK 15: V4 ENGINE — parameters (hardcoded) ─────────────
+  { term: "—— V4 PARAMETERS ——", desc: "" },
+  { term: "v4 param: SEASONAL_PEAKED damp values", desc: "Three damp tiers based on days-to-peak. dampNear=0.9 (≤60d to peak), dampMid=0.7 (≤120d), dampFar=0.5 (>120d). HIGHER damp = more seasonal lift. Lower damp = closer to flat. Tuning up amplifies peak more aggressively (more inventory near peak, more risk of post-peak excess). Tuning down is safer but may underbuy. File: src/lib/forecastV4.js → DEFAULTS.seasonalPeakedDampNear/Mid/Far." },
+  { term: "v4 param: SEASONAL_PEAKED service-level bump", desc: "When within seasonalPeakedDistanceNear (default 60d) of the peak, ABC=A bundles' service level jumps from 97% to 99% (Z 1.88 → 2.33). Effect: ~24% more safety stock during the critical window. Lower the bump if you're seeing post-peak excess; raise the distance if peaks are arriving earlier than expected. File: src/lib/forecastV4.js → DEFAULTS.seasonalPeakedServiceNearPeak / seasonalPeakedDistanceNear." },
+  { term: "v4 param: GROWING trend cap", desc: "growingMaxPositiveTrend = 0.005 → max +0.5%·level/day. Effect: even a steeply growing bundle won't extrapolate more than 0.5% per day. Tuning up lets the engine bet harder on growth (more inventory, more risk if growth stalls). File: src/lib/forecastV4.js → DEFAULTS.growingMaxPositiveTrend." },
+  { term: "v4 param: DECLINING trend cap", desc: "decliningMaxNegativeTrend = 0.01 → max −1%·level/day. Mirror of GROWING. Cap on how aggressively coverage shrinks." },
+  { term: "v4 param: Safety multipliers per segment", desc: "growingSafetyMultiplier = 1.2 (higher uncertainty when growing). decliningSafetyMultiplier = 0.8 (less buffer needed). dormantSafetyMultiplier = 1.5 (revival is volatile). All applied on top of Z·σ_LT. File: src/lib/forecastV4.js → DEFAULTS.*SafetyMultiplier." },
+  { term: "v4 param: NEW_OR_SPARSE DSR cap", desc: "newSparseDsrCap = 1.0 u/day. Caps the sheet-DSR fallback so the engine cannot recommend more than 1×targetDoc for a bundle with <30 days of data. Prevents spike-driven overbuy on freshly listed items. File: src/lib/forecastV4.js → DEFAULTS.newSparseDsrCap." },
+  { term: "v4 param: INTERMITTENT MOQ inflate limit", desc: "INTERMITTENT_MOQ_INFLATE_LIMIT = 2.0 (in src/lib/recommenderV4.js). When the MOQ would force buying more than 2× the real intermittent need, the core gets the 'intermittentExcess' flag — UI surfaces it as a red badge. Default decision: wait for accumulated demand. Tune up if you accept more excess for fewer trips." },
+  { term: "v4 param: STABLE damp", desc: "stableDamp = 0.3. Light seasonal smoothing; we don't aggressively follow the shape on STABLE bundles since by definition they don't have strong seasonality. File: src/lib/forecastV4.js → DEFAULTS.stableDamp." },
+  { term: "v4 param: Service level → Z table", desc: "{90:1.28, 91:1.34, 92:1.41, 93:1.48, 94:1.55, 95:1.65, 96:1.75, 97:1.88, 98:2.05, 99:2.33, 99.5:2.58, 99.9:3.09}. Z is the multiplier on σ_LT used for safety stock. File: src/lib/forecastV4.js → SERVICE_LEVEL_TO_Z. Linear interpolation when an exact match is not found." },
+  { term: "v4 param: serviceLevelA / serviceLevelOther", desc: "User-tunable in Settings. Default A=97%, others=95%. The only segment-related knobs surfaced in Settings UI by design — the rest live in code so the user can't accidentally break the engine through a typo." },
+
+  // ─── BLOCK 16: V4 — operational notes ─────────────────────────
+  { term: "—— V4 OPERATIONS ——", desc: "" },
+  { term: "v4: Why Buy panel = single source of truth", desc: "Every recommended quantity in the app can be traced through the Why Buy panel (📊 button on any row) to: (1) the bundle's segment + reason, (2) the formula's plain-English reasoning lines, (3) a per-month projection table, (4) safety-stock math, (5) waterfall-derived inventory available, (6) the buyNeed equation, (7) MOQ adjustment if any. The panel never recomputes — it renders what the engine already said. If the panel disagrees with the row, the engine is the source of truth and there is a UI bug." },
+  { term: "v4: Web Worker", desc: "batchVendorRecommendationsV4 runs in a Web Worker (src/workers/recommender.worker.js). Reused across input changes; debounced 300ms. While calculating, the previous result stays visible (no flicker) and the header shows 'calc N%'. Falls back to a synchronous main-thread run if the worker fails to spawn (e.g. blocked by the browser)." },
+  { term: "v4: Segment override storage", desc: "localStorage key 'fba_segment_overrides_v1', shape { [bundleId]: 'SEGMENT' }. Initial seed loaded from src/data/segment_overrides_seed.json on first run only (key 'fba_segment_overrides_v1_seeded' tracks that). Export from Segments tab → 'Export overrides JSON' (download) or 'Export to seed file' (clipboard, for pasting into the JSON file)." },
+  { term: "v4: Engine kill switch", desc: "Settings → Segmentation enabled. Toggle off and every bundle is treated as STABLE (segment-aware formulas bypassed). Use only as emergency fallback if the engine is producing clearly bad numbers and you need to ship POs immediately." },
 ];
 
 function GlossTab() {
@@ -314,15 +347,13 @@ const DEFAULT_SETTINGS = {
   moqInflationThreshold: 1.5,
   moqExtraDocThreshold: 30,
   fA: "yes", fI: "blank", fV: "yes",
-  holtAlpha: 0.2,
-  holtBeta: 0.1,
-  hampelWindow: 7,
-  hampelThreshold: 3,
+  // V4 engine kill switch — when false, every bundle collapses
+  // to STABLE (the segment-aware formulas are bypassed).
+  segmentationEnabled: true,
   serviceLevelA: 97,
   serviceLevelOther: 95,
   inventoryAnomalyMultiplier: 3,
   anomalyLookbackDays: 7,
-  baseWindowDays: 60,
   pipeline_days: 25,
 };
 

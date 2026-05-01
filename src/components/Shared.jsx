@@ -93,24 +93,38 @@ export function Stg({ s, setS, onClose }) {
           <div><label className="text-sm text-gray-400 block mb-1" title="Floor DOC for replen waterfall (Phase 1 minimum)">Replen Floor</label><input type="number" value={l.replenFloorDoc || 80} onChange={e => setL({ ...l, replenFloorDoc: +e.target.value })} className="bg-gray-800 border border-gray-600 text-white rounded px-3 py-2 w-full" /></div>
         </div>
 
-        {/* ─── v3 FORECASTING ENGINE ─── */}
+        {/* ─── v4 FORECASTING ENGINE ─── */}
         <div className="border-t border-gray-700 pt-4">
-          <h3 className="text-sm font-semibold text-emerald-400 mb-1">v3 Forecasting Engine</h3>
-          <p className="text-[10px] text-gray-500 mb-3">Industry-standard: Hampel filter → Holt linear → Z × σ_LT safety stock.</p>
+          <h3 className="text-sm font-semibold text-emerald-400 mb-1">v4 Forecasting Engine</h3>
+          <p className="text-[10px] text-gray-500 mb-3">7-segment dispatch (STABLE / SEASONAL_PEAKED / GROWING / DECLINING / INTERMITTENT / NEW_OR_SPARSE / DORMANT_REVIVED). Damp values, distance thresholds, segment safety multipliers and trend caps live in code — see Glossary "v4 Parameters" for what each one does and where to find it.</p>
 
-          <div className="grid grid-cols-2 gap-3 mb-3">
+          <div className="flex items-center gap-3 mb-3">
+            <input
+              type="checkbox"
+              id="segmentationEnabled"
+              checked={l.segmentationEnabled !== false}
+              onChange={e => setL({ ...l, segmentationEnabled: e.target.checked })}
+              className="accent-emerald-500"
+            />
+            <label htmlFor="segmentationEnabled" className="text-sm text-gray-300">
+              Segmentation enabled
+              <span className="text-[10px] text-gray-500 ml-2">(emergency off → every bundle treated as STABLE)</span>
+            </label>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-sm text-gray-400 block mb-1" title="Service level for ABC-class A bundles (top revenue/profit). Higher = less chance of stockout but more capital tied up. Default 97% (Z=1.88).">
+              <label className="text-sm text-gray-400 block mb-1" title="Service level for ABC-class A bundles. Default 97% (Z=1.88). Bumped to 99% near a SEASONAL_PEAKED peak.">
                 Service Level — A bundles
               </label>
               <div className="flex gap-2">
                 <input type="number" step="0.5" min="85" max="99.9" value={l.serviceLevelA ?? 97} onChange={e => setL({ ...l, serviceLevelA: +e.target.value })} className="bg-gray-800 border border-gray-600 text-white rounded px-3 py-2 w-full" />
                 <span className="text-gray-500 text-xs self-center">%</span>
               </div>
-              <p className="text-[10px] text-gray-500 mt-1">Default 97% · Z≈1.88</p>
+              <p className="text-[10px] text-gray-500 mt-1">Default 97% · Z≈1.88. Bumped to 99% near a peak.</p>
             </div>
             <div>
-              <label className="text-sm text-gray-400 block mb-1" title="Service level for all non-A bundles (B, C, unclassified). Default 95% (Z=1.65).">
+              <label className="text-sm text-gray-400 block mb-1" title="Service level for all non-A bundles. Default 95% (Z=1.65).">
                 Service Level — B/C/other
               </label>
               <div className="flex gap-2">
@@ -118,40 +132,6 @@ export function Stg({ s, setS, onClose }) {
                 <span className="text-gray-500 text-xs self-center">%</span>
               </div>
               <p className="text-[10px] text-gray-500 mt-1">Default 95% · Z≈1.65</p>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3 mb-3">
-            <div>
-              <label className="text-sm text-gray-400 block mb-1" title="Holt α: how quickly the level adapts to new data. 0 = never changes (trusts history). 1 = ignores history (jumpy). Default 0.2 — conservative, industry-standard for daily sales.">
-                Holt α (level)
-              </label>
-              <input type="number" step="0.05" min="0.05" max="0.9" value={l.holtAlpha ?? 0.2} onChange={e => setL({ ...l, holtAlpha: +e.target.value })} className="bg-gray-800 border border-gray-600 text-white rounded px-3 py-2 w-full" />
-              <p className="text-[10px] text-gray-500 mt-1">Default 0.2 · lower = smoother</p>
-            </div>
-            <div>
-              <label className="text-sm text-gray-400 block mb-1" title="Holt β: how quickly the trend adapts. Lower = more stable trend. Default 0.1.">
-                Holt β (trend)
-              </label>
-              <input type="number" step="0.05" min="0.05" max="0.9" value={l.holtBeta ?? 0.1} onChange={e => setL({ ...l, holtBeta: +e.target.value })} className="bg-gray-800 border border-gray-600 text-white rounded px-3 py-2 w-full" />
-              <p className="text-[10px] text-gray-500 mt-1">Default 0.1 · lower = smoother trend</p>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-sm text-gray-400 block mb-1" title="Hampel filter window (days to each side). Detects outliers by comparing each day to its neighbors. Default 7 (14-day total window).">
-                Hampel Window (±days)
-              </label>
-              <input type="number" step="1" min="3" max="14" value={l.hampelWindow ?? 7} onChange={e => setL({ ...l, hampelWindow: +e.target.value })} className="bg-gray-800 border border-gray-600 text-white rounded px-3 py-2 w-full" />
-              <p className="text-[10px] text-gray-500 mt-1">Default 7 · wider = fewer outliers caught</p>
-            </div>
-            <div>
-              <label className="text-sm text-gray-400 block mb-1" title="Hampel threshold in MAD units. 3 is standard. Lower = aggressive outlier removal.">
-                Hampel Threshold (×MAD)
-              </label>
-              <input type="number" step="0.5" min="1" max="6" value={l.hampelThreshold ?? 3} onChange={e => setL({ ...l, hampelThreshold: +e.target.value })} className="bg-gray-800 border border-gray-600 text-white rounded px-3 py-2 w-full" />
-              <p className="text-[10px] text-gray-500 mt-1">Default 3 · lower = stricter</p>
             </div>
           </div>
         </div>
