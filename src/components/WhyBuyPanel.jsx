@@ -194,12 +194,44 @@ function BundleAuditCard({ bundle, segRec, vendor, vendorRec }) {
             <span className="text-gray-300">max(0, {fmt0(total)} − {fmt0(totalAvail)}) = {fmt0(buyNeed)} u</span>
           </li>
 
+          {bundle.buyModeReason && (
+            <li>
+              <b>Buy mode.</b>{' '}
+              <span className="text-gray-300">
+                {bundle.buyMode}
+                {' — '}
+                {bundle.buyModeReason === 'bundle-history' && 'this exact bundle has receiving history with the vendor as a finished bundle'}
+                {bundle.buyModeReason === 'vendor-fallback' && 'no bundle-specific history, but the vendor has historically delivered other bundles as finished — treating as bundle vendor'}
+                {bundle.buyModeReason === 'core-default' && 'no evidence the vendor ships finished bundles → buy as raw cores and assemble in-house'}
+                {bundle.buyModeReason === 'force-bundles' && 'forced by user (Force Bundles)'}
+                {bundle.buyModeReason === 'force-cores' && 'forced by user (Force Cores)'}
+              </span>
+            </li>
+          )}
+
           {bundle.bundleMoqStatus && bundle.bundleMoqStatus !== 'meets_moq' && (
             <li>
               <b>Bundle MOQ adjustment.</b>{' '}
               <span className="text-gray-300">
-                {bundle.bundleMoqOriginalNeed} → {bundle.buyNeed} ({bundle.bundleMoqStatus.replace('_', ' ')}, +{bundle.bundleMoqExtraDOC}d)
+                {bundle.bundleMoqOriginalNeed} → {bundle.buyNeed} ({bundle.bundleMoqStatus.replace(/_/g, ' ')}, +{bundle.bundleMoqExtraDOC}d)
               </span>
+              {bundle.bundleMoqOptions && (
+                <div className="ml-5 mt-1 text-[11px] text-gray-300 space-y-1">
+                  <div className="text-amber-300">Need ({fmt0(bundle.bundleMoqOriginalNeed)}) is below the bundle MOQ. Three options — recommender does NOT pick one automatically:</div>
+                  <div className="bg-gray-900/60 border border-gray-800 rounded px-2 py-1">
+                    <b className="text-emerald-300">(a) Buy MOQ anyway:</b>{' '}
+                    qty {fmt0(bundle.bundleMoqOptions.a_buyMoq?.qty)}, adds ~{bundle.bundleMoqOptions.a_buyMoq?.extraDOC}d of extra cover.
+                  </div>
+                  <div className="bg-gray-900/60 border border-gray-800 rounded px-2 py-1">
+                    <b className="text-blue-300">(b) Switch to core mode:</b>{' '}
+                    use Force Cores in the Purchasing tab — buys the components as raw and assembles in-house.
+                  </div>
+                  <div className="bg-gray-900/60 border border-gray-800 rounded px-2 py-1">
+                    <b className="text-purple-300">(c) Throttle demand:</b>{' '}
+                    raise the Amazon price for this bundle until demand catches up. Gap: {fmt0(bundle.bundleMoqOptions.c_throttle?.gapUnits)} units.
+                  </div>
+                </div>
+              )}
             </li>
           )}
         </ol>

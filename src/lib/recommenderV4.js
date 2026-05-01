@@ -125,17 +125,45 @@ function isActiveBundle(b, settings) {
 function bundleBelongsToVendor(b, vendorName) {
   return (b.vendors || '').indexOf(vendorName) >= 0;
 }
-function canBuyAsBundle(b, vendor, receivingFull) {
-  if (!Array.isArray(receivingFull) || !vendor?.name) return false;
+// Returns one of:
+//   { buyMode: 'bundle', reason: 'bundle-history' }
+//      this exact bundle has been delivered as bundle by this vendor
+//   { buyMode: 'bundle', reason: 'vendor-fallback' }
+//      no bundle-specific history, but the vendor has delivered SOME
+//      bundle (any JLS-prefixed ID) — treat them as a bundle vendor
+//   { buyMode: 'core', reason: 'core-default' }
+//      neither rule fired
+function getBuyModeForBundle(b, vendor, receivingFull) {
+  if (!Array.isArray(receivingFull) || !vendor?.name) {
+    return { buyMode: 'core', reason: 'core-default' };
+  }
   const v = vendor.name.toLowerCase().trim();
   const bid = (b.j || '').toLowerCase().trim();
+  let vendorEverDeliveredABundle = false;
   for (const r of receivingFull) {
     if (!r) continue;
     const rv = (r.vendor || '').toLowerCase().trim();
+    if (rv !== v) continue;
     const rc = (r.core || '').toLowerCase().trim();
-    if (rv === v && rc === bid) return true;
+    if (rc === bid) {
+      // Strict: this exact bundle was delivered as a bundle
+      return { buyMode: 'bundle', reason: 'bundle-history' };
+    }
+    // Bundle-vendor signal: any JLS-prefixed ID counts as evidence
+    // that the vendor ships finished bundles.
+    if (/^jls/i.test(r.core || '')) {
+      vendorEverDeliveredABundle = true;
+    }
   }
-  return false;
+  if (vendorEverDeliveredABundle) {
+    return { buyMode: 'bundle', reason: 'vendor-fallback' };
+  }
+  return { buyMode: 'core', reason: 'core-default' };
+}
+
+// Legacy boolean shim for any caller that doesn't need the reason.
+function canBuyAsBundle(b, vendor, receivingFull) {
+  return getBuyModeForBundle(b, vendor, receivingFull).buyMode === 'bundle';
 }
 function isSpikeVisual(b, threshold) {
   const cd = num(b.cd);
@@ -388,11 +416,19 @@ export function calcVendorRecommendationV4({
     b.urgent = (total - b.ltDemand) < 0;
   }
 
-  // buy mode
+  // buy mode (with reason exposed for the Why Buy panel)
   for (const b of prepped) {
-    if (forceMode === 'bundles') b.buyMode = 'bundle';
-    else if (forceMode === 'cores') b.buyMode = 'core';
-    else b.buyMode = canBuyAsBundle(b.raw, vendor, receivingFull) ? 'bundle' : 'core';
+    if (forceMode === 'bundles') {
+      b.buyMode = 'bundle';
+      b.buyModeReason = 'force-bundles';
+    } else if (forceMode === 'cores') {
+      b.buyMode = 'core';
+      b.buyModeReason = 'force-cores';
+    } else {
+      const decision = getBuyModeForBundle(b.raw, vendor, receivingFull);
+      b.buyMode = decision.buyMode;
+      b.buyModeReason = decision.reason;
+    }
   }
 
   // bundle MOQ override
@@ -574,6 +610,7 @@ export function calcVendorRecommendationV4({
     ltDemand: Math.round(b.ltDemand),
     buyNeed: b.buyNeed,
     buyMode: b.buyMode,
+    buyModeReason: b.buyModeReason || null,
     urgent: b.urgent,
     coresUsed: b.coresUsed,
     bundleMoqStatus: b.bundleMoqStatus || null,
