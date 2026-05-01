@@ -1,10 +1,10 @@
 import React, { useState, useMemo, useCallback, useEffect, useContext, useRef, Fragment } from "react";
 import { R, D1, $, $2, $4, P, gS, cAI, cNQ, cOQ, cDA, bNQ, isD, gTD, dc, cSeas, fSl, fMY, fE, fDateUS, effectiveDSR, roundToCasePack, genPO, genRFQ, cp7f, cp7g } from "../lib/utils";
-import { Dot, Toast, TH, SS, WorkflowChip, NumInput, SumCtx, VendorNotes, CalcBreakdownV2 } from "./Shared";
+import { Dot, Toast, TH, SS, WorkflowChip, NumInput, SumCtx, VendorNotes } from "./Shared";
 import { batchProfiles, batchBundleProfiles, calcCoverageNeed, calcPurchaseFrequency, DEFAULT_PROFILE } from "../lib/seasonal";
 import { batchVendorRecommendationsV4, calcVendorRecommendationV4 } from "../lib/recommenderV4";
 import { saveSnapshotIfNeeded, loadPreviousSnapshot, computeDelta } from "../lib/snapshot";
-import { SegmentCtx } from "../App";
+import { SegmentCtx, WhyBuyCtx } from "../App";
 import { SegmentBadge } from "./SegmentsTab";
 
 // === FLAG DEFINITIONS — compact icons, text in tooltip ===
@@ -156,6 +156,7 @@ function DeltaModal({ vendorName, delta, onClose }) {
 
 export default function PurchTab({ data, stg, vendorRecs, goCore, goBundle, goVendor, ov, setOv, initV, clearIV, saveWorkflow, deleteWorkflow, saveVendorComment, activeBundleCores }) {
   const segCtx = useContext(SegmentCtx);
+  const whyBuy = useContext(WhyBuyCtx);
 if (!vendorRecs || !Object.keys(vendorRecs).length) vendorRecs = {};
   const initVendorFromURL = new URLSearchParams(window.location.search).get('vendor');
   const [vm, setVm] = useState(initV || initVendorFromURL ? "vendor" : "core");
@@ -213,7 +214,7 @@ if (!vendorRecs || !Object.keys(vendorRecs).length) vendorRecs = {};
   const [dismissed, setDismissed] = useState({});
   const [showIgnored, setShowIgnored] = useState(false);
   const [showNoBundleCores, setShowNoBundleCores] = useState(false);
-  const [breakdownCore, setBreakdownCore] = useState(null);
+  // breakdown legacy state removed in PR 6 — superseded by Why Buy panel
   const [moqOverrides, setMoqOverrides] = useState({});
   const [overrideRecs, setOverrideRecs] = useState({});
 
@@ -736,7 +737,10 @@ const rows = priceHistoryFull
   const togCollapse = id => setCollapsed(p => ({ ...p, [id]: !p[id] }));
   const togDismiss = id => setDismissed(p => ({ ...p, [id]: !p[id] }));
 
-  const openBreakdown = useCallback((c) => { setBreakdownCore(c); }, []);
+  const openBreakdown = useCallback((c) => {
+    if (!c) return;
+    whyBuy.open({ coreId: c.id, vendorName: c.ven });
+  }, [whyBuy]);
   const getCombinedRec = (coreId) => { const recs = [...(recMap[coreId] || [])]; (data.bundles || []).filter(b => b.core1 === coreId && b.active === "Yes").forEach(b => { if (recMap[b.j]) recs.push(...recMap[b.j]) }); return recs.sort((a, b) => (b.date || '').localeCompare(a.date || '')).slice(0, 7) };
   const hasRecData = (coreId) => recMap[coreId]?.length || (data.bundles || []).some(b => b.core1 === coreId && b.active === "Yes" && recMap[b.j]?.length);
 
@@ -873,7 +877,14 @@ const rows = priceHistoryFull
 
     return <tr className={`border-b border-gray-800/20 hover:bg-indigo-900/20 text-xs ${rowBg}`}>
       <td className={`py-1.5 px-0.5 sticky left-0 z-10 w-4 border-l-2 border-indigo-500/40 ${stickyBg}`} />
-      <td className={`py-1.5 px-0.5 sticky left-4 z-10 whitespace-nowrap ${stickyBg}`}><button onClick={() => goBundle(b.j)} className="text-indigo-400 font-mono hover:underline text-[11px]">{b.j}</button></td>
+      <td className={`py-1.5 px-0.5 sticky left-4 z-10 whitespace-nowrap ${stickyBg}`}>
+        <button onClick={() => goBundle(b.j)} className="text-indigo-400 font-mono hover:underline text-[11px]">{b.j}</button>
+        <button
+          onClick={(e) => { e.stopPropagation(); whyBuy.open({ bundleId: b.j, vendorName: vendorName }); }}
+          className="ml-1 text-[10px] text-emerald-400/80 hover:text-emerald-300"
+          title="Why buy?"
+        >📊</button>
+      </td>
       <td className={`py-1.5 px-1 text-indigo-200 truncate max-w-[160px] sticky left-[85px] z-10 ${stickyBg}`}>
         <span className="pl-3">↳ {b.t}</span>
         {b.asin && <a href={`https://sellercentral.amazon.com/myinventory/inventory?fulfilledBy=all&page=1&pageSize=25&searchField=all&searchTerm=${b.asin}&sort=date_created_desc&status=all`} target="_blank" rel="noopener noreferrer" className="ml-1 text-gray-500 hover:text-blue-400 text-[9px] font-mono">{b.asin}</a>}
@@ -983,7 +994,7 @@ const rows = priceHistoryFull
   </tr>;
 
   return <div className="p-4">{toast && <Toast msg={toast} onClose={() => { setToast(null); setToastPersist(false); }} persist={toastPersist} />}
-    {breakdownCore && <CalcBreakdownV2 core={breakdownCore} vendor={vMap[breakdownCore.ven]} vendorRec={effectiveRecs[breakdownCore.ven]} profile={profiles[breakdownCore.id]} stg={stg} onClose={() => setBreakdownCore(null)} />}{showDeltaFor && vendorDeltas[showDeltaFor] && <DeltaModal vendorName={showDeltaFor} delta={vendorDeltas[showDeltaFor]} onClose={() => setShowDeltaFor(null)} />}
+    {showDeltaFor && vendorDeltas[showDeltaFor] && <DeltaModal vendorName={showDeltaFor} delta={vendorDeltas[showDeltaFor]} onClose={() => setShowDeltaFor(null)} />}
     <div className="flex flex-wrap gap-2 items-center mb-4">
       <div className="flex bg-gray-800 rounded-lg p-0.5">{["core", "vendor"].map(m => <button key={m} onClick={() => setVm(m)} className={`px-3 py-1.5 rounded-md text-sm font-medium ${vm === m ? "bg-blue-600 text-white" : "text-gray-400"}`}>{m === "core" ? "By Core" : "By Vendor"}</button>)}</div>
       <SS value={vf} onChange={setVf} options={vNames} />

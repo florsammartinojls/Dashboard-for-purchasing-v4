@@ -2,7 +2,7 @@ import React, { useState, useMemo, useEffect, useContext } from "react";
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
 import { R, D1, $, $2, P, MN, YC, TTP, gS, gY, cMo, fD } from "../lib/utils";
 import { Dot, TH, AbcBadge, HealthBadge, KillBadge, SumCtx, CopyableId } from "./Shared";
-import { SegmentCtx } from "../App";
+import { SegmentCtx, WhyBuyCtx } from "../App";
 import { SegmentBadge, ConfidenceBadge } from "./SegmentsTab";
 
 function SC({ v, children, className }) {
@@ -24,6 +24,7 @@ export default function BundleTab({ data, stg, hist, daily, bundleId, onBack, go
   useEffect(() => { if (bundleId) setSel(bundleId) }, [bundleId]);
 
   const segCtx = useContext(SegmentCtx);
+  const whyBuy = useContext(WhyBuyCtx);
   const segRec = sel ? segCtx.effectiveMap[sel] : null;
   const b = sel ? (data.bundles || []).find(x => x.j === sel) : null;
   const fee = b ? (data.fees || []).find(f => f.j === b.j) : null;
@@ -181,6 +182,13 @@ export default function BundleTab({ data, stg, hist, daily, bundleId, onBack, go
             <SegmentBadge segment={segRec.segment} override={segRec.override !== segRec.segment ? segRec.override : null} />
             <ConfidenceBadge confidence={segRec.confidence} />
           </span>
+        )}
+        {b && (
+          <button
+            onClick={() => whyBuy.open({ bundleId: b.j, vendorName: (b.vendors || '').split(',')[0]?.trim() })}
+            className="text-xs px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25"
+            title="Why Buy? — full audit trail"
+          >📊 Why buy?</button>
         )}
         {bTrend && <><span className="text-xs text-gray-400">Q1'26: {bTrend.q1_26 || "—"}</span><span className="text-xs text-gray-400">Trend: {bTrend.movement || "—"}</span></>}
         {bAged && bAged.fbaHealth !== "Healthy" && <span className={`text-xs font-semibold ${bAged.fbaHealth === "At Risk" ? "text-amber-400" : "text-red-400"}`}>{bAged.fbaHealth}</span>}

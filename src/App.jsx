@@ -13,6 +13,7 @@ import OrdersTab from "./components/OrdersTab";
 import PerformanceTab from "./components/PerformanceTab";
 import BridgeTab from "./components/BridgeTab";
 import SegmentsTab from "./components/SegmentsTab";
+import WhyBuyPanel from "./components/WhyBuyPanel";
 import { batchVendorRecommendationsV4 } from "./lib/recommenderV4";
 import { calcPurchaseFrequency, calcBundleSeasonalProfile, DEFAULT_PROFILE } from "./lib/seasonal";
 import { buildAllIndexes } from "./lib/dataIndexes";
@@ -28,6 +29,10 @@ export const SegmentCtx = React.createContext({
   effectiveMap: {},
   setOverride: () => {},
   refreshOverrides: () => {},
+});
+
+export const WhyBuyCtx = React.createContext({
+  open: () => {},
 });
 
 
@@ -601,6 +606,11 @@ export default function App() {
     refreshOverrides,
   }), [autoSegmentMap, overrides, effectiveSegmentMap, segmentSetOverride, refreshOverrides]);
 
+  const [whyBuyAnchor, setWhyBuyAnchor] = useState(null);
+  const openWhyBuy = useCallback((anchor) => setWhyBuyAnchor(anchor || null), []);
+  const closeWhyBuy = useCallback(() => setWhyBuyAnchor(null), []);
+  const whyBuyCtxValue = useMemo(() => ({ open: openWhyBuy, close: closeWhyBuy }), [openWhyBuy, closeWhyBuy]);
+
   const dataIndexes = useMemo(() => {
     const t0 = performance.now();
     const ix = buildAllIndexes({
@@ -721,7 +731,7 @@ export default function App() {
   const liveColor = liveStatus.error ? "text-red-400" : liveAgeMin == null ? "text-gray-500" : liveAgeMin > 30 ? "text-amber-400" : "text-emerald-400";
   const histColor = historyStatus.error ? "text-red-400" : historyStatus.loading ? "text-gray-500" : "text-emerald-400";
 
-  return <SegmentCtx.Provider value={segmentCtxValue}><SumCtx.Provider value={{ addCell }}>
+  return <SegmentCtx.Provider value={segmentCtxValue}><WhyBuyCtx.Provider value={whyBuyCtxValue}><SumCtx.Provider value={{ addCell }}>
     <div className="min-h-screen bg-gray-950 text-gray-200">
       <header className="bg-gray-900 border-b border-gray-800 px-4 py-3 sticky top-0 z-40">
         <div className="flex items-center justify-between max-w-7xl mx-auto">
@@ -818,7 +828,7 @@ export default function App() {
         {tab === "bridge" && <ErrorBoundary label="Bridge" compact><BridgeTab data={dataH} stg={stg} vendorRecs={vendorRecs} goCore={goCore} goBundle={goBundle} /></ErrorBoundary>}
         {tab === "core" && <ErrorBoundary label="Core" compact><CoreTab data={data} stg={stg} hist={{ coreInv: data.coreInv, bundleSales: data.bundleSales, priceHist: data.priceHist }} daily={{ coreDays: data.coreDays, bundleDays: data.bundleDays }} coreId={coreId} onBack={handleBackFromCore} goBundle={goBundle} /></ErrorBoundary>}
         {tab === "bundle" && <ErrorBoundary label="Bundle" compact><BundleTab data={data} stg={stg} hist={{ coreInv: data.coreInv, bundleSales: data.bundleSales, bundleInv: data.bundleInv, priceHist: data.priceHist }} daily={{ coreDays: data.coreDays, bundleDays: data.bundleDays }} bundleId={bundleId} onBack={handleBackFromBundle} goCore={goCore} /></ErrorBoundary>}
-        {tab === "segments" && <ErrorBoundary label="Segments" compact><SegmentsTab data={data} vendorRecs={vendorRecs} goBundle={goBundle} /></ErrorBoundary>}
+        {tab === "segments" && <ErrorBoundary label="Segments" compact><SegmentsTab data={data} vendorRecs={vendorRecs} goBundle={goBundle} openWhyBuy={openWhyBuy} /></ErrorBoundary>}
         {tab === "orders" && <ErrorBoundary label="Orders" compact><OrdersTab data={data} /></ErrorBoundary>}
         {tab === "vendors" && <ErrorBoundary label="Vendors" compact><VendorsTab data={data} stg={stg} goVendor={goVendor} workflow={data.workflow} saveWorkflow={saveWorkflow} deleteWorkflow={deleteWorkflow} vendorComments={data.vendorComments} saveVendorComment={saveVendorComment} /></ErrorBoundary>}
         {tab === "performance" && <ErrorBoundary label="Performance" compact><PerformanceTab /></ErrorBoundary>}
@@ -832,6 +842,14 @@ export default function App() {
         : null}
       </SlidePanel>
       <QuickSum cells={sumCells} onClear={clearSum} />
+      <WhyBuyPanel
+        open={!!whyBuyAnchor}
+        anchor={whyBuyAnchor}
+        onClose={closeWhyBuy}
+        vendorRecs={vendorRecs}
+        segmentMap={effectiveSegmentMap}
+        data={data}
+      />
     </div>
-  </SumCtx.Provider></SegmentCtx.Provider>;
+  </SumCtx.Provider></WhyBuyCtx.Provider></SegmentCtx.Provider>;
 }
