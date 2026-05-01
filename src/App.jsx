@@ -18,6 +18,7 @@ import { calcPurchaseFrequency, calcBundleSeasonalProfile, DEFAULT_PROFILE } fro
 import { buildAllIndexes } from "./lib/dataIndexes";
 import { batchClassifySegments } from "./lib/segmentClassifier";
 import { loadOverrides, buildEffectiveMap, setOverride as setSegmentOverridePersist } from "./lib/segments";
+import { useVendorRecsWorker } from "./hooks/useVendorRecsWorker";
 
 const DEV = import.meta.env.DEV;
 
@@ -621,29 +622,30 @@ export default function App() {
     return m;
   }, [effectiveSegmentMap]);
 
-  const vendorRecs = useMemo(() => {
-    if (!data.vendors?.length) return {};
-    const t0 = performance.now();
-    const result = batchVendorRecommendationsV4({
-      vendors: data.vendors,
-      cores: data.cores || [],
-      bundles: data.bundles || [],
-      bundleSales: data.bundleSales || [],
-      bundleDays: data.bundleDaysForecast || [],
-      coreDays: data.coreDaysForecast || [],
-      abcA: data.abcA || [],
-      receivingFull: data.receivingFull || [],
-      replenMap,
-      missingMap,
-      priceCompFull: (data.priceCompFull?.length ? data.priceCompFull : data.priceComp) || [],
-      priceIndex: dataIndexes.price,
-      segmentMap: segmentMapForEngine,
-      settings: stg,
-    });
-    const t1 = performance.now();
-    if (DEV) console.log(`[PERF] vendorRecs (v4) took ${(t1-t0).toFixed(0)}ms for ${Object.keys(result).length} vendors`);
-    return result;
-  }, [data.vendors, data.cores, data.bundles, data.bundleSales, data.bundleDaysForecast, data.coreDaysForecast, data.abcA, data.receivingFull, replenMap, missingMap, data.priceCompFull, data.priceComp, dataIndexes, segmentMapForEngine, stg]);
+  const workerInput = useMemo(() => ({
+    vendors: data.vendors,
+    cores: data.cores,
+    bundles: data.bundles,
+    bundleSales: data.bundleSales,
+    bundleDays: data.bundleDaysForecast,
+    coreDays: data.coreDaysForecast,
+    abcA: data.abcA,
+    receivingFull: data.receivingFull,
+    replenMap,
+    missingMap,
+    priceCompFull: data.priceCompFull?.length ? data.priceCompFull : data.priceComp,
+    priceComp: data.priceComp,
+    segmentMap: segmentMapForEngine,
+    settings: stg,
+  }), [data, replenMap, missingMap, segmentMapForEngine, stg]);
+
+  const {
+    vendorRecs,
+    status: workerStatus,
+    progress: workerProgress,
+    lastError: workerError,
+    lastUpdated: workerLastUpdated,
+  } = useVendorRecsWorker(workerInput);
 
 
   const sc = useMemo(() => {
@@ -739,6 +741,14 @@ export default function App() {
                 <span className="text-red-400 font-semibold" title={(liveStatus.error || '') + ' ' + (historyStatus.error || '')}>
                   ⚠ ERROR
                 </span>
+              )}
+              {workerStatus === 'calculating' && (
+                <span className="text-blue-300" title="Recomputing recommendations off the main thread">
+                  ⏱ calc {Math.round((workerProgress || 0) * 100)}%
+                </span>
+              )}
+              {workerStatus === 'error' && (
+                <span className="text-red-400" title={workerError || ''}>⚠ engine</span>
               )}
             </div>
           </div>
