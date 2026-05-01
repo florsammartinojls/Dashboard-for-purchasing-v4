@@ -431,22 +431,53 @@ export function calcVendorRecommendationV4({
     }
   }
 
-  // bundle MOQ override
+  // Bundle MOQ override (BdlMOQ).
+  //
+  // Three cases per spec Item 4:
+  //   need = 0       → skip the bundle entirely (don't auto-buy MOQ).
+  //                    Status: 'bdlmoq-skipped-no-need'.
+  //   need >= MOQ    → MOQ already met naturally. Status: 'meets_moq'.
+  //   need < MOQ     → DO NOT auto-buy MOQ. Surface three options to
+  //                    the user via Why Buy:
+  //                      (a) buy MOQ (extra DOC)
+  //                      (b) switch to core mode
+  //                      (c) throttle demand (UI suggestion only)
+  //                    Default recommendation: buyNeed = 0 until user
+  //                    reviews. Status: 'bdlmoq-need-below-moq'.
   const bMoq = num(bundleMoqOverride, 0);
   const moqDocThresh = num(moqExtraDocThreshold, 30);
   for (const b of prepped) {
     b.bundleMoqStatus = null;
     b.bundleMoqExtraDOC = 0;
     b.bundleMoqOriginalNeed = b.buyNeed;
-    if (bMoq <= 0 || b.buyMode !== 'bundle' || b.buyNeed <= 0) continue;
-    if (b.buyNeed >= bMoq) { b.bundleMoqStatus = 'meets_moq'; continue; }
+    b.bundleMoqOptions = null;
+    if (bMoq <= 0 || b.buyMode !== 'bundle') continue;
+
+    if (b.buyNeed === 0) {
+      b.bundleMoqStatus = 'bdlmoq-skipped-no-need';
+      continue;
+    }
+    if (b.buyNeed >= bMoq) {
+      b.bundleMoqStatus = 'meets_moq';
+      continue;
+    }
+    // need > 0 && need < bMoq
     const extraUnits = bMoq - b.buyNeed;
     const edsr = b.effectiveDSR;
     const extraDOC = edsr > 0 ? Math.round(extraUnits / edsr) : 99999;
     b.bundleMoqExtraDOC = extraDOC;
-    if (b.urgent) { b.buyNeed = bMoq; b.bundleMoqStatus = 'inflated_urgent'; }
-    else if (extraDOC <= moqDocThresh) { b.buyNeed = bMoq; b.bundleMoqStatus = 'inflated_ok'; }
-    else { b.buyNeed = bMoq; b.bundleMoqStatus = 'inflated_excess'; }
+    b.bundleMoqStatus = 'bdlmoq-need-below-moq';
+    b.bundleMoqOptions = {
+      a_buyMoq: { qty: bMoq, extraDOC, extraUnits },
+      b_switchToCore: { available: true, instruction: 'Use Force Cores in the Purchasing tab' },
+      c_throttle: {
+        gapUnits: extraUnits,
+        instruction: 'Consider raising the Amazon price for this bundle until demand justifies the MOQ.',
+      },
+    };
+    // Default: do NOT auto-buy. User must explicitly review.
+    b.buyNeed = 0;
+    void moqDocThresh; // legacy v3 threshold no longer used; kept import path stable
   }
 
   // aggregate to core
@@ -616,6 +647,7 @@ export function calcVendorRecommendationV4({
     bundleMoqStatus: b.bundleMoqStatus || null,
     bundleMoqExtraDOC: b.bundleMoqExtraDOC || 0,
     bundleMoqOriginalNeed: b.bundleMoqOriginalNeed ?? b.buyNeed,
+    bundleMoqOptions: b.bundleMoqOptions || null,
     forecast: {
       level: b.forecast.level,
       trend: b.forecast.trend,
