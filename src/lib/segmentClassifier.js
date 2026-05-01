@@ -2,51 +2,36 @@
 // ============================================================
 // 7-Segment Demand Classifier (v4)
 // ============================================================
-// Replaces (and subsumes) the 3-regime regimeClassifier:
-//   - INTERMITTENT and NEW_OR_SPARSE map directly across.
-//   - CONTINUOUS gets split into STABLE / SEASONAL_PEAKED /
-//     GROWING / DECLINING / DORMANT_REVIVED depending on shape.
-//
-// Pure functions. Inputs:
-//   - bundleId
-//   - bundleDays:    daily series [{j, date, dsr}, ...] — 365d
-//   - bundleSales:   monthly summary [{j, y, m, units, avgDsr,
-//                                       dataDays}, ...] (optional;
-//                    used to bolster seasonality features when
-//                    multi-year data exists)
-//
-// Output (per bundle):
-//   { bundleId, segment, confidence, reason, features }
-//
-// Features computed on the daily series last 365d:
-//   cv                    = stdev/mean of daily units
-//   peakConcentration     = top-3-month-share of yearly volume
-//   seasonalityIndex      = variance(monthly_means) /
-//                           mean(within_month_variance)
-//   trendRatio            = avg(last 90d) / avg(days 91-180 ago)
-//   recentActivity        = days_with_sales(last 30d) / 30
-//   historicalActivity    = days_with_sales(180-365 ago) / 185
-//   zeroRatio             = zero_days / total_days
-//   totalDays             = days with any record
+// CHANGES vs prior version:
+//   - Each rule now gates on `totalDays` so we never claim
+//     "DORMANT_REVIVED / DECLINING / GROWING / SEASONAL_PEAKED"
+//     when we simply don't have enough history to know.
+//   - `historicalActivity` returns null (not 0) when its window
+//     is empty, so dormancy can't fire on absent data.
+//   - STABLE is the conservative fallback for short series.
+//   - Confidence on STABLE is downgraded when the only reason
+//     we landed there is "not enough history".
 // ============================================================
 
 const ZERO = 1e-9;
 
-// Thresholds — kept here as exported constants so they can be
-// referenced from the Glossary tab and tuned later if needed.
 export const T = {
-  // Hard rule thresholds (from spec §2.3, "first match wins")
+  // Hard rule thresholds (first match wins)
   MIN_DAYS_FOR_HISTORY: 30,            // <30d → NEW_OR_SPARSE
   INTERMITTENT_ZERO_RATIO: 0.50,       // ≥50% zero days → INTERMITTENT
-  DORMANT_HIST_LOW: 0.30,              // historical activity < 0.30
-  DORMANT_RECENT_HIGH: 0.50,           // recent > 0.50  → DORMANT_REVIVED
-  DORMANT_HIST_HIGH: 0.50,             // historical activity > 0.50
-  DORMANT_RECENT_LOW: 0.30,            // recent < 0.30   → DORMANT_REVIVED (going dormant)
-  PEAK_CONCENTRATION_HIGH: 0.50,       // peakConcentration > 0.50
-  SEASONALITY_INDEX_HIGH: 1.5,         // seasonalityIndex > 1.5  → SEASONAL_PEAKED
-  TREND_DECLINING: 0.70,               // trendRatio < 0.70  → DECLINING
-  TREND_GROWING: 1.40,                 // trendRatio > 1.40  → GROWING (+ recentActivity > 0.70)
+  DORMANT_HIST_LOW: 0.30,
+  DORMANT_RECENT_HIGH: 0.50,
+  DORMANT_HIST_HIGH: 0.50,
+  DORMANT_RECENT_LOW: 0.30,
+  PEAK_CONCENTRATION_HIGH: 0.50,
+  SEASONALITY_INDEX_HIGH: 1.5,
+  TREND_DECLINING: 0.70,
+  TREND_GROWING: 1.40,
   GROWING_RECENT_FLOOR: 0.70,
+  // ── NEW: history gates (data we need to reliably claim a segment) ──
+  DORMANT_MIN_DAYS: 180,   // need ≥180d to talk about "historical vs recent"
+  TREND_MIN_DAYS: 180,     // trendRatio uses last90/prev90 → need 180d
+  SEASONAL_MIN_DAYS: 270,  // need ~9mo to detect peak/seasonality
   // Confidence band heuristics (clear-cut vs near-boundary)
   PEAK_CONCENTRATION_CLEAR: 0.65,
   SEASONALITY_INDEX_CLEAR: 2.0,
@@ -65,7 +50,6 @@ export const SEGMENTS = [
 ];
 
 export const SEGMENT_PRIORITY = {
-  // Lower = higher priority for review
   SEASONAL_PEAKED: 1,
   GROWING: 2,
   DECLINING: 3,
@@ -98,10 +82,6 @@ function stdev(arr) {
   return Math.sqrt(s / (arr.length - 1));
 }
 
-function todayDate() {
-  return new Date();
-}
-
 // ─── Feature computation ────────────────────────────────────────
 export function computeFeatures(bundleId, bundleDays, bundleSales) {
   const series = (bundleDays || [])
@@ -109,13 +89,12 @@ export function computeFeatures(bundleId, bundleDays, bundleSales) {
     .sort((a, b) => (a.date || '').localeCompare(b.date || ''))
     .slice(-365);
 
-  const today = todayDate();
   const totalDays = series.length;
 
   if (totalDays === 0) {
     return {
       totalDays: 0, cv: 0, peakConcentration: 0, seasonalityIndex: 0,
-      trendRatio: 1, recentActivity: 0, historicalActivity: 0, zeroRatio: 0,
+      trendRatio: 1, recentActivity: 0, historicalActivity: null, zeroRatio: 0,
       mean: 0, totalUnits: 0, nonZeroDays: 0, avgWhenSelling: 0,
       monthlyMatrix: null,
     };
@@ -130,8 +109,7 @@ export function computeFeatures(bundleId, bundleDays, bundleSales) {
   const avgWhenSelling = nonZeroDays > 0 ? totalUnits / nonZeroDays : 0;
 
   // ── Monthly matrix (year → month → daily values) ──
-  // Used for peakConcentration and seasonalityIndex.
-  const byYearMonth = new Map(); // "YYYY-MM" -> daily values[]
+  const byYearMonth = new Map();
   for (const p of series) {
     if (!p.date) continue;
     const ym = p.date.slice(0, 7);
@@ -140,7 +118,6 @@ export function computeFeatures(bundleId, bundleDays, bundleSales) {
     arr.push(num(p.dsr));
   }
 
-  // Monthly totals (units in each month) — last 365d only
   const monthlyTotals = new Map();
   for (const [ym, arr] of byYearMonth.entries()) {
     let sum = 0;
@@ -148,7 +125,6 @@ export function computeFeatures(bundleId, bundleDays, bundleSales) {
     monthlyTotals.set(ym, sum);
   }
 
-  // peakConcentration: sum of top-3 months / total
   let peakConcentration = 0;
   if (monthlyTotals.size >= 3) {
     const sorted = [...monthlyTotals.values()].sort((a, b) => b - a);
@@ -157,9 +133,6 @@ export function computeFeatures(bundleId, bundleDays, bundleSales) {
     if (total > ZERO) peakConcentration = top3 / total;
   }
 
-  // seasonalityIndex: variance of monthly means / mean of within-month variances
-  // Group months across years (use 'M' only). Need at least one year of data.
-  // To be robust we incorporate bundleSales (multi-year monthly) when present.
   const monthlyMeansByM = Array.from({ length: 12 }, () => []);
   const monthlyVariancesByM = Array.from({ length: 12 }, () => []);
   for (const [ym, arr] of byYearMonth.entries()) {
@@ -170,8 +143,6 @@ export function computeFeatures(bundleId, bundleDays, bundleSales) {
     monthlyVariancesByM[M].push(stdev(arr) * stdev(arr));
   }
 
-  // Augment with bundleSales (monthly summary) if available — gives us
-  // multi-year context for stronger seasonality detection.
   if (Array.isArray(bundleSales)) {
     for (const r of bundleSales) {
       if (!r || r.j !== bundleId) continue;
@@ -190,6 +161,7 @@ export function computeFeatures(bundleId, bundleDays, bundleSales) {
   const seasonalityIndex = meanWithinVar > ZERO ? meansVar / meanWithinVar : 0;
 
   // trendRatio: avg(last 90d) / avg(days 91-180 ago)
+  // Only meaningful when we actually have ≥180d of history.
   const last90 = vals.slice(-90);
   const prev90 = vals.length >= 180 ? vals.slice(-180, -90) : vals.slice(0, Math.max(0, vals.length - 90));
   const m90 = mean(last90);
@@ -202,14 +174,15 @@ export function computeFeatures(bundleId, bundleDays, bundleSales) {
     ? last30.filter(v => v > ZERO).length / Math.max(30, last30.length)
     : 0;
 
-  // historicalActivity: days_with_sales(180-365 ago) / 185 (or available window)
+  // historicalActivity: days_with_sales(180-365 ago) / window size.
+  // Returns null when the window is empty — semantically "unknown".
   const histStart = Math.max(0, vals.length - 365);
   const histEnd = Math.max(histStart, vals.length - 180);
   const histWindow = vals.slice(histStart, histEnd);
-  const histDenom = Math.min(185, histWindow.length);
+  const histDenom = histWindow.length;
   const historicalActivity = histDenom > 0
     ? histWindow.filter(v => v > ZERO).length / histDenom
-    : 0;
+    : null;
 
   return {
     totalDays,
@@ -228,50 +201,78 @@ export function computeFeatures(bundleId, bundleDays, bundleSales) {
   };
 }
 
-// ─── Classification (per spec §2.3, in order) ───────────────────
+// ─── Classification (with history gates) ────────────────────────
 function classifyFromFeatures(f) {
+  // 1. Hard floor: not enough history at all
   if (f.totalDays < T.MIN_DAYS_FOR_HISTORY) {
-    return { segment: 'NEW_OR_SPARSE', reason: `Only ${f.totalDays} days of history (min ${T.MIN_DAYS_FOR_HISTORY}).` };
+    return {
+      segment: 'NEW_OR_SPARSE',
+      reason: `Only ${f.totalDays}d of history (min ${T.MIN_DAYS_FOR_HISTORY}).`,
+    };
   }
+
+  // 2. Intermittent — only needs zeroRatio, works on short series
   if (f.zeroRatio >= T.INTERMITTENT_ZERO_RATIO) {
     return {
       segment: 'INTERMITTENT',
       reason: `${Math.round(f.zeroRatio * 100)}% of days had no sales (${f.totalDays - f.nonZeroDays}/${f.totalDays}).`,
     };
   }
-  // Dormant revived (came back to life)
-  if (f.historicalActivity < T.DORMANT_HIST_LOW && f.recentActivity > T.DORMANT_RECENT_HIGH) {
+
+  // 3. Dormant ↔ revived — REQUIRES ≥180d to compare hist vs recent
+  if (f.totalDays >= T.DORMANT_MIN_DAYS && f.historicalActivity != null) {
+    if (f.historicalActivity < T.DORMANT_HIST_LOW && f.recentActivity > T.DORMANT_RECENT_HIGH) {
+      return {
+        segment: 'DORMANT_REVIVED',
+        reason: `Historical activity ${(f.historicalActivity * 100).toFixed(0)}% but recent ${(f.recentActivity * 100).toFixed(0)}% — coming back to life.`,
+      };
+    }
+    if (f.historicalActivity > T.DORMANT_HIST_HIGH && f.recentActivity < T.DORMANT_RECENT_LOW) {
+      return {
+        segment: 'DORMANT_REVIVED',
+        reason: `Historical activity ${(f.historicalActivity * 100).toFixed(0)}% but recent only ${(f.recentActivity * 100).toFixed(0)}% — going dormant.`,
+      };
+    }
+  }
+
+  // 4. Seasonal peaked — REQUIRES ≥270d (~9 months) for the shape to be real
+  if (f.totalDays >= T.SEASONAL_MIN_DAYS) {
+    if (f.peakConcentration > T.PEAK_CONCENTRATION_HIGH && f.seasonalityIndex > T.SEASONALITY_INDEX_HIGH) {
+      return {
+        segment: 'SEASONAL_PEAKED',
+        reason: `Top-3 months hold ${Math.round(f.peakConcentration * 100)}% of yearly volume (seasonality index ${f.seasonalityIndex.toFixed(2)}).`,
+      };
+    }
+  }
+
+  // 5. Declining / Growing — REQUIRES ≥180d so the 90d-vs-90d compare is real
+  if (f.totalDays >= T.TREND_MIN_DAYS) {
+    if (f.trendRatio < T.TREND_DECLINING) {
+      return {
+        segment: 'DECLINING',
+        reason: `Last 90d averages ${(f.trendRatio * 100).toFixed(0)}% of the prior 90d — declining.`,
+      };
+    }
+    if (f.trendRatio > T.TREND_GROWING && f.recentActivity > T.GROWING_RECENT_FLOOR) {
+      return {
+        segment: 'GROWING',
+        reason: `Last 90d averages ${(f.trendRatio * 100).toFixed(0)}% of the prior 90d, recent activity ${(f.recentActivity * 100).toFixed(0)}%.`,
+      };
+    }
+  }
+
+  // 6. Default: STABLE.
+  // If the only reason we land here is "not enough history", say so explicitly.
+  if (f.totalDays < T.TREND_MIN_DAYS) {
     return {
-      segment: 'DORMANT_REVIVED',
-      reason: `Historical activity ${(f.historicalActivity * 100).toFixed(0)}% but recent ${(f.recentActivity * 100).toFixed(0)}% — coming back to life.`,
+      segment: 'STABLE',
+      reason: `Limited history (${f.totalDays}d) — defaulting to STABLE until we have ≥${T.TREND_MIN_DAYS}d.`,
     };
   }
-  // Going dormant
-  if (f.historicalActivity > T.DORMANT_HIST_HIGH && f.recentActivity < T.DORMANT_RECENT_LOW) {
-    return {
-      segment: 'DORMANT_REVIVED',
-      reason: `Historical activity ${(f.historicalActivity * 100).toFixed(0)}% but recent only ${(f.recentActivity * 100).toFixed(0)}% — going dormant.`,
-    };
-  }
-  if (f.peakConcentration > T.PEAK_CONCENTRATION_HIGH && f.seasonalityIndex > T.SEASONALITY_INDEX_HIGH) {
-    return {
-      segment: 'SEASONAL_PEAKED',
-      reason: `Top-3 months hold ${Math.round(f.peakConcentration * 100)}% of yearly volume (seasonality index ${f.seasonalityIndex.toFixed(2)}).`,
-    };
-  }
-  if (f.trendRatio < T.TREND_DECLINING) {
-    return {
-      segment: 'DECLINING',
-      reason: `Last 90d averages ${(f.trendRatio * 100).toFixed(0)}% of the prior 90d — declining.`,
-    };
-  }
-  if (f.trendRatio > T.TREND_GROWING && f.recentActivity > T.GROWING_RECENT_FLOOR) {
-    return {
-      segment: 'GROWING',
-      reason: `Last 90d averages ${(f.trendRatio * 100).toFixed(0)}% of the prior 90d, recent activity ${(f.recentActivity * 100).toFixed(0)}%.`,
-    };
-  }
-  return { segment: 'STABLE', reason: `CV ${f.cv.toFixed(2)}, no significant trend or peak.` };
+  return {
+    segment: 'STABLE',
+    reason: `CV ${f.cv.toFixed(2)}, no significant trend or peak.`,
+  };
 }
 
 // ─── Confidence (high / medium / low) ───────────────────────────
@@ -280,7 +281,7 @@ function confidenceFor(segment, f) {
 
   switch (segment) {
     case 'NEW_OR_SPARSE':
-      return 'high'; // by definition a clear rule
+      return 'high';
     case 'INTERMITTENT':
       if (f.zeroRatio >= 0.65) return 'high';
       if (f.zeroRatio >= 0.55) return 'medium';
@@ -298,12 +299,12 @@ function confidenceFor(segment, f) {
       if (f.trendRatio <= 0.62) return 'medium';
       return 'low';
     case 'DORMANT_REVIVED':
-      // Tight signal: very low hist + very high recent (or inverse)
-      if ((f.historicalActivity <= 0.20 && f.recentActivity >= 0.65)
-       || (f.historicalActivity >= 0.65 && f.recentActivity <= 0.20)) return 'high';
+      if ((f.historicalActivity != null && f.historicalActivity <= 0.20 && f.recentActivity >= 0.65)
+       || (f.historicalActivity != null && f.historicalActivity >= 0.65 && f.recentActivity <= 0.20)) return 'high';
       return 'medium';
     case 'STABLE': {
-      // Stable is high-confidence when: low CV, no near-rule signal
+      // Downgrade STABLE confidence when it was a "not enough history" fallback
+      if (f.totalDays < T.TREND_MIN_DAYS) return 'low';
       const nearPeak = f.peakConcentration >= 0.40;
       const nearSeas = f.seasonalityIndex >= 1.0;
       const nearTrendDown = f.trendRatio <= 0.85;
@@ -327,7 +328,6 @@ export function classifyBundleSegment(bundleId, bundleDays, bundleSales) {
 
 // ─── Public: classify all bundles in one pass ───────────────────
 export function batchClassifySegments({ bundles, bundleDays, bundleSales }) {
-  // Pre-group bundleDays by bundle id once — avoids O(N·B) scan.
   const byBundle = new Map();
   for (const d of (bundleDays || [])) {
     if (!d || !d.j) continue;
@@ -351,7 +351,7 @@ export function batchClassifySegments({ bundles, bundleDays, bundleSales }) {
 export function regimeToSegment(regime) {
   if (regime === 'intermittent') return 'INTERMITTENT';
   if (regime === 'new_or_sparse') return 'NEW_OR_SPARSE';
-  return 'STABLE'; // continuous → conservative default
+  return 'STABLE';
 }
 
 // ─── Display helpers ────────────────────────────────────────────
