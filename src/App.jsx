@@ -15,8 +15,18 @@ import BridgeTab from "./components/BridgeTab";
 import { batchVendorRecommendations } from "./lib/recommender";
 import { calcPurchaseFrequency, calcBundleSeasonalProfile, DEFAULT_PROFILE } from "./lib/seasonal";
 import { buildAllIndexes } from "./lib/dataIndexes";
+import { batchClassifySegments } from "./lib/segmentClassifier";
+import { loadOverrides, buildEffectiveMap, setOverride as setSegmentOverridePersist } from "./lib/segments";
 
 const DEV = import.meta.env.DEV;
+
+export const SegmentCtx = React.createContext({
+  autoMap: {},
+  overrides: {},
+  effectiveMap: {},
+  setOverride: () => {},
+  refreshOverrides: () => {},
+});
 
 
 // === Vendors Tab ===
@@ -543,6 +553,51 @@ export default function App() {
     return cache;
   }, [data.bundles, data.bundleSales]);
 
+  // ── Segment classification (auto) ──
+  // Re-run when bundles or daily series change. Read-only in PR 2:
+  // the recommender does NOT consume segments yet (PR 4 wires that).
+  const autoSegmentMap = useMemo(() => {
+    if (!data.bundles?.length) return {};
+    const t0 = performance.now();
+    const out = batchClassifySegments({
+      bundles: data.bundles,
+      bundleDays: data.bundleDaysForecast || data.bundleDays || [],
+      bundleSales: data.bundleSales || [],
+    });
+    const t1 = performance.now();
+    if (DEV) {
+      const counts = {};
+      for (const r of Object.values(out)) counts[r.segment] = (counts[r.segment] || 0) + 1;
+      console.log(`[PERF] segments classified in ${(t1-t0).toFixed(0)}ms`, counts);
+    }
+    return out;
+  }, [data.bundles, data.bundleDaysForecast, data.bundleDays, data.bundleSales]);
+
+  const [overrides, setOverrides] = useState(() => {
+    try { return loadOverrides(); } catch { return {}; }
+  });
+  const refreshOverrides = useCallback(() => {
+    try { setOverrides(loadOverrides()); } catch {}
+  }, []);
+  const segmentSetOverride = useCallback((bundleId, segment) => {
+    if (!bundleId) return;
+    setSegmentOverridePersist(bundleId, segment);
+    setOverrides(loadOverrides());
+  }, []);
+
+  const effectiveSegmentMap = useMemo(
+    () => buildEffectiveMap(autoSegmentMap, overrides),
+    [autoSegmentMap, overrides]
+  );
+
+  const segmentCtxValue = useMemo(() => ({
+    autoMap: autoSegmentMap,
+    overrides,
+    effectiveMap: effectiveSegmentMap,
+    setOverride: segmentSetOverride,
+    refreshOverrides,
+  }), [autoSegmentMap, overrides, effectiveSegmentMap, segmentSetOverride, refreshOverrides]);
+
   const dataIndexes = useMemo(() => {
     const t0 = performance.now();
     const ix = buildAllIndexes({
@@ -655,7 +710,7 @@ export default function App() {
   const liveColor = liveStatus.error ? "text-red-400" : liveAgeMin == null ? "text-gray-500" : liveAgeMin > 30 ? "text-amber-400" : "text-emerald-400";
   const histColor = historyStatus.error ? "text-red-400" : historyStatus.loading ? "text-gray-500" : "text-emerald-400";
 
-  return <SumCtx.Provider value={{ addCell }}>
+  return <SegmentCtx.Provider value={segmentCtxValue}><SumCtx.Provider value={{ addCell }}>
     <div className="min-h-screen bg-gray-950 text-gray-200">
       <header className="bg-gray-900 border-b border-gray-800 px-4 py-3 sticky top-0 z-40">
         <div className="flex items-center justify-between max-w-7xl mx-auto">
@@ -758,5 +813,5 @@ export default function App() {
       </SlidePanel>
       <QuickSum cells={sumCells} onClear={clearSum} />
     </div>
-  </SumCtx.Provider>;
+  </SumCtx.Provider></SegmentCtx.Provider>;
 }
