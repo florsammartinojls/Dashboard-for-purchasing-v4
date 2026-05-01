@@ -237,16 +237,25 @@ export default function BundleTab({ data, stg, hist, daily, bundleId, onBack, go
               {uYrs.map(y => <Bar key={y} dataKey={"u_" + y} fill={YC[y] || "#6b7280"} opacity={0.85} radius={[2, 2, 0, 0]} name={"Units " + y} />)}
             </BarChart>
           </ResponsiveContainer>
-          {priceHist.length > 0 && <ResponsiveContainer width="100%" height={140}>
-            <LineChart data={pCh}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
-              <XAxis dataKey="month" tick={{ fill: "#9ca3af", fontSize: 10 }} />
-              <YAxis tick={{ fill: "#9ca3af", fontSize: 10 }} domain={['auto', 'auto']} />
-              <Tooltip {...TTP} formatter={(v) => v != null ? Math.round(v).toLocaleString('en-US') : '—'} />
-              <Legend />
-              {pYrs.map(y => <Line key={y} dataKey={"p_" + y} stroke={YC[y] || "#6b7280"} strokeWidth={2} dot={{ r: 2 }} connectNulls name={"$" + y} />)}
-            </LineChart>
-          </ResponsiveContainer>}
+          <div className="mt-3">
+            <h4 className="text-gray-400 text-xs font-semibold mb-1">YoY Price</h4>
+            {priceHist.length > 0 ? (
+              <ResponsiveContainer width="100%" height={140}>
+                <LineChart data={pCh}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+                  <XAxis dataKey="month" tick={{ fill: "#9ca3af", fontSize: 10 }} />
+                  <YAxis tick={{ fill: "#9ca3af", fontSize: 10 }} domain={['auto', 'auto']} />
+                  <Tooltip {...TTP} formatter={(v) => v != null ? Math.round(v).toLocaleString('en-US') : '—'} />
+                  <Legend />
+                  {pYrs.map(y => <Line key={y} dataKey={"p_" + y} stroke={YC[y] || "#6b7280"} strokeWidth={2} dot={{ r: 2 }} connectNulls name={"$" + y} />)}
+                </LineChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="border border-dashed border-gray-700 rounded p-4 text-center text-gray-500 text-xs">
+                Price history not available for this bundle.
+              </div>
+            )}
+          </div>
         </div>
         <div className="lg:w-72 overflow-x-auto">
           <table className="w-full text-xs">
