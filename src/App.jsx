@@ -611,6 +611,10 @@ export default function App() {
       for (const r of Object.values(out)) counts[r.segment] = (counts[r.segment] || 0) + 1;
       console.log(`[PERF] segments classified in ${(t1-t0).toFixed(0)}ms`, counts);
     }
+    if (typeof window !== 'undefined') {
+      window.__segmentMap = out;
+      window.__bundleDays = data.bundleDaysForecast || data.bundleDays || [];
+    }
     return out;
   }, [data.bundles, data.bundleDaysForecast, data.bundleDays, data.bundleSales]);
 
