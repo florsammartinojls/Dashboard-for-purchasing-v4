@@ -13,7 +13,7 @@ import OrdersTab from "./components/OrdersTab";
 import PerformanceTab from "./components/PerformanceTab";
 import BridgeTab from "./components/BridgeTab";
 import SegmentsTab from "./components/SegmentsTab";
-import { batchVendorRecommendations } from "./lib/recommender";
+import { batchVendorRecommendationsV4 } from "./lib/recommenderV4";
 import { calcPurchaseFrequency, calcBundleSeasonalProfile, DEFAULT_PROFILE } from "./lib/seasonal";
 import { buildAllIndexes } from "./lib/dataIndexes";
 import { batchClassifySegments } from "./lib/segmentClassifier";
@@ -613,10 +613,18 @@ export default function App() {
     return ix;
   }, [data.priceCompFull, data.priceComp, data.receivingFull, data.bundleDaysForecast]);
 
+  const segmentMapForEngine = useMemo(() => {
+    const m = {};
+    for (const [bid, rec] of Object.entries(effectiveSegmentMap)) {
+      m[bid] = rec.effective;
+    }
+    return m;
+  }, [effectiveSegmentMap]);
+
   const vendorRecs = useMemo(() => {
     if (!data.vendors?.length) return {};
     const t0 = performance.now();
-    const result = batchVendorRecommendations({
+    const result = batchVendorRecommendationsV4({
       vendors: data.vendors,
       cores: data.cores || [],
       bundles: data.bundles || [],
@@ -629,14 +637,13 @@ export default function App() {
       missingMap,
       priceCompFull: (data.priceCompFull?.length ? data.priceCompFull : data.priceComp) || [],
       priceIndex: dataIndexes.price,
+      segmentMap: segmentMapForEngine,
       settings: stg,
-      purchFreqMap,
-      seasonalProfiles,
     });
     const t1 = performance.now();
-    if (DEV) console.log(`[PERF] vendorRecs took ${(t1-t0).toFixed(0)}ms for ${Object.keys(result).length} vendors`);
+    if (DEV) console.log(`[PERF] vendorRecs (v4) took ${(t1-t0).toFixed(0)}ms for ${Object.keys(result).length} vendors`);
     return result;
-  }, [data.vendors, data.cores, data.bundles, data.bundleSales, data.bundleDaysForecast, data.coreDaysForecast, data.abcA, data.receivingFull, replenMap, missingMap, data.priceCompFull, data.priceComp, dataIndexes, stg, purchFreqMap, seasonalProfiles]);
+  }, [data.vendors, data.cores, data.bundles, data.bundleSales, data.bundleDaysForecast, data.coreDaysForecast, data.abcA, data.receivingFull, replenMap, missingMap, data.priceCompFull, data.priceComp, dataIndexes, segmentMapForEngine, stg]);
 
 
   const sc = useMemo(() => {

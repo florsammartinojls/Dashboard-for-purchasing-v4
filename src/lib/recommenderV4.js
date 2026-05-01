@@ -1,32 +1,46 @@
-// src/lib/recommender.js
+// src/lib/recommenderV4.js
 // ============================================================
-// v3.4 Purchase Recommendation Engine
+// V4 Purchase Recommendation Engine
 // ============================================================
-// NEW in v3.4:
-//   [FIX-INTERMITTENT] Clasificación de régimen ANTES de forecast.
-//     Cada bundle se clasifica en continuous / intermittent /
-//     new_or_sparse según % de días con venta cero. forecast.js
-//     dispatcha al método correcto. Resultado: para bundles que
-//     venden 4 unidades cada 30 días, ahora la recomendación es
-//     ~24 unidades para 180 días, no 720.
+// Replaces recommender.js (v3.4). Same external API surface so
+// the rest of the app needs only the import switched.
 //
-//   [FIX-CONSISTENCY] Force Cores y Force Bundles ahora son SOLO
-//     un switch de buyMode — el cálculo numérico es idéntico al
-//     de Mix. PurchTab.fillR debe pasar bundleDays/coreDays/abcA
-//     cuando llama directo (ver fix en PurchTab.jsx).
+// Differences from v3.4:
+//   1. Per-bundle forecast uses calcBundleForecastV4 dispatched
+//      by the bundle's EFFECTIVE segment (auto + override).
+//   2. Removes the YoY sanity cap (segments encode the same idea
+//      more cleanly).
+//   3. INTERMITTENT MOQ rule: if MOQ would inflate need >2x the
+//      coverage, status defaults to 'inflated_excess' (wait).
+//   4. The forecast object carries inputs/formula/reasoning, which
+//      bundleDetails surfaces verbatim for the Why Buy panel.
+//   5. Pre-built priceIndex is used end-to-end.
 //
-// Carried from v3.3:
-//   effDSR = coverageDemand / targetDoc, regla única en todos los
-//   puntos de decisión.
-// ===========================================================
+// All structural pieces (waterfall, MOQ + casepack, force mode,
+// bundle MOQ override) are unchanged in spirit.
+// ============================================================
 
-import { calcBundleSeasonalProfile, DEFAULT_PROFILE } from './seasonal.js';
-import { calcBundleForecast, calcHistoricSamePeriod } from './forecast.js';
+import { calcBundleForecastV4 } from './forecastV4.js';
 import { detectVendorAnomalies } from './anomalyDetector.js';
-import { classifyDemandRegime } from './regimeClassifier.js';
 
-export const MAX_YOY_RATIO = 1.5;
-export const MIN_HISTORIC_FOR_YOY = 30;
+export const DEFAULT_SPIKE_THRESHOLD = 1.25;
+export const DEFAULT_MOQ_INFLATION_THRESHOLD = 1.5;
+const LEVELING_STEP_DAYS = 10;
+const MAX_WATERFALL_ITER = 100;
+const INTERMITTENT_MOQ_INFLATE_LIMIT = 2.0;
+
+// ─── helpers ───────────────────────────────────────────────────
+function num(x, d = 0) { const n = Number(x); return Number.isFinite(n) ? n : d; }
+
+function isDomestic(country) {
+  const c = (country || '').toLowerCase().trim();
+  return c === '' || c === 'us' || c === 'usa' || c === 'united states';
+}
+function getTargetDoc(vendor, settings) {
+  return isDomestic(vendor?.country)
+    ? num(settings?.domesticDoc, 90)
+    : num(settings?.intlDoc, 180);
+}
 
 function parseNoteVendor(note) {
   if (!note) return { kind: 'unknown', name: null };
@@ -35,15 +49,11 @@ function parseNoteVendor(note) {
   if (m) return { kind: 'named', name: m[1].trim() };
   return { kind: 'unnamed', name: null };
 }
-
-// Detecta si una compra es de China basado en costos de import
-// (en vez del formato del note, que no es confiable)
 function isChinaPurchase(row) {
   const inb = Number(row?.inbShip) || 0;
   const tar = Number(row?.tariffs) || 0;
   return inb > 0 || tar > 0;
 }
-
 function isChinaVendor(vendor) {
   const c = (vendor?.country || '').toLowerCase().trim();
   return c === 'china' || c === 'cn' || c === 'prc';
@@ -55,8 +65,6 @@ function getVendorCoreUnitCost(coreId, vendor, paymentHistory, priceIndex) {
   const vName = vendor.name.toLowerCase().trim();
   const china = isChinaVendor(vendor);
 
-  // Prefer the pre-built index when available — avoids scanning the
-  // full priceCompFull (potentially 100k+ rows) per call.
   let candidates = null;
   if (priceIndex && priceIndex.pricesByCoreLower) {
     candidates = priceIndex.pricesByCoreLower.get(cid) || null;
@@ -66,16 +74,13 @@ function getVendorCoreUnitCost(coreId, vendor, paymentHistory, priceIndex) {
   } else {
     return null;
   }
-
   let best = null;
   for (const r of candidates) {
     if (!r) continue;
-    // If we used the index, core already matches. Otherwise re-check.
     if (!priceIndex && (r.core || '').toLowerCase().trim() !== cid) continue;
     const pcs = Number(r.pcs);
     const mat = Number(r.matPrice);
     if (!(pcs > 0) || !(mat > 0)) continue;
-
     let matches = false;
     if (china) {
       matches = isChinaPurchase(r);
@@ -93,28 +98,11 @@ function getVendorCoreUnitCost(coreId, vendor, paymentHistory, priceIndex) {
   return Number(best.matPrice) / Number(best.pcs);
 }
 
-export const DEFAULT_SPIKE_THRESHOLD = 1.25;
-export const DEFAULT_MOQ_INFLATION_THRESHOLD = 1.5;
-const LEVELING_STEP_DAYS = 10;
-const MAX_WATERFALL_ITER = 100;
-
-function num(x, d = 0) { const n = Number(x); return Number.isFinite(n) ? n : d; }
-function isDomestic(country) {
-  const c = (country || '').toLowerCase().trim();
-  return c === '' || c === 'us' || c === 'usa' || c === 'united states';
-}
-function getTargetDoc(vendor, settings) {
-  return isDomestic(vendor?.country)
-    ? num(settings?.domesticDoc, 90)
-    : num(settings?.intlDoc, 180);
-}
-
 function bundleAssignedInv(b, replenMap, missingMap) {
   const rp = (replenMap && replenMap[b.j]) || {};
   const inb7fBundle = (missingMap && missingMap[b.j]) || 0;
   return num(b.fibInv) + num(rp.pprcUnits) + num(rp.batched) + num(inb7fBundle);
 }
-
 function coresOf(b) {
   const out = [];
   for (let i = 1; i <= 20; i++) {
@@ -124,7 +112,6 @@ function coresOf(b) {
   }
   return out;
 }
-
 function isActiveBundle(b, settings) {
   if (!b) return false;
   const bA = settings?.bA || 'yes';
@@ -135,11 +122,9 @@ function isActiveBundle(b, settings) {
   if (bI === 'set' && !b.ignoreUntil) return false;
   return true;
 }
-
 function bundleBelongsToVendor(b, vendorName) {
   return (b.vendors || '').indexOf(vendorName) >= 0;
 }
-
 function canBuyAsBundle(b, vendor, receivingFull) {
   if (!Array.isArray(receivingFull) || !vendor?.name) return false;
   const v = vendor.name.toLowerCase().trim();
@@ -152,7 +137,6 @@ function canBuyAsBundle(b, vendor, receivingFull) {
   }
   return false;
 }
-
 function isSpikeVisual(b, threshold) {
   const cd = num(b.cd);
   const d7 = num(b.d7comp);
@@ -161,187 +145,10 @@ function isSpikeVisual(b, threshold) {
 }
 
 function effDSR(b, targetDoc) {
-  if (b.coverageDemand > 0 && targetDoc > 0) {
-    return b.coverageDemand / targetDoc;
-  }
+  if (b.coverageDemand > 0 && targetDoc > 0) return b.coverageDemand / targetDoc;
   if (b.forecastLevel && b.forecastLevel > 0) return b.forecastLevel;
   if (b.dsr && b.dsr > 0) return b.dsr;
   return 0.01;
-}
-
-// ────────────────────────────────────────────────────────────
-// YoY Sanity Check con cap DINÁMICO según tendencia
-// ────────────────────────────────────────────────────────────
-// Compara el nivel actual (level del forecast = avg últimos 60d)
-// vs el nivel histórico del mismo período año pasado.
-//
-//   levelActual / levelHistorico < 0.9  → tendencia BAJA  → cap × 1.0
-//   levelActual / levelHistorico 0.9–1.1 → ESTABLE         → cap × 1.2
-//   levelActual / levelHistorico > 1.1   → CRECE           → cap × 1.5
-//
-// Filosofía: si vendés MENOS que el año pasado, no podés
-// comprar MÁS que el año pasado. Si crece, dejamos margen.
-// ────────────────────────────────────────────────────────────
-
-// ────────────────────────────────────────────────────────────
-// Calcula histórico desde bundleSales (mensual)
-// ────────────────────────────────────────────────────────────
-// bundleSales tiene una fila por bundle/mes con campo `units`.
-// Para un horizonte de N días empezando hoy:
-//   1. Tomamos el período "hace 1 año" → "hace 1 año + N días"
-//   2. Sumamos las unidades de los meses que caen en ese rango,
-//      prorrateando los meses parciales
-// ────────────────────────────────────────────────────────────
-function calcHistoricFromMonthlySales(bundleSales, bundleId, horizonDays) {
-  if (!Array.isArray(bundleSales) || !bundleId || !(horizonDays > 0)) return null;
-
-  const today = new Date();
-  const startDate = new Date(today);
-  startDate.setFullYear(startDate.getFullYear() - 1);
-  const endDate = new Date(startDate);
-  endDate.setDate(endDate.getDate() + horizonDays);
-
-  const rows = bundleSales.filter(r => r && r.j === bundleId);
-  if (rows.length === 0) return null;
-
-  let total = 0;
-  let monthsTouched = 0;
-
-  // Iterar mes por mes desde startDate hasta endDate
-  const cur = new Date(startDate.getFullYear(), startDate.getMonth(), 1);
-  const last = new Date(endDate.getFullYear(), endDate.getMonth(), 1);
-
-  while (cur <= last) {
-    const y = cur.getFullYear();
-    const m = cur.getMonth() + 1; // 1-12
-
-    // Buscar fila para este (year, month)
-    const row = rows.find(r => r.y === y && r.m === m);
-    const monthUnits = row?.units > 0 ? row.units :
-                       (row?.avgDsr > 0 && row?.dataDays > 0 ? Math.round(row.avgDsr * row.dataDays) : 0);
-
-    if (monthUnits > 0) {
-      // Días del mes
-      const daysInMonth = new Date(y, m, 0).getDate();
-      // Días que efectivamente caen en nuestro rango [startDate, endDate]
-      const monthStart = new Date(y, m - 1, 1);
-      const monthEnd = new Date(y, m - 1, daysInMonth);
-      const effStart = monthStart < startDate ? startDate : monthStart;
-      const effEnd = monthEnd > endDate ? endDate : monthEnd;
-      const daysInRange = Math.max(0, Math.round((effEnd - effStart) / 86400000) + 1);
-
-      const prorated = monthUnits * (daysInRange / daysInMonth);
-      total += prorated;
-      monthsTouched++;
-    }
-
-    // Avanzar al próximo mes
-    cur.setMonth(cur.getMonth() + 1);
-  }
-
-  if (monthsTouched === 0) return null;
-
-  return {
-    total: Math.round(total),
-    monthsTouched,
-    horizonDays,
-    startDate: startDate.toISOString().split('T')[0],
-    endDate: endDate.toISOString().split('T')[0],
-  };
-}
-
-function applyYoYSanityCheck(forecast, bundleId, bundleSales, targetDoc) {
-  if (!forecast || forecast.flags.noData) return null;
-
-  const historic = calcHistoricFromMonthlySales(bundleSales, bundleId, targetDoc);
-  if (!historic) return { applied: false, reason: 'no_history' };
-  if (historic.total < MIN_HISTORIC_FOR_YOY) {
-    return { applied: false, reason: 'historic_too_small', historic: historic.total };
-  }
-
-  // Nivel actual = level del forecast (avg últimos 60d, ya calculado)
-  const levelActual = num(forecast.level, 0);
-  // Nivel histórico = promedio diario del mismo período año pasado
-  const levelHistorico = targetDoc > 0
-    ? historic.total / targetDoc
-    : 0;
-
-  // Determinar cap según tendencia
-  let trendRatio = 1.0;
-  let trendLabel = 'unknown';
-  if (levelHistorico > 0) {
-    trendRatio = levelActual / levelHistorico;
-    if (trendRatio < 0.9) { trendLabel = 'declining'; }
-    else if (trendRatio > 1.1) { trendLabel = 'growing'; }
-    else { trendLabel = 'stable'; }
-  }
-
-  let yoyCapMultiplier;
-  if (trendLabel === 'declining') yoyCapMultiplier = 1.0;
-  else if (trendLabel === 'growing') yoyCapMultiplier = 1.5;
-  else yoyCapMultiplier = 1.2;
-
-// forecast.coverageDemand ya incluye safety stock (lo agregó forecast.js)
-  // Capeamos contra histórico × multiplier según tendencia
-  const forecastTotal = forecast.coverageDemand;
-  const safetyStock = num(forecast.safetyStock, 0);
-  const maxAllowed = historic.total * yoyCapMultiplier;
-
-  if (forecastTotal <= maxAllowed) {
-    return {
-      applied: false,
-      reason: 'within_bounds',
-      historic: historic.total,
-      forecast: forecastTotal,
-      ratio: forecastTotal / historic.total,
-      trendLabel,
-      trendRatio,
-      yoyCapMultiplier,
-    };
-  }
-
-  const scale = maxAllowed / forecastTotal;
-  const originalTotal = forecastTotal;
-  // El cap se distribuye proporcionalmente entre coverageDemand y safetyStock
-  const newCoverageDemand = forecast.coverageDemand * scale;
-  const newSafetyStock = safetyStock * scale;
-
-  forecast.coverageDemand = newCoverageDemand;
-  forecast.safetyStock = newSafetyStock;
-
-  if (forecast.demandBreakdown) {
-    forecast.demandBreakdown = {
-      fromLevel: Math.round((forecast.demandBreakdown.fromLevel || 0) * scale),
-      fromTrend: Math.round((forecast.demandBreakdown.fromTrend || 0) * scale),
-      fromSeasonal: Math.round((forecast.demandBreakdown.fromSeasonal || 0) * scale),
-      total: Math.round(newCoverageDemand),
-    };
-  }
-  forecast.flags.yoyCapApplied = true;
-  forecast.flags.yoyHistoric = Math.round(historic.total);
-  forecast.flags.yoyOriginalForecast = Math.round(originalTotal);
-  forecast.flags.yoyOriginalCoverageDemand = Math.round(originalTotal - safetyStock);
-  forecast.flags.yoyOriginalSafetyStock = Math.round(safetyStock);
-  forecast.flags.yoyScale = scale;
-  forecast.flags.yoyTrendLabel = trendLabel;
-  forecast.flags.yoyTrendRatio = trendRatio;
-  forecast.flags.yoyCapMultiplier = yoyCapMultiplier;
-
-  return {
-    applied: true,
-    historic: historic.total,
-    originalForecast: originalTotal,
-    cappedForecast: maxAllowed,
-    cappedCoverageDemand: Math.round(newCoverageDemand),
-    cappedSafetyStock: Math.round(newSafetyStock),
-    ratio: originalTotal / historic.total,
-    scale,
-    trendLabel,
-    trendRatio,
-    yoyCapMultiplier,
-    levelActual,
-    levelHistorico,
-  };
 }
 
 function maxBundleUnitsFromPools(b, corePools) {
@@ -356,7 +163,6 @@ function maxBundleUnitsFromPools(b, corePools) {
   }
   return max === Infinity ? 0 : max;
 }
-
 function applyBundleGive(b, give, corePools) {
   if (give <= 0) return;
   b.rawAssigned += give;
@@ -365,7 +171,6 @@ function applyBundleGive(b, give, corePools) {
     corePools[coreId] = corePools[coreId] - give * qty;
   }
 }
-
 function distributeRawToBundles(prepped, corePools, targetDoc, replenFloor) {
   const byUrgency = [...prepped].sort((a, b) => {
     const ad = a.assignedInv / effDSR(a, targetDoc);
@@ -425,9 +230,7 @@ function applyMoqAndCasePack(needPieces, moq, casePack, moqThreshold, moqCredit 
   const m = num(moq);
   const cp = num(casePack, 1);
   const credit = Math.max(0, num(moqCredit));
-
   const effectiveMoq = Math.max(0, m - credit);
-
   if (effectiveMoq > 0 && qty < effectiveMoq) qty = effectiveMoq;
   if (cp > 1) qty = Math.ceil(qty / cp) * cp;
   const t = num(moqThreshold, DEFAULT_MOQ_INFLATION_THRESHOLD);
@@ -451,7 +254,7 @@ function buildAbcMap(abcA) {
 // ============================================================
 // MAIN ENTRY POINT
 // ============================================================
-export function calcVendorRecommendation({
+export function calcVendorRecommendationV4({
   vendor,
   cores,
   bundles,
@@ -464,8 +267,8 @@ export function calcVendorRecommendation({
   missingMap,
   priceCompFull,
   priceIndex,
+  segmentMap, // bundleId -> 'STABLE' | 'SEASONAL_PEAKED' | ...
   settings,
-  purchFreqSafety,
   forceMode,
   bundleMoqOverride,
   moqExtraDocThreshold,
@@ -496,40 +299,25 @@ export function calcVendorRecommendation({
     settings,
   });
 
-  // ──────────────────────────────────────────────────────────
-  // [v3.4] Step 1.5: Clasificar régimen de cada bundle
-  // ──────────────────────────────────────────────────────────
-  const regimeMap = {};
-  for (const b of vendorBundles) {
-    regimeMap[b.j] = classifyDemandRegime(b.j, bundleDays);
-  }
+  const segmentationEnabled = settings?.segmentationEnabled !== false;
 
-  // ──────────────────────────────────────────────────────────
-  // Steps 1-3: forecast + profile + assigned inv per bundle
-  // ──────────────────────────────────────────────────────────
   const prepped = vendorBundles.map(b => {
-    let profile = b._profile;
-    if (!profile) {
-      try { profile = calcBundleSeasonalProfile(b.j, bundleSales); }
-      catch { profile = DEFAULT_PROFILE; }
-    }
-
-    const regimeInfo = regimeMap[b.j];
     const fallbackDsr = num(b.cd);
+    const segment = segmentationEnabled
+      ? (segmentMap && segmentMap[b.j]) || 'STABLE'
+      : 'STABLE';
 
-    const forecast = calcBundleForecast({
+    const forecast = calcBundleForecastV4({
       bundleId: b.j,
+      segment,
       bundleDays,
+      bundleSales,
       leadTime: lt,
       targetDoc,
       profABC: abcMap[b.j] || null,
-      seasonalProfile: profile,
-      settings,
-      regimeInfo,
       bundleDsrFromSheet: fallbackDsr,
+      settings,
     });
-
-    const yoyInfo = applyYoYSanityCheck(forecast, b.j, bundleSales, targetDoc);
 
     const ai = bundleAssignedInv(b, replenMap, missingMap);
 
@@ -537,8 +325,6 @@ export function calcVendorRecommendation({
       raw: b,
       id: b.j,
       j: b.j,
-      profile,
-      hasSeasonalHistory: !!(profile && profile.hasHistory),
       assignedInv: ai,
       coresUsed: coresOf(b),
       rawAssigned: 0,
@@ -552,8 +338,7 @@ export function calcVendorRecommendation({
       buyMode: 'core',
       urgent: false,
       forecast,
-      yoyInfo,
-      regimeInfo,
+      segment,
       forecastLevel: forecast.flags.noData ? fallbackDsr : (forecast.level || fallbackDsr),
       dsr: forecast.flags.noData ? fallbackDsr : Math.max(forecast.level, fallbackDsr * 0.01),
       spikeVisual: isSpikeVisual(b, spikeThreshold),
@@ -561,30 +346,20 @@ export function calcVendorRecommendation({
     };
   });
 
-  // ──────────────────────────────────────────────────────────
-  // Step 4: demand projection from forecast
-  // (forecast.coverageDemand YA incluye safety stock)
-  // ──────────────────────────────────────────────────────────
+  // demand projection from forecast
   for (const b of prepped) {
     let coverageDemand = b.forecast.coverageDemand;
-    let flatDemand = b.forecast.flatDemand;
-
     if (coverageDemand <= 0 && b.dsr > 0) {
       coverageDemand = b.dsr * targetDoc;
-      flatDemand = b.dsr * targetDoc;
       b.usedFlatFallback = true;
     }
-
     b.coverageDemand = Math.round(coverageDemand);
-    b.flatDemand = Math.round(flatDemand);
+    b.flatDemand = Math.round(b.forecastLevel * targetDoc);
     b.ltDemand = Math.max(0, Math.round(b.forecastLevel * lt));
     b.effectiveDSR = effDSR(b, targetDoc);
-    b.seasonalDSR = b.effectiveDSR;
   }
 
-  // ──────────────────────────────────────────────────────────
-  // Step 5: waterfall
-  // ──────────────────────────────────────────────────────────
+  // waterfall
   const corePools = {};
   const corePendingInbound = {};
   const coreRawEffective = {};
@@ -598,15 +373,12 @@ export function calcVendorRecommendation({
     coreRawEffective[c.id] = rawEff;
     corePools[c.id] = rawEff + pending;
   }
-
   const waterfallBundles = prepped.filter(
     b => b.coresUsed.some(c => vCoreById[c.coreId])
   );
   distributeRawToBundles(waterfallBundles, corePools, targetDoc, replenFloor);
 
-  // ──────────────────────────────────────────────────────────
-  // Step 6: buy need
-  // ──────────────────────────────────────────────────────────
+  // buy need
   for (const b of prepped) {
     const total = b.assignedInv + b.rawAssigned;
     b.totalAvailable = total;
@@ -616,18 +388,14 @@ export function calcVendorRecommendation({
     b.urgent = (total - b.ltDemand) < 0;
   }
 
-  // ──────────────────────────────────────────────────────────
-  // Step 7: buy mode per bundle
-  // ──────────────────────────────────────────────────────────
+  // buy mode
   for (const b of prepped) {
     if (forceMode === 'bundles') b.buyMode = 'bundle';
     else if (forceMode === 'cores') b.buyMode = 'core';
     else b.buyMode = canBuyAsBundle(b.raw, vendor, receivingFull) ? 'bundle' : 'core';
   }
 
-  // ──────────────────────────────────────────────────────────
-  // Step 7.5: Bundle MOQ override
-  // ──────────────────────────────────────────────────────────
+  // bundle MOQ override
   const bMoq = num(bundleMoqOverride, 0);
   const moqDocThresh = num(moqExtraDocThreshold, 30);
   for (const b of prepped) {
@@ -645,9 +413,7 @@ export function calcVendorRecommendation({
     else { b.buyNeed = bMoq; b.bundleMoqStatus = 'inflated_excess'; }
   }
 
-  // ──────────────────────────────────────────────────────────
-  // Step 8: aggregate to core
-  // ──────────────────────────────────────────────────────────
+  // aggregate to core
   const coreNeedMap = {};
   const coreBundlesMap = {};
   for (const b of prepped) {
@@ -687,9 +453,7 @@ export function calcVendorRecommendation({
     }
   }
 
-  // ──────────────────────────────────────────────────────────
-  // Step 9: MOQ + casepack per core
-  // ──────────────────────────────────────────────────────────
+  // MOQ + casepack per core
   const coreItems = [];
   for (const [coreId, needPieces] of Object.entries(coreNeedMap)) {
     const core = vCoreById[coreId];
@@ -697,9 +461,20 @@ export function calcVendorRecommendation({
     const histUnitCost = getVendorCoreUnitCost(coreId, vendor, priceCompFull, priceIndex);
     const pricePerPiece = histUnitCost != null ? histUnitCost : num(core.cost);
     const priceSource = histUnitCost != null ? '7g-history' : 'sheet-cost';
-
     const moqCredit = coreMoqCreditFromBundles[coreId] || 0;
     const moqRes = applyMoqAndCasePack(needPieces, core.moq, core.casePack, moqThreshold, moqCredit);
+
+    // INTERMITTENT-aware MOQ status: if any bundle driving this core is
+    // INTERMITTENT and the inflation ratio > limit, flag for review.
+    let intermittentExcess = false;
+    if ((coreBundlesMap[coreId] || []).some(bid => {
+      const b = prepped.find(x => x.id === bid);
+      return b && b.segment === 'INTERMITTENT';
+    })) {
+      if (moqRes.moqInflationRatio > INTERMITTENT_MOQ_INFLATE_LIMIT) {
+        intermittentExcess = true;
+      }
+    }
 
     coreItems.push({
       id: coreId,
@@ -722,6 +497,7 @@ export function calcVendorRecommendation({
       urgent: prepped.some(b =>
         b.urgent && b.buyMode === 'core' && b.coresUsed.some(c => c.coreId === coreId)
       ),
+      intermittentExcess,
     });
   }
 
@@ -766,7 +542,7 @@ export function calcVendorRecommendation({
 
   const priceMap = {};
   for (const c of vendorCores) {
-    const histUnitCost = getVendorCoreUnitCost(c.id, vendor, priceCompFull);
+    const histUnitCost = getVendorCoreUnitCost(c.id, vendor, priceCompFull, priceIndex);
     priceMap[c.id] = histUnitCost != null ? histUnitCost : num(c.cost);
   }
   for (const b of vendorBundles) {
@@ -799,7 +575,6 @@ export function calcVendorRecommendation({
     buyNeed: b.buyNeed,
     buyMode: b.buyMode,
     urgent: b.urgent,
-    hasSeasonalHistory: b.hasSeasonalHistory,
     coresUsed: b.coresUsed,
     bundleMoqStatus: b.bundleMoqStatus || null,
     bundleMoqExtraDOC: b.bundleMoqExtraDOC || 0,
@@ -807,38 +582,48 @@ export function calcVendorRecommendation({
     forecast: {
       level: b.forecast.level,
       trend: b.forecast.trend,
-      effectiveTrend: b.forecast.effectiveTrend,
-      usedHolt: b.forecast.flags.usedHolt,
-      outliersRemoved: b.forecast.flags.outliersRemoved,
+      effectiveTrend: b.forecast.trend,
+      // Pass through the full forecast structure for the Why Buy panel:
+      segment: b.forecast.segment,
+      formula: b.forecast.formula,
+      reasoning: b.forecast.reasoning,
+      inputs: b.forecast.inputs,
+      projection: b.forecast.projection,
+      coverageDemand: b.forecast.coverageDemand,
+      safetyStock: b.forecast.safetyStock,
+      sigmaLT: b.forecast.sigmaLT,
+      Z: b.forecast.Z,
     },
     safetyStock: {
       amount: Math.round(b.forecast.safetyStock),
       sigmaLT: b.forecast.sigmaLT,
       Z: b.forecast.Z,
       profABC: b.profABC,
-      fallback: b.forecast.flags.safetyStockFallback,
+      fallback: !!b.forecast.flags?.safetyStockFallback,
     },
-    demandBreakdown: b.forecast.demandBreakdown,
+    // Legacy compat fields (consumers may still read these)
+    demandBreakdown: {
+      fromLevel: Math.round(b.forecastLevel * targetDoc),
+      fromTrend: 0,
+      fromSeasonal: Math.round(Math.max(0, b.coverageDemand - b.forecastLevel * targetDoc - b.forecast.safetyStock)),
+      total: Math.round(b.coverageDemand),
+    },
     spikeVisual: b.spikeVisual,
-    yoyInfo: b.yoyInfo,
-    // [v3.4] Régimen visible para UI
-    regime: b.regimeInfo?.regime || 'unknown',
-    regimeInfo: b.regimeInfo || null,
+    yoyInfo: null,
+    segment: b.segment,
+    regime: b.segment === 'INTERMITTENT' ? 'intermittent'
+          : b.segment === 'NEW_OR_SPARSE' ? 'new_or_sparse'
+          : 'continuous',
     flags: {
-      trackingSignalExceeded: b.forecast.flags.trackingSignalExceeded,
-      trackingSignal: b.forecast.flags.trackingSignal,
-      trendGatedByTS: b.forecast.flags.trendGatedByTS,
-      shortHistory: b.forecast.flags.shortHistory,
-      trendCapped: b.forecast.flags.trendCapped,
-      safetyStockFallback: b.forecast.flags.safetyStockFallback,
-      outliersRemoved: b.forecast.flags.outliersRemoved,
-      yoyCapApplied: b.forecast.flags.yoyCapApplied || false,
-      yoyHistoric: b.forecast.flags.yoyHistoric,
-      yoyOriginalForecast: b.forecast.flags.yoyOriginalForecast,
-      usedFlatFallback: b.usedFlatFallback || false,
-      regime: b.forecast.flags.regime,
-      regimeMethod: b.forecast.flags.regimeMethod,
-      regimeReason: b.forecast.flags.regimeReason,
+      segment: b.segment,
+      shortHistory: !!b.forecast.flags?.seriesLength && b.forecast.flags.seriesLength < 30,
+      safetyStockFallback: !!b.forecast.flags?.safetyStockFallback,
+      noData: !!b.forecast.flags?.noData,
+      regime: b.segment === 'INTERMITTENT' ? 'intermittent'
+            : b.segment === 'NEW_OR_SPARSE' ? 'new_or_sparse'
+            : 'continuous',
+      regimeMethod: b.forecast.formula,
+      regimeReason: (b.forecast.reasoning && b.forecast.reasoning[0]) || '',
     },
   }));
 
@@ -872,6 +657,7 @@ export function calcVendorRecommendation({
       totalPool: rawEff + pending,
       anomalyDetected: !!anomaly,
       anomalyInfo: anomaly || null,
+      intermittentExcess: !!item?.intermittentExcess,
     };
   });
 
@@ -891,14 +677,15 @@ export function calcVendorRecommendation({
     meetsVendorMoq,
     vendorMoqGap,
     anomalyMap,
-    regimeMap,
+    engineVersion: 'v4',
   };
 }
 
 // ============================================================
-// Batch helper
+// Batch helper — same shape as v3.4's batchVendorRecommendations
+// so the App.jsx call site flips imports and keeps working.
 // ============================================================
-export function batchVendorRecommendations({
+export function batchVendorRecommendationsV4({
   vendors,
   cores,
   bundles,
@@ -911,25 +698,19 @@ export function batchVendorRecommendations({
   missingMap,
   priceCompFull,
   priceIndex,
+  segmentMap,
   settings,
-  purchFreqMap,
+  onProgress,
 }) {
   const out = {};
-  const profileCache = {};
-  for (const b of (bundles || [])) {
-    if (!b || !b.j) continue;
-    if (profileCache[b.j]) continue;
-    try { profileCache[b.j] = calcBundleSeasonalProfile(b.j, bundleSales); }
-    catch { profileCache[b.j] = DEFAULT_PROFILE; }
-  }
-  const bundlesWithProfile = (bundles || []).map(b => ({ ...b, _profile: profileCache[b.j] }));
-  for (const v of (vendors || [])) {
+  const vList = vendors || [];
+  for (let i = 0; i < vList.length; i++) {
+    const v = vList[i];
     if (!v || !v.name) continue;
-    const safety = purchFreqMap?.[v.name]?.safetyMultiplier || 1.0;
-    out[v.name] = calcVendorRecommendation({
+    out[v.name] = calcVendorRecommendationV4({
       vendor: v,
       cores,
-      bundles: bundlesWithProfile,
+      bundles,
       bundleSales,
       bundleDays,
       coreDays,
@@ -939,11 +720,14 @@ export function batchVendorRecommendations({
       missingMap,
       priceCompFull,
       priceIndex,
+      segmentMap,
       settings,
-      purchFreqSafety: safety,
       bundleMoqOverride: 0,
       moqExtraDocThreshold: num(settings?.moqExtraDocThreshold, 30),
     });
+    if (onProgress) {
+      try { onProgress((i + 1) / vList.length, v.name); } catch {}
+    }
   }
   return out;
 }

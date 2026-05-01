@@ -2,7 +2,7 @@ import React, { useState, useMemo, useCallback, useEffect, useContext, useRef, F
 import { R, D1, $, $2, $4, P, gS, cAI, cNQ, cOQ, cDA, bNQ, isD, gTD, dc, cSeas, fSl, fMY, fE, fDateUS, effectiveDSR, roundToCasePack, genPO, genRFQ, cp7f, cp7g } from "../lib/utils";
 import { Dot, Toast, TH, SS, WorkflowChip, NumInput, SumCtx, VendorNotes, CalcBreakdownV2 } from "./Shared";
 import { batchProfiles, batchBundleProfiles, calcCoverageNeed, calcPurchaseFrequency, DEFAULT_PROFILE } from "../lib/seasonal";
-import { batchVendorRecommendations, calcVendorRecommendation } from "../lib/recommender";
+import { batchVendorRecommendationsV4, calcVendorRecommendationV4 } from "../lib/recommenderV4";
 import { saveSnapshotIfNeeded, loadPreviousSnapshot, computeDelta } from "../lib/snapshot";
 import { SegmentCtx } from "../App";
 import { SegmentBadge } from "./SegmentsTab";
@@ -587,7 +587,11 @@ const rows = priceHistoryFull
   const callRecommender = useCallback((vendorName, opts = {}) => {
     const vendor = vMap[vendorName];
     if (!vendor) return null;
-    return calcVendorRecommendation({
+    const segMap = {};
+    for (const [bid, rec] of Object.entries(segCtx.effectiveMap || {})) {
+      segMap[bid] = rec.effective;
+    }
+    return calcVendorRecommendationV4({
       vendor,
       cores: data.cores || [],
       bundles: data.bundles || [],
@@ -599,13 +603,13 @@ const rows = priceHistoryFull
       replenMap,
       missingMap,
       priceCompFull: (data.priceCompFull?.length ? data.priceCompFull : data.priceComp) || [],
+      segmentMap: segMap,
       settings: stg,
-      purchFreqSafety: purchFreqMap[vendorName]?.safetyMultiplier || 1.0,
       forceMode: opts.forceMode || null,
       bundleMoqOverride: opts.bundleMoqOverride || 0,
       moqExtraDocThreshold: stg.moqExtraDocThreshold || 30,
     });
-  }, [vMap, data, replenMap, missingMap, stg, purchFreqMap]);
+  }, [vMap, data, replenMap, missingMap, stg, segCtx.effectiveMap]);
 
   const applyMoqOverride = useCallback((vendorName) => {
     const ov = moqOverrides[vendorName] || {};

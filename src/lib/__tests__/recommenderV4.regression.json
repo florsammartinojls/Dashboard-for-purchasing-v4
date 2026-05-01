@@ -1,0 +1,171 @@
+{
+  "_meta": {
+    "description": "Regression fixtures for forecastV4 + recommenderV4. Each fixture exercises one segment path. Synthetic series are designed so the relevant calculation is deterministic and easy to verify by hand. The 'expected' block was computed by running the engine on the synthetic input once and locking in the output. Tolerance is 2% for numeric fields and exact for segment / formula strings.",
+    "asOf": "2025-05-01",
+    "tolerance_pct": 2
+  },
+  "fixtures": [
+    {
+      "id": "stable-flat",
+      "segment": "STABLE",
+      "settings": { "domesticDoc": 90, "intlDoc": 180, "serviceLevelA": 97, "serviceLevelOther": 95 },
+      "leadTime": 30,
+      "targetDoc": 90,
+      "profABC": "B",
+      "bundleId": "FX-STABLE",
+      "series_kind": "constant",
+      "series_value": 5,
+      "series_days": 180,
+      "expected": {
+        "segment": "STABLE",
+        "level": 5.0,
+        "trend": 0.0,
+        "coverageDemand_min": 450,
+        "coverageDemand_max": 460,
+        "formula_includes": "stable: avg(60d)"
+      }
+    },
+    {
+      "id": "growing-trend",
+      "segment": "GROWING",
+      "settings": { "domesticDoc": 90, "intlDoc": 180, "serviceLevelA": 97, "serviceLevelOther": 95 },
+      "leadTime": 30,
+      "targetDoc": 90,
+      "profABC": "A",
+      "bundleId": "FX-GROW",
+      "series_kind": "linear",
+      "series_start": 4,
+      "series_end": 10,
+      "series_days": 180,
+      "expected": {
+        "segment": "GROWING",
+        "level_min": 9,
+        "level_max": 10.5,
+        "trend_min": 0.0,
+        "formula_includes": "growing: avg(30d)"
+      }
+    },
+    {
+      "id": "declining-slope",
+      "segment": "DECLINING",
+      "settings": { "domesticDoc": 90, "intlDoc": 180, "serviceLevelA": 97, "serviceLevelOther": 95 },
+      "leadTime": 30,
+      "targetDoc": 90,
+      "profABC": "B",
+      "bundleId": "FX-DECL",
+      "series_kind": "linear",
+      "series_start": 10,
+      "series_end": 4,
+      "series_days": 180,
+      "expected": {
+        "segment": "DECLINING",
+        "level_min": 4,
+        "level_max": 7,
+        "trend_max": 0,
+        "formula_includes": "declining: avg(60d)"
+      }
+    },
+    {
+      "id": "intermittent-sparse",
+      "segment": "INTERMITTENT",
+      "settings": { "domesticDoc": 90, "intlDoc": 180 },
+      "leadTime": 30,
+      "targetDoc": 90,
+      "profABC": "C",
+      "bundleId": "FX-INT",
+      "series_kind": "intermittent",
+      "series_days": 200,
+      "intermittent_total_units": 20,
+      "intermittent_event_size": 4,
+      "expected": {
+        "segment": "INTERMITTENT",
+        "level_min": 0.05,
+        "level_max": 0.2,
+        "coverageDemand_min": 8,
+        "coverageDemand_max": 30,
+        "formula_includes": "intermittent: ratePerDay"
+      }
+    },
+    {
+      "id": "new-or-sparse",
+      "segment": "NEW_OR_SPARSE",
+      "settings": { "domesticDoc": 90, "intlDoc": 180 },
+      "leadTime": 30,
+      "targetDoc": 90,
+      "profABC": null,
+      "bundleId": "FX-NEW",
+      "series_kind": "constant",
+      "series_value": 0.5,
+      "series_days": 10,
+      "sheetDsr": 0.5,
+      "expected": {
+        "segment": "NEW_OR_SPARSE",
+        "level": 0.5,
+        "coverageDemand": 45,
+        "safetyStock": 0,
+        "formula_includes": "new_or_sparse"
+      }
+    },
+    {
+      "id": "dormant-revived",
+      "segment": "DORMANT_REVIVED",
+      "settings": { "domesticDoc": 90, "intlDoc": 180, "serviceLevelA": 97, "serviceLevelOther": 95 },
+      "leadTime": 30,
+      "targetDoc": 90,
+      "profABC": "B",
+      "bundleId": "FX-DORM",
+      "series_kind": "dormant",
+      "series_days": 365,
+      "dormant_old_value": 0,
+      "dormant_recent_value": 6,
+      "dormant_recent_days": 30,
+      "expected": {
+        "segment": "DORMANT_REVIVED",
+        "level_min": 5.5,
+        "level_max": 6.5,
+        "formula_includes": "dormant_revived: avg(30d)"
+      }
+    },
+    {
+      "id": "seasonal-peaked-q4",
+      "segment": "SEASONAL_PEAKED",
+      "settings": { "domesticDoc": 180, "intlDoc": 180, "serviceLevelA": 97, "serviceLevelOther": 95 },
+      "leadTime": 60,
+      "targetDoc": 180,
+      "profABC": "A",
+      "bundleId": "FX-Q4",
+      "series_kind": "seasonal",
+      "series_days": 365,
+      "seasonal_off_value": 2,
+      "seasonal_peak_value": 30,
+      "seasonal_peak_months": [10, 11, 12],
+      "bundleSales_kind": "monthly_from_series",
+      "expected": {
+        "segment": "SEASONAL_PEAKED",
+        "level_min": 1.0,
+        "coverageDemand_min": 800,
+        "formula_includes": "seasonal_peaked"
+      }
+    },
+    {
+      "id": "stable-noisy",
+      "segment": "STABLE",
+      "settings": { "domesticDoc": 90, "intlDoc": 180, "serviceLevelA": 97, "serviceLevelOther": 95 },
+      "leadTime": 30,
+      "targetDoc": 90,
+      "profABC": "A",
+      "bundleId": "FX-NOISE",
+      "series_kind": "noisy_constant",
+      "series_value": 8,
+      "series_noise": 1.5,
+      "series_days": 180,
+      "series_seed": 42,
+      "expected": {
+        "segment": "STABLE",
+        "level_min": 7,
+        "level_max": 9,
+        "formula_includes": "stable: avg(60d)"
+      }
+    }
+  ]
+}

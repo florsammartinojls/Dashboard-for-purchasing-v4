@@ -1,9 +1,10 @@
-import React, { useState, useMemo, useEffect } from "react";
+import React, { useState, useMemo, useEffect, useContext } from "react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceArea, ReferenceDot } from "recharts";
 import { R, D1, $, $2, P, MN, YC, TTP, BL, TL, gS, cAI, cNQ, cOQ, cDA, gTD, dc, fE, fD, cMo, gY, cSeas } from "../lib/utils";
 import { Dot, TH, SumCtx, CopyableId } from "./Shared";
 import { batchProfiles, calcCoverageNeed, calcPurchaseFrequency, DEFAULT_PROFILE } from "../lib/seasonal";
-import { calcVendorRecommendation } from "../lib/recommender";
+import { calcVendorRecommendationV4 } from "../lib/recommenderV4";
+import { SegmentCtx } from "../App";
 
 // Clickable cell for Quick Sum
 function SC({ v, children, className }) {
@@ -253,22 +254,30 @@ export default function CoreTab({ data, stg, hist, daily, coreId, onBack, goBund
     return m;
   }, [data.receiving]);
 
-  // === V2 VENDOR RECOMMENDATION — same source as PurchTab ===
+  // === V4 VENDOR RECOMMENDATION — same source as PurchTab ===
+  const segCtx = useContext(SegmentCtx);
   const vendorRec = useMemo(() => {
     if (!core || !ven) return null;
-    return calcVendorRecommendation({
+    const segMap = {};
+    for (const [bid, rec] of Object.entries(segCtx.effectiveMap || {})) {
+      segMap[bid] = rec.effective;
+    }
+    return calcVendorRecommendationV4({
       vendor: ven,
       cores: data.cores || [],
       bundles: data.bundles || [],
       bundleSales: hist?.bundleSales || data._bundleSales || [],
+      bundleDays: daily?.bundleDays || data.bundleDaysForecast || [],
+      coreDays: daily?.coreDays || data.coreDaysForecast || [],
+      abcA: data.abcA || [],
       receivingFull: data.receivingFull || [],
       replenMap: replenMapByJ,
       missingMap: missingMapByJ,
       priceCompFull: (data.priceCompFull?.length ? data.priceCompFull : data.priceComp) || [],
+      segmentMap: segMap,
       settings: stg,
-      purchFreqSafety: pf?.safetyMultiplier || 1.0,
     });
-  }, [core, ven, data.cores, data.bundles, hist, data.receivingFull, replenMapByJ, missingMapByJ, data.priceCompFull, stg, pf]);
+  }, [core, ven, data, hist, daily, replenMapByJ, missingMapByJ, stg, segCtx.effectiveMap]);
 
   // Per-core detail from recommender
   const coreDetail = useMemo(() => {
