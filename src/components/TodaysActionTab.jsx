@@ -354,6 +354,11 @@ function Q4Widget({ data, vendorRecs, segMap, vMap, onReview }) {
   );
 }
 
+function isUSVendor(v) {
+  const c = (v?.country || '').toLowerCase().trim();
+  return c === '' || c === 'us' || c === 'usa' || c === 'united states';
+}
+
 // ─── Main tab ─────────────────────────────────────────────────
 export default function TodaysActionTab({
   data, stg, vendorRecs, goVendor, workflow,
@@ -362,6 +367,7 @@ export default function TodaysActionTab({
 }) {
   const segCtx = useContext(SegmentCtx);
   const whyBuy = useContext(WhyBuyCtx);
+  const [originFilter, setOriginFilter] = useState('all'); // 'all' | 'us' | 'intl'
 
   const vMap = useMemo(() => {
     const m = {};
@@ -372,6 +378,10 @@ export default function TodaysActionTab({
   const vendorList = useMemo(() => {
     const out = [];
     for (const v of (data.vendors || [])) {
+      // Apply origin filter
+      const us = isUSVendor(v);
+      if (originFilter === 'us' && !us) continue;
+      if (originFilter === 'intl' && us) continue;
       const rec = vendorRecs?.[v.name];
       const u = vendorUrgency(rec);
       if (u.tier === 'none') continue;
@@ -385,7 +395,7 @@ export default function TodaysActionTab({
       return b.urgency.cost - a.urgency.cost;
     });
     return out;
-  }, [data.vendors, vendorRecs]);
+  }, [data.vendors, vendorRecs, originFilter]);
 
   const totals = useMemo(() => {
     const t = { critical: 0, warning: 0, cost: 0 };
@@ -476,6 +486,16 @@ export default function TodaysActionTab({
               >
                 Open Purchasing tab →
               </button>
+              <select
+                value={originFilter}
+                onChange={e => setOriginFilter(e.target.value)}
+                title="Filter vendors by origin"
+                className="bg-gray-800 border border-gray-700 text-gray-200 text-sm rounded px-3 py-2"
+              >
+                <option value="all">All origins</option>
+                <option value="us">US only</option>
+                <option value="intl">International only</option>
+              </select>
             </div>
           </div>
           {/* KPI strip */}
