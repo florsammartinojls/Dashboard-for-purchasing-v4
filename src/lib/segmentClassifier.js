@@ -125,8 +125,37 @@ export function computeFeatures(bundleId, bundleDays, bundleSales) {
     monthlyTotals.set(ym, sum);
   }
 
+  // peakConcentration: top-3 months / total — multi-year aware.
+  // Prefer bundleSales (multi-year monthly aggregates) when ≥6 months
+  // of any-year data exist; fall back to single-year monthlyTotals
+  // otherwise. Multi-year is more reliable for confirming a recurring
+  // seasonal pattern; single-year was leading to false positives.
   let peakConcentration = 0;
-  if (monthlyTotals.size >= 3) {
+
+  const monthlyVolByM = Array.from({ length: 12 }, () => 0);
+  const monthlyVolCountByM = Array.from({ length: 12 }, () => 0);
+  if (Array.isArray(bundleSales)) {
+    for (const r of bundleSales) {
+      if (!r || r.j !== bundleId) continue;
+      if (!(r.m >= 1 && r.m <= 12)) continue;
+      const units = r.units > 0 ? r.units : 0;
+      if (units <= 0) continue;
+      monthlyVolByM[r.m - 1] += units;
+      monthlyVolCountByM[r.m - 1] += 1;
+    }
+  }
+  const avgVolByM = monthlyVolByM.map((sum, i) =>
+    monthlyVolCountByM[i] > 0 ? sum / monthlyVolCountByM[i] : 0
+  );
+  const positiveMonths = avgVolByM.filter(v => v > 0);
+  if (positiveMonths.length >= 6) {
+    const sorted = [...avgVolByM].sort((a, b) => b - a);
+    const top3 = sorted.slice(0, 3).reduce((s, v) => s + v, 0);
+    const total = avgVolByM.reduce((s, v) => s + v, 0);
+    if (total > ZERO) peakConcentration = top3 / total;
+  } else if (monthlyTotals.size >= 3) {
+    // Fallback: single-year (last 365d only) when multi-year data is
+    // too sparse to be meaningful.
     const sorted = [...monthlyTotals.values()].sort((a, b) => b - a);
     const top3 = sorted.slice(0, 3).reduce((s, v) => s + v, 0);
     const total = sorted.reduce((s, v) => s + v, 0);
