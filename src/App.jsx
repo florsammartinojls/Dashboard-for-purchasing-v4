@@ -600,8 +600,11 @@ export default function App() {
   const autoSegmentMap = useMemo(() => {
     if (!data.bundles?.length) return {};
     const t0 = performance.now();
+    const activeBundles = (data.bundles || []).filter(b => 
+  b && b.j && b.active === 'Yes' && !b.ignoreUntil
+    );
     const out = batchClassifySegments({
-      bundles: data.bundles,
+      bundles: activeBundles,
       bundleDays: data.bundleDaysForecast || data.bundleDays || [],
       bundleSales: data.bundleSales || [],
     });
