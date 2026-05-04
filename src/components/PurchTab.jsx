@@ -72,6 +72,38 @@ function FlagLegendItem({ type }) {
   );
 }
 
+// MOQ blocked badge — shown when the recommender rejected the buy
+// because the MOQ-forced quantity exceeds moqInflationHardCap × need.
+// Carries a button that lets the user override the cap manually.
+function MoqBlockedControls({ detail, onOverride }) {
+  if (!detail) return null;
+  const ratio = detail.ratio || 0;
+  const ratioLabel = ratio >= 10 ? Math.round(ratio) : ratio.toFixed(1);
+  const tip =
+    `Necesita ${Math.round(detail.coreNeed).toLocaleString('en-US')}u pero MOQ obliga a ` +
+    `${Math.round(detail.wouldHaveBought).toLocaleString('en-US')}u (${ratioLabel}x). ` +
+    `Bloqueado por moqInflationHardCap=${detail.cap}. ` +
+    `Considerá negociar MOQ menor con vendor o splittear con otros productos.`;
+  return (
+    <>
+      <span
+        className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded bg-orange-500/25 text-orange-300 border border-orange-500/50 cursor-help flex-shrink-0"
+        title={tip}
+      >
+        $ MOQ blocked – {ratioLabel}x
+      </span>
+      <button
+        type="button"
+        onClick={onOverride}
+        className="text-[10px] text-orange-400 hover:text-orange-300 underline underline-offset-2 flex-shrink-0"
+        title={`Override: forzar compra de ${Math.round(detail.wouldHaveBought).toLocaleString('en-US')}u (${'$' + Math.round(detail.wouldHaveCost).toLocaleString('en-US')}) ignorando el cap.`}
+      >
+        Override MOQ
+      </button>
+    </>
+  );
+}
+
 
 function SC({ v, children, className }) {
   const { addCell } = useContext(SumCtx);
@@ -426,6 +458,69 @@ const rows = priceHistoryFull
   }, [priceHistoryFull]);
 
   const spikeThr = stg.spikeThreshold || 1.25;
+
+  // Per-core enrichment factored out so vG (vendor view) can also use it
+  // for "extras" — cores the recommender processed but PurchTab's UI
+  // filters knocked out (active/visible/ignored/no-bundle). Without this,
+  // cores with rec.coreDetails entries would be invisible in the vendor
+  // card even though the engine processed them. See vG below.
+  const buildEnrichedCore = useCallback((c) => {
+    const v = vMap[c.ven] || {};
+    const lt = v.lt || 30;
+    const tg = gTD(v, stg);
+    const cd = lt;
+    const wd = lt + (c.buf || 14);
+    const effectiveDoc = c.dsr > 0 ? Math.round(cAI(c) / c.dsr) : c.doc;
+    const st = gS(effectiveDoc, lt, c.buf, { critDays: cd, warnDays: wd });
+    const ai = cAI(c);
+    const seas = cSeas(c.id, (data._coreInv || []));
+    const invAnomaly = ai > 0 && c.dsr > 0 && Math.abs(effectiveDoc - ai / c.dsr) > effectiveDoc * 0.2;
+
+    const vRec = effectiveRecs[c.ven];
+    const cDet = vRec?.coreDetails?.find(x => x.coreId === c.id);
+    const sNeed = cDet?.needPieces || 0;
+    const oq = cDet?.finalQty || 0;
+    const moqInflated = cDet?.moqInflated || false;
+    const moqInflationRatio = cDet?.moqInflationRatio || 1;
+    const excessFromMoq = cDet?.excessFromMoq || 0;
+    const excessCostFromMoq = cDet?.excessCostFromMoq || 0;
+    const recUrgent = cDet?.urgent || false;
+    const bundlesAffected = cDet?.bundlesAffected || 0;
+    const rejectedByMoqCap = cDet?.rejectedByMoqCap || false;
+    const moqCapDetail = cDet?.moqCapDetail || null;
+
+    const profile = profiles[c.id] || DEFAULT_PROFILE;
+
+    return {
+      ...c,
+      status: st,
+      allIn: ai,
+      doc: effectiveDoc,
+      needQty: sNeed,
+      orderQty: oq,
+      needDollar: +(oq * c.cost).toFixed(2),
+      docAfter: cDA(c, oq),
+      lt,
+      critDays: cd,
+      warnDays: wd,
+      targetDoc: tg,
+      vc: v.country || "",
+      seas,
+      isDom: isD(v.country),
+      spike: c.d7 > 0 && c.dsr > 0 && c.d7 >= c.dsr * spikeThr,
+      sProfile: profile,
+      sCoverage: { urgent: recUrgent },
+      invAnomaly,
+      moqInflated,
+      moqInflationRatio,
+      excessFromMoq,
+      excessCostFromMoq,
+      bundlesAffected,
+      rejectedByMoqCap,
+      moqCapDetail,
+    };
+  }, [vMap, stg, data._coreInv, effectiveRecs, profiles, spikeThr]);
+
   const enr = useMemo(() => (data.cores || [])
     .filter(c => c.id && !/^JLS/i.test(c.id))
     .filter(c => {
@@ -436,55 +531,9 @@ const rows = priceHistoryFull
       if (stg.fI === "blank" && !!c.ignoreUntil) return false;
       if (!showNoBundleCores && activeBundleCores && !activeBundleCores.has(c.id)) return false;
       return true;
-    }).map(c => {
-      const v = vMap[c.ven] || {}; const lt = v.lt || 30; const tg = gTD(v, stg);
-      const cd = lt; const wd = lt + (c.buf || 14);
-      const effectiveDoc = c.dsr > 0 ? Math.round(cAI(c) / c.dsr) : c.doc;
-      const st = gS(effectiveDoc, lt, c.buf, { critDays: cd, warnDays: wd });
-      const ai = cAI(c);
-      const seas = cSeas(c.id, (data._coreInv || []));
-      const invAnomaly = ai > 0 && c.dsr > 0 && Math.abs(effectiveDoc - ai / c.dsr) > effectiveDoc * 0.2;
-
-      const vRec = effectiveRecs[c.ven];
-      const cDet = vRec?.coreDetails?.find(x => x.coreId === c.id);
-      const sNeed = cDet?.needPieces || 0;
-      const oq = cDet?.finalQty || 0;
-      const moqInflated = cDet?.moqInflated || false;
-      const moqInflationRatio = cDet?.moqInflationRatio || 1;
-      const excessFromMoq = cDet?.excessFromMoq || 0;
-      const excessCostFromMoq = cDet?.excessCostFromMoq || 0;
-      const recUrgent = cDet?.urgent || false;
-      const bundlesAffected = cDet?.bundlesAffected || 0;
-
-      const profile = profiles[c.id] || DEFAULT_PROFILE;
-
-      return {
-        ...c,
-        status: st,
-        allIn: ai,
-        doc: effectiveDoc,
-        needQty: sNeed,
-        orderQty: oq,
-        needDollar: +(oq * c.cost).toFixed(2),
-        docAfter: cDA(c, oq),
-        lt,
-        critDays: cd,
-        warnDays: wd,
-        targetDoc: tg,
-        vc: v.country || "",
-        seas,
-        isDom: isD(v.country),
-        spike: c.d7 > 0 && c.dsr > 0 && c.d7 >= c.dsr * spikeThr,
-        sProfile: profile,
-        sCoverage: { urgent: recUrgent },
-        invAnomaly,
-        moqInflated,
-        moqInflationRatio,
-        excessFromMoq,
-        excessCostFromMoq,
-        bundlesAffected,
-      };
-    }).filter(c => {
+    })
+    .map(buildEnrichedCore)
+    .filter(c => {
       if (vf && c.ven !== vf) return false;
       if (sf && c.status !== sf) return false;
       if (minD > 0 && c.doc < minD) return false;
@@ -518,7 +567,7 @@ const rows = priceHistoryFull
       if (sort === "need$") return b.needDollar - a.needDollar;
       return 0;
     })
-   , [data, stg, vf, sf, sort, vMap, nf, minD, locF, profiles, effectiveRecs, showNoBundleCores, activeBundleCores, spikeThr, ov]);
+   , [data, stg, vf, sf, sort, nf, minD, locF, showNoBundleCores, activeBundleCores, ov, buildEnrichedCore]);
   
   const venBundles = useMemo(() => (data.bundles || []).filter(b => {
     if (bA === "yes" && b.active !== "Yes") return false;
@@ -544,13 +593,97 @@ const rows = priceHistoryFull
   const bundleEffQ = b => gPcs(b.j) || gCas(b.j) * 1;
   const tot = useMemo(() => { let d = 0, a = 0, n = 0, o = 0, co = 0; enr.forEach(c => { d += c.dsr; a += c.allIn; n += c.needQty; o += c.orderQty; co += c.needDollar }); return { d, a, n, o, co } }, [enr]);
 
+  // Vendor-key resolver: vendorRecs uses exact vendor.name keys, but
+  // sometimes the user's filter (vf) or a sheet typo carries trailing
+  // whitespace / different casing. Falls back to a case-insensitive
+  // trimmed match and warns once when it has to.
+  const vendorKeyWarned = useRef(new Set());
+  const resolveVendorKey = useCallback((name) => {
+    if (!name) return null;
+    if (effectiveRecs[name]) return name;
+    const target = name.toLowerCase().trim();
+    for (const k of Object.keys(effectiveRecs)) {
+      if (k.toLowerCase().trim() === target) {
+        if (!vendorKeyWarned.current.has(name) && import.meta.env.DEV) {
+          console.warn('[PurchTab] vendor name lookup fallback:', name, '→', k, '(available:', Object.keys(effectiveRecs).slice(0, 20), ')');
+          vendorKeyWarned.current.add(name);
+        }
+        return k;
+      }
+    }
+    if (!vendorKeyWarned.current.has(name) && import.meta.env.DEV) {
+      console.warn('[PurchTab] vendor name not in vendorRecs:', name, '(available:', Object.keys(effectiveRecs).slice(0, 20), ')');
+      vendorKeyWarned.current.add(name);
+    }
+    return null;
+  }, [effectiveRecs]);
+
+  // ────────────────────────────────────────────────────────────
+  // vG (vendor groups) source-of-truth contract:
+  //   For each vendor we render in the vendor view, the cores list
+  //   is the UNION of:
+  //     (a) `enr` cores that pass UI filters (active/visible/ignored
+  //         /activeBundleCores/loc/status/etc.) → rendered normally
+  //     (b) cores that exist in vendorRec.coreDetails but NOT in (a)
+  //         → rendered with __fromRecOnly:true (opacity-60 + microtag)
+  //
+  // Why: the recommender (recommenderV4) filters cores only by
+  // `c.ven === vendor.name && !/^JLS/i`. PurchTab's UI filters are
+  // stricter. Without this union, cores like Runxing 12612/12614
+  // (present in coreDetails) would be invisible in the UI even
+  // though the engine processed them — and cores like Nanchang
+  // 12461 would make the whole vendor disappear from vG.
+  // ────────────────────────────────────────────────────────────
+  const coresById = useMemo(() => {
+    const m = {};
+    (data.cores || []).forEach(c => { if (c?.id) m[c.id] = c; });
+    return m;
+  }, [data.cores]);
+
   const vG = useMemo(() => {
     if (vm !== "vendor") return [];
     const g = {};
-    enr.forEach(c => { if (!g[c.ven]) g[c.ven] = { v: vMap[c.ven] || { name: c.ven }, cores: [], bundles: [] }; g[c.ven].cores.push(c) });
+    enr.forEach(c => {
+      if (!g[c.ven]) g[c.ven] = { v: vMap[c.ven] || { name: c.ven }, cores: [], bundles: [] };
+      g[c.ven].cores.push(c);
+    });
+
+    // Add extras from vendorRec.coreDetails that survived the engine
+    // but didn't make it into enr. Respect the vendor filter (vf) and
+    // the location filter (locF) — but skip status/min-DOC filters so
+    // extras are always discoverable when the vendor card is open.
+    for (const [vName, rec] of Object.entries(effectiveRecs || {})) {
+      if (!rec || !Array.isArray(rec.coreDetails)) continue;
+      if (vf && vName !== vf) continue;
+      if (!g[vName]) g[vName] = { v: vMap[vName] || { name: vName }, cores: [], bundles: [] };
+      const present = new Set(g[vName].cores.map(c => c.id));
+      for (const cd of rec.coreDetails) {
+        if (present.has(cd.coreId)) continue;
+        const raw = coresById[cd.coreId];
+        if (!raw) continue;
+        const enriched = buildEnrichedCore(raw);
+        if (locF === "us" && !enriched.isDom) continue;
+        if (locF === "intl" && enriched.isDom) continue;
+        g[vName].cores.push({ ...enriched, __fromRecOnly: true });
+      }
+    }
+
+    // If vf is set but vendorRecs has only a near-match key, surface
+    // it under the requested vf key so the card still renders.
+    if (vf && !g[vf]) {
+      const k = resolveVendorKey(vf);
+      if (k && g[k]) {
+        g[vf] = g[k];
+        delete g[k];
+      }
+    }
+
     Object.keys(g).forEach(vn => { g[vn].bundles = venBundles.filter(b => (b.vendors || "").indexOf(vn) >= 0) });
-    return Object.values(g).filter(grp => vf || showIgnored || !isIgnored(grp.v.name)).sort((a, b) => b.cores.filter(c => c.status === "critical").length - a.cores.filter(c => c.status === "critical").length);
-  }, [enr, vm, vMap, venBundles, isIgnored, showIgnored]);
+    return Object.values(g)
+      .filter(grp => vf || showIgnored || !isIgnored(grp.v.name))
+      .filter(grp => grp.cores.length > 0 || grp.bundles.length > 0)
+      .sort((a, b) => b.cores.filter(c => c.status === "critical").length - a.cores.filter(c => c.status === "critical").length);
+  }, [enr, vm, vMap, venBundles, isIgnored, showIgnored, vf, locF, effectiveRecs, coresById, buildEnrichedCore, resolveVendorKey]);
 
   const getPOI = (cores, bundles) => {
     const items = [];
@@ -761,7 +894,7 @@ const rows = priceHistoryFull
     const hasSeasonal = c.sProfile?.hasHistory;
     const isUrgent = c.sCoverage?.urgent;
 
-    const rowBg = "";
+    const rowBg = c.__fromRecOnly ? "opacity-60" : "";
     const stickyBg = "bg-gray-950";
 
     return <>
@@ -773,9 +906,23 @@ const rows = priceHistoryFull
         <td className={`py-2 px-1 sticky left-[85px] z-10 ${stickyBg}`}>
           <div className="flex items-center gap-1.5 min-w-0 flex-wrap">
             <span className="text-gray-100 truncate max-w-[160px] font-medium">{c.ti}</span>
+            {c.__fromRecOnly && (
+              <span
+                className="text-[9px] uppercase tracking-wider px-1 py-0.5 rounded bg-gray-700/60 text-gray-400 border border-gray-600 flex-shrink-0"
+                title="Procesado por el motor pero filtrado por la UI (active/visible/ignored/no-bundle). Visible acá para que no quede invisible — aplicá Show No-Bundle o ajustá filtros si lo querés ver siempre."
+              >
+                rec
+              </span>
+            )}
             {isUrgent && <Flag type="OOS" />}
             {c.invAnomaly && <Flag type="INV" />}
-            {c.moqInflated && <Flag type="MOQ" extraTip={`MOQ forces ${Math.round(c.moqInflationRatio * 100)}% of real need. Excess: ${R(c.excessFromMoq)} pcs / $${Math.round(c.excessCostFromMoq).toLocaleString()}`} />}
+            {c.moqInflated && !c.rejectedByMoqCap && <Flag type="MOQ" extraTip={`MOQ forces ${Math.round(c.moqInflationRatio * 100)}% of real need. Excess: ${R(c.excessFromMoq)} pcs / $${Math.round(c.excessCostFromMoq).toLocaleString()}`} />}
+            {c.rejectedByMoqCap && (
+              <MoqBlockedControls
+                detail={c.moqCapDetail}
+                onOverride={() => setF(c.id, 'pcs', c.moqCapDetail?.wouldHaveBought || 0)}
+              />
+            )}
             {c.bundlesAffected > 0 && <span className="text-[10px] text-gray-500 flex-shrink-0" title={`Driven by ${c.bundlesAffected} bundle(s). See 📊 Step 3.`}>({c.bundlesAffected}b)</span>}
           </div>
         </td>
@@ -1019,11 +1166,22 @@ const rows = priceHistoryFull
     <span className="truncate max-w-[170px]">{c.ti}</span>
     {c.sCoverage?.urgent && <Flag type="OOS" />}
     {c.invAnomaly && <Flag type="INV" />}
-    {c.moqInflated && <Flag type="MOQ" extraTip={`MOQ forces ${Math.round(c.moqInflationRatio * 100)}% of real need. Excess: ${R(c.excessFromMoq)} pcs / $${Math.round(c.excessCostFromMoq).toLocaleString()}`} />}
+    {c.moqInflated && !c.rejectedByMoqCap && <Flag type="MOQ" extraTip={`MOQ forces ${Math.round(c.moqInflationRatio * 100)}% of real need. Excess: ${R(c.excessFromMoq)} pcs / $${Math.round(c.excessCostFromMoq).toLocaleString()}`} />}
+    {c.rejectedByMoqCap && (
+      <MoqBlockedControls
+        detail={c.moqCapDetail}
+        onOverride={() => setF(c.id, 'pcs', c.moqCapDetail?.wouldHaveBought || 0)}
+      />
+    )}
     {c.bundlesAffected > 0 && <span className="text-[10px] text-gray-500" title={`Driven by ${c.bundlesAffected} bundle(s).`}>({c.bundlesAffected}b)</span>}
   </div>
 </td><td className="py-2 px-2 text-right">{D1(c.dsr)}</td><td className="py-2 px-2 text-right">{D1(c.d7)}</td><td className="py-2 px-2 text-center">{c.d7 > c.dsr ? <span className="text-emerald-400">▲</span> : c.d7 < c.dsr ? <span className="text-red-400">▼</span> : "—"}</td><td className={`py-2 px-2 text-right font-semibold ${dc(c.doc, c.critDays, c.warnDays)}`}>{R(c.doc)}</td><td className="py-2 px-2 text-right">{R(c.allIn)}</td><td className="py-2 px-2 text-right text-gray-400 text-xs">{c.moq > 0 ? R(c.moq) : "—"}</td><td className="py-2 px-2 text-center">{c.seas && <span className="text-purple-400 text-xs font-bold">{c.seas.peak}</span>}</td><td className="py-2 px-1 border-l-2 border-blue-500/40" /><td className="py-2 px-2 text-right">{c.needQty > 0 ? (
-        c.moqInflated ? (
+        c.rejectedByMoqCap ? (
+          <span title={`MOQ blocked. Need real ${R(c.needQty)}, hubiera comprado ${R(c.moqCapDetail?.wouldHaveBought || 0)}.`}>
+            <span className="text-gray-300">{R(c.needQty)}</span>
+            <span className="text-orange-400 text-xs ml-1">⛔</span>
+          </span>
+        ) : c.moqInflated ? (
           <span title={`Real need: ${R(c.needQty)} · MOQ forces: ${R(c.orderQty)}`}>
             <span className="text-gray-300">{R(c.needQty)}</span>
             <span className="text-orange-400 text-xs ml-1">→{R(c.orderQty)}</span>
@@ -1093,11 +1251,19 @@ const rows = priceHistoryFull
               {bundlesInCoreMode + bundlesInBundleMode} bundle{(bundlesInCoreMode + bundlesInBundleMode) > 1 ? "s" : ""} need buy → {bundlesInCoreMode} via core, {bundlesInBundleMode} via bundle
             </span>}
             {(() => {
-              const totalExcessMoq = grp.cores.filter(c => c.moqInflated).reduce((s, c) => s + c.excessCostFromMoq, 0);
-              const countInflated = grp.cores.filter(c => c.moqInflated).length;
+              const totalExcessMoq = grp.cores.filter(c => c.moqInflated && !c.rejectedByMoqCap).reduce((s, c) => s + c.excessCostFromMoq, 0);
+              const countInflated = grp.cores.filter(c => c.moqInflated && !c.rejectedByMoqCap).length;
               if (totalExcessMoq === 0) return null;
-              return <span className="text-xs text-orange-400" title="Sum of excess inventory $ forced by MOQ across cores in this vendor">
+              return <span className="text-xs text-orange-400" title="Sum of excess inventory $ forced by MOQ across cores in this vendor (blocked items not included)">
                 MOQ excess: ${Math.round(totalExcessMoq).toLocaleString()} ({countInflated} cores)
+              </span>;
+            })()}
+            {(() => {
+              const blocked = grp.cores.filter(c => c.rejectedByMoqCap && c.moqCapDetail);
+              if (blocked.length === 0) return null;
+              const avoided = blocked.reduce((s, c) => s + (c.moqCapDetail?.wouldHaveCost || 0), 0);
+              return <span className="text-xs text-orange-300 font-semibold" title="Items donde el MOQ supera el cap (moqInflationHardCap). El motor no los recomienda — usá Override MOQ por core si querés forzarlos.">
+                {blocked.length} item{blocked.length > 1 ? 's' : ''} blocked by MOQ cap — ${Math.round(avoided).toLocaleString()} potential overspend avoided
               </span>;
             })()}
             {(() => {

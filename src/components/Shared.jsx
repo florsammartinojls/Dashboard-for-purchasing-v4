@@ -194,6 +194,13 @@ export function Stg({ s, setS, onClose }) {
               <p className="text-[10px] text-gray-500 mt-1">Default 1.5 · ≥ triggers ⚠MOQ</p>
             </div>
             <div>
+              <label className="text-sm text-gray-400 block mb-1" title="Si el MOQ obliga a comprar más de Nx el need real, bloquear la compra. 3x es conservador, 5x más permisivo. No afecta a case-packs domésticos típicos (~1.1x).">
+                MOQ Inflation Hard Cap
+              </label>
+              <input type="number" step="0.5" min="1" value={l.moqInflationHardCap ?? 3.0} onChange={e => setL({ ...l, moqInflationHardCap: +e.target.value })} className="bg-gray-800 border border-gray-600 text-white rounded px-3 py-2 w-full" />
+              <p className="text-[10px] text-gray-500 mt-1">Default 3.0 · ratio &gt; cap ⇒ bloqueado</p>
+            </div>
+            <div>
               <label className="text-sm text-gray-400 block mb-1" title="When Bundle MOQ forces more than needed, max extra DOC days before suggesting 'wait'. Default 30.">
                 MOQ Extra DOC Threshold
               </label>

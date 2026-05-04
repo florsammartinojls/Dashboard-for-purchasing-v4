@@ -296,10 +296,26 @@ export default function WhyBuyPanel({ open, onClose, anchor, vendorRecs, segment
   if (!open || !anchor) return null;
 
   // anchor: { coreId?, bundleId?, vendorName? }
+  //
+  // Resolution order (each step falls through if it misses):
+  //   1. Exact vendorName match in vendorRecs
+  //   2. Case-insensitive trimmed vendorName match (handles "Co., Ltd"
+  //      style names that get mangled by naive `.split(',')[0]` callers
+  //      in BundleTab and elsewhere)
+  //   3. Content scan: first vendorRec that contains this bundleId or
+  //      coreId. This is the safety net that prevents the modal from
+  //      rendering "No recommendation found" when the caller passed a
+  //      vendor name that doesn't exactly match a vendorRecs key.
   const vendorRec = useMemo(() => {
-    if (anchor.vendorName) return vendorRecs?.[anchor.vendorName] || null;
-    // Fallback: find first vendorRec that contains this bundle/core
-    for (const rec of Object.values(vendorRecs || {})) {
+    const recs = vendorRecs || {};
+    if (anchor.vendorName) {
+      if (recs[anchor.vendorName]) return recs[anchor.vendorName];
+      const target = anchor.vendorName.toLowerCase().trim();
+      for (const [k, v] of Object.entries(recs)) {
+        if (v && k.toLowerCase().trim() === target) return v;
+      }
+    }
+    for (const rec of Object.values(recs)) {
       if (!rec) continue;
       if (anchor.bundleId && rec.bundleDetails?.some(bd => bd.bundleId === anchor.bundleId)) return rec;
       if (anchor.coreId && rec.coreDetails?.some(cd => cd.coreId === anchor.coreId)) return rec;

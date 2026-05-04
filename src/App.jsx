@@ -345,6 +345,7 @@ const DEFAULT_SETTINGS = {
   replenFloorDoc: 80,
   spikeThreshold: 1.25,
   moqInflationThreshold: 1.5,
+  moqInflationHardCap: 3.0,
   moqExtraDocThreshold: 30,
   fA: "yes", fI: "blank", fV: "yes",
   // V4 engine kill switch — when false, every bundle collapses
@@ -389,6 +390,12 @@ export default function App() {
   const [historyStatus, setHistoryStatus] = useState({ loading: true, error: null, version: null, fromCache: false });
   const [historyProgress, setHistoryProgress] = useState({ done: 0, total: 0 });
   const [refreshingHistory, setRefreshingHistory] = useState(false);
+  // One-shot flag: once history finishes its first cold load we never
+  // show the "Loading history…" banner / SkeletonHero again. Manual
+  // refreshes still flip historyStatus.loading but don't re-show the
+  // intrusive banner — they show the smaller header indicator only.
+  // Avoids the perceived "loading on every vendor switch" symptom.
+  const [historyEverLoaded, setHistoryEverLoaded] = useState(false);
 
   const [ov, setOv] = useState({});
   const [initV, setInitV] = useState(initVendorParam || null);
@@ -503,6 +510,7 @@ export default function App() {
         version: history.version || null,
         fromCache: !!history._cachedAt && !forceRefresh
       });
+      setHistoryEverLoaded(true);
     } catch (e) {
       console.error('History load failed:', e);
       setHistoryStatus({ loading: false, error: e.message, version: null, fromCache: false });
@@ -898,7 +906,7 @@ export default function App() {
             ⚠ History data failed to load: {historyStatus.error}. Some charts and seasonal calculations may be empty. <button onClick={() => loadHistory({ forceRefresh: true })} className="underline ml-1">Retry</button>
           </div>
         )}
-        {historyStatus.loading && !data.coreInv?.length && (
+        {historyStatus.loading && !historyEverLoaded && (
           <HistoryProgressBanner
             pct={historyProgress.total > 0 ? (historyProgress.done / historyProgress.total) * 100 : null}
             message={historyProgress.total > 0
@@ -929,7 +937,7 @@ export default function App() {
       </nav>
 
       <main className="max-w-7xl mx-auto">
-        {historyStatus.loading && !data.coreInv?.length && tab !== "glossary" && tab !== "orders" && tab !== "vendors" && tab !== "performance" && tab !== "classic" && (
+        {historyStatus.loading && !historyEverLoaded && tab !== "glossary" && tab !== "orders" && tab !== "vendors" && tab !== "performance" && tab !== "classic" && (
           <SkeletonHero />
         )}
         <div style={{ display: tab === "today" ? "block" : "none" }}>

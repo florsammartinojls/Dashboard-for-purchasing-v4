@@ -25,6 +25,7 @@ import { detectVendorAnomalies } from './anomalyDetector.js';
 
 export const DEFAULT_SPIKE_THRESHOLD = 1.25;
 export const DEFAULT_MOQ_INFLATION_THRESHOLD = 1.5;
+export const DEFAULT_MOQ_INFLATION_HARD_CAP = 3.0;
 const LEVELING_STEP_DAYS = 10;
 const MAX_WATERFALL_ITER = 100;
 const INTERMITTENT_MOQ_INFLATE_LIMIT = 2.0;
@@ -307,6 +308,7 @@ export function calcVendorRecommendationV4({
   const replenFloor = num(settings?.replenFloorDoc, 80);
   const spikeThreshold = num(settings?.spikeThreshold, DEFAULT_SPIKE_THRESHOLD);
   const moqThreshold = num(settings?.moqInflationThreshold, DEFAULT_MOQ_INFLATION_THRESHOLD);
+  const moqHardCap = num(settings?.moqInflationHardCap, DEFAULT_MOQ_INFLATION_HARD_CAP);
   const lt = num(vendor.lt, 30);
 
   const vendorCores = (cores || []).filter(
@@ -543,18 +545,50 @@ export function calcVendorRecommendationV4({
       }
     }
 
+    // ─── MOQ inflation hard cap ─────────────────────────────────
+    // If the MOQ would inflate the buy beyond `moqHardCap × need`,
+    // refuse to recommend the purchase. The item still appears in
+    // the output (so the UI can surface a "blocked" badge), but
+    // finalQty/cost are zeroed and `rejectedByMoqCap` carries the
+    // detail the UI needs to render the override CTA.
+    let finalQty = moqRes.finalQty;
+    let costApplied = finalQty * pricePerPiece;
+    let excessFromMoq = moqRes.excessFromMoq;
+    let excessCostFromMoq = excessFromMoq * pricePerPiece;
+    let rejectedByMoqCap = false;
+    let moqCapDetail = null;
+    if (
+      needPieces > 0 &&
+      moqHardCap > 0 &&
+      moqRes.moqInflationRatio > moqHardCap
+    ) {
+      moqCapDetail = {
+        reason: 'moq_cap_exceeded',
+        ratio: moqRes.moqInflationRatio,
+        cap: moqHardCap,
+        wouldHaveBought: moqRes.finalQty,
+        wouldHaveCost: moqRes.finalQty * pricePerPiece,
+        coreNeed: needPieces,
+      };
+      rejectedByMoqCap = true;
+      finalQty = 0;
+      costApplied = 0;
+      excessFromMoq = 0;
+      excessCostFromMoq = 0;
+    }
+
     coreItems.push({
       id: coreId,
       mode: 'core',
       needPieces,
-      finalQty: moqRes.finalQty,
+      finalQty,
       pricePerPiece,
       priceSource,
-      cost: moqRes.finalQty * pricePerPiece,
+      cost: costApplied,
       moqInflated: moqRes.moqInflated,
       moqInflationRatio: moqRes.moqInflationRatio,
-      excessFromMoq: moqRes.excessFromMoq,
-      excessCostFromMoq: moqRes.excessFromMoq * pricePerPiece,
+      excessFromMoq,
+      excessCostFromMoq,
       moqOriginal: num(core.moq),
       moqCredit: moqRes.moqCredit,
       moqEffective: moqRes.effectiveMoq,
@@ -565,6 +599,8 @@ export function calcVendorRecommendationV4({
         b.urgent && b.buyMode === 'core' && b.coresUsed.some(c => c.coreId === coreId)
       ),
       intermittentExcess,
+      rejectedByMoqCap,
+      moqCapDetail,
     });
   }
 
@@ -727,6 +763,8 @@ export function calcVendorRecommendationV4({
       anomalyDetected: !!anomaly,
       anomalyInfo: anomaly || null,
       intermittentExcess: !!item?.intermittentExcess,
+      rejectedByMoqCap: !!item?.rejectedByMoqCap,
+      moqCapDetail: item?.moqCapDetail || null,
     };
   });
 
