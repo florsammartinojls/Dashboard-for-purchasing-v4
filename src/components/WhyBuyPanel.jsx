@@ -1,11 +1,15 @@
 // src/components/WhyBuyPanel.jsx
 // ============================================================
-// Why Buy? — full audit trail for any recommended quantity.
-//
+// CANONICAL BREAKDOWN UI · single source of truth = v4 waterfall.
 // Reads the structured forecast object the v4 engine attaches to
 // every bundleDetail (forecast.inputs / formula / reasoning /
 // projection.monthly). No re-computation here — the panel just
 // renders what the engine already said.
+//
+// If you find yourself building another breakdown surface, please
+// route through this component instead. CalcBreakdownV2 / the
+// legacy `getCalcBreakdown` helper from seasonal.js were removed
+// in Sprint 2 — they computed numbers that drifted from the engine.
 //
 // Three levels (collapsible):
 //   1. Verdict + segment + formula (always visible)

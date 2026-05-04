@@ -233,38 +233,6 @@ export function fillToMOQ(cores, vendorMOQDollar, currentTotalDollar, profiles, 
   return extra;
 }
 
-// ─── CALC BREAKDOWN ──────────────────────────────────────────────
-export function getCalcBreakdown(core, vendor, stg, profile, leadTimeDays, targetDOC, purchFreq) {
-  const dsr = core.dsr || 0;
-  const { indices, lastYearShape, cv, growthFactor, hasHistory, monthlyDetail, yearlyTotals, shapeYear } = profile;
-  const cov = calcCoverageNeed(core, leadTimeDays, targetDOC, profile, purchFreq);
-  const flatNeed = Math.max(0, Math.ceil(targetDOC * dsr - cov.inventory));
-  const diff = cov.need - flatNeed;
-  return {
-    coreId: core.id, title: core.ti, vendor: core.ven,
-    currentDSR: dsr, d7: core.d7 || 0, inventory: cov.inventory,
-    currentDOC: core.doc || 0, leadTime: leadTimeDays, targetDOC,
-    hasHistory, cv, shapeYear: shapeYear || '—',
-    cvLabel: cv < 0.15 ? 'Flat' : cv < 0.35 ? 'Mild seasonality' : 'Strong seasonality',
-    growthFactor: r2(growthFactor),
-    purchFreq: purchFreq || { ordersPerYear: 0, label: '—', safetyMultiplier: 1.0, comment: '' },
-    seasonalShape: (lastYearShape || indices).map((v, i) => ({
-      month: MO[i], shape: v,
-      interpretation: v > 1.3 ? 'Peak' : v > 1.1 ? 'Above avg' : v < 0.7 ? 'Low' : v < 0.9 ? 'Below avg' : 'Normal'
-    })),
-    yearlyTotals,
-    ltConsumption: cov.ltConsumption, inventoryAtArrival: cov.inventoryAtArrival,
-    arrivalDate: cov.arrivalDate, ltMonths: cov.ltMonths,
-    urgent: cov.urgent, shortfall: cov.shortfall,
-    windowStart: cov.windowStart, windowEnd: cov.windowEnd,
-    covMonths: cov.covMonths, coverageNeed: cov.coverageNeed,
-    safetyMultiplier: cov.safetyMultiplier,
-    need: cov.need, flatNeed, difference: diff,
-    differenceLabel: diff > 0 ? '+' + diff.toLocaleString() + ' more (seasonal adjustment)' : diff < 0 ? diff.toLocaleString() + ' less (off-season adjustment)' : 'Same as flat',
-    summaryText: `${core.id} is ${cv < 0.15 ? 'flat' : cv < 0.35 ? 'mildly seasonal' : 'strongly seasonal'} (CV=${cv}).${purchFreq?.comment ? ' ' + purchFreq.comment : ''}${cov.urgent ? ' ⚠ URGENT: DOC < Lead Time!' : ''} Formula: projectedDSR = currentDSR × damped(shape/now, 50%) × safety. Target: ${targetDOC}d (${cov.windowStart} → ${cov.windowEnd}). Projected: ${cov.coverageNeed.toLocaleString()} − inventory ${cov.inventory.toLocaleString()} = ${cov.need.toLocaleString()} to order. Flat formula: ${flatNeed.toLocaleString()}, seasonal recommends ${diff > 0 ? diff.toLocaleString() + ' more' : diff < 0 ? Math.abs(diff).toLocaleString() + ' less' : 'same'}.`,
-  };
-}
-
 // ─── BATCH PROFILES ──────────────────────────────────────────────
 export function batchProfiles(cores, coreInvHistory, coreDays) {
   const histMap = {}, dayMap = {};

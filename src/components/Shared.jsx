@@ -133,6 +133,20 @@ export function Stg({ s, setS, onClose }) {
               </div>
               <p className="text-[10px] text-gray-500 mt-1">Default 95% · Z≈1.65</p>
             </div>
+            <div>
+              <label className="text-sm text-gray-400 block mb-1" title="Si el motor clasifica un bundle como DECLINING, su proyección mensual nunca cae bajo este % del DSR base. 0.5 evita que el motor crea que vas a vender 0 unidades a partir del mes 5. Subí a 0.7 para ser más conservador.">
+                DECLINING projection floor
+              </label>
+              <input type="number" step="0.05" min="0" max="1" value={l.decliningProjectionFloor ?? 0.5} onChange={e => setL({ ...l, decliningProjectionFloor: +e.target.value })} className="bg-gray-800 border border-gray-600 text-white rounded px-3 py-2 w-full" />
+              <p className="text-[10px] text-gray-500 mt-1">Default 0.5 · piso = floor × level base</p>
+            </div>
+            <div>
+              <label className="text-sm text-gray-400 block mb-1" title="Si las ventas de los últimos 7 días son N veces el DSR de 60d, el motor asume que la caída se revirtió y reclasifica como STABLE. Default 1.0 = 7D igual o mayor que 60d-DSR. Bajalo a 0.8 si querés más sensibilidad.">
+                7D reconciliation ratio
+              </label>
+              <input type="number" step="0.1" min="0.5" max="2" value={l.sevenDayReconciliationRatio ?? 1.0} onChange={e => setL({ ...l, sevenDayReconciliationRatio: +e.target.value })} className="bg-gray-800 border border-gray-600 text-white rounded px-3 py-2 w-full" />
+              <p className="text-[10px] text-gray-500 mt-1">Default 1.0 · ratio &gt;= cap ⇒ DECLINING → STABLE</p>
+            </div>
           </div>
         </div>
 

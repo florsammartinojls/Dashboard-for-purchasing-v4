@@ -145,3 +145,59 @@ if (typeof document !== 'undefined') {
   st.textContent = 'input[type=number]::-webkit-inner-spin-button,input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}input[type=number]{-moz-appearance:textfield}';
   document.head.appendChild(st);
 }
+
+// === VENDOR RESOLVER (Sprint 2 Fix 7) ===
+// Resolves a bundle's vendors-field (typically "Acme Inc" or
+// "Wuxi Topteam Garments Co., Ltd, Other Vendor") to a key that exists
+// in vendorRecs. Naive split on "," breaks on names with internal
+// commas ("Co., Ltd"), which used to make the Why Buy modal blank.
+//
+// Resolution order:
+//   1. Exact match
+//   2. Case-insensitive trimmed
+//   3. Progressive comma split — try the full string, then 2/3/...
+//      contiguous parts, then individual parts, in widest-first order.
+//      This way "Co., Ltd" stays attached when the full prefix matches
+//      a vendorRecs key, and only splits when nothing else works.
+export function resolveVendorFromBundle(bundleVendorsField, vendorRecs) {
+  if (!bundleVendorsField) return null;
+  if (!vendorRecs || typeof vendorRecs !== 'object') return null;
+  const raw = String(bundleVendorsField).trim();
+  if (!raw) return null;
+  if (vendorRecs[raw]) return raw;
+  const lcKeys = Object.keys(vendorRecs);
+  const target = raw.toLowerCase();
+  for (const k of lcKeys) {
+    if (k.toLowerCase().trim() === target) return k;
+  }
+  const parts = raw.split(',').map(s => s.trim()).filter(Boolean);
+  // widest-first: try the longest contiguous spans before single parts
+  for (let len = parts.length; len >= 1; len--) {
+    for (let i = 0; i + len <= parts.length; i++) {
+      const candidate = parts.slice(i, i + len).join(', ');
+      if (vendorRecs[candidate]) return candidate;
+      const lc = candidate.toLowerCase();
+      for (const k of lcKeys) {
+        if (k.toLowerCase().trim() === lc) return k;
+      }
+    }
+  }
+  if (typeof console !== 'undefined' && import.meta.env?.DEV) {
+    console.warn('[resolveVendorFromBundle] no match for', raw, '— available keys (first 10):', lcKeys.slice(0, 10));
+  }
+  return null;
+}
+
+// DEV-only sanity tests for resolveVendorFromBundle. They run once per
+// page load when import.meta.env.DEV is true.
+if (typeof window !== 'undefined' && import.meta.env?.DEV) {
+  const t = (label, actual, expected) => {
+    if (actual !== expected) console.error('[resolveVendorFromBundle TEST FAIL]', label, 'got', actual, 'expected', expected);
+  };
+  t('exact', resolveVendorFromBundle('Acme Inc', { 'Acme Inc': {} }), 'Acme Inc');
+  t('co_ltd', resolveVendorFromBundle('Wuxi Topteam Co., Ltd', { 'Wuxi Topteam Co., Ltd': {} }), 'Wuxi Topteam Co., Ltd');
+  t('multi_match_first', resolveVendorFromBundle('Vendor A, Vendor B', { 'Vendor A': {} }), 'Vendor A');
+  t('empty', resolveVendorFromBundle('', {}), null);
+  t('undefined', resolveVendorFromBundle(undefined, {}), null);
+  t('case_trim', resolveVendorFromBundle('  acme inc  ', { 'Acme Inc': {} }), 'Acme Inc');
+}

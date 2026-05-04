@@ -311,8 +311,14 @@ export function calcVendorRecommendationV4({
   const moqHardCap = num(settings?.moqInflationHardCap, DEFAULT_MOQ_INFLATION_HARD_CAP);
   const lt = num(vendor.lt, 30);
 
+  // Inactive/ignored cores are NOT processed by the recommender.
+  // They reappear automatically when reactivated upstream — no code change needed.
+  // Same gate that PurchTab/DashboardSummary already apply at the UI layer; making
+  // it authoritative here removes the "core in coreDetails but invisible to UI"
+  // class of bugs (see Sprint 1 vendor-mapping audit).
   const vendorCores = (cores || []).filter(
-    c => c && c.id && !/^JLS/i.test(c.id) && c.ven === vendor.name
+    c => c && c.id && !/^JLS/i.test(c.id) && c.ven === vendor.name &&
+         c.active === 'Yes' && !c.ignoreUntil
   );
   const vCoreById = {};
   vendorCores.forEach(c => { vCoreById[c.id] = c; });
@@ -331,11 +337,45 @@ export function calcVendorRecommendationV4({
 
   const segmentationEnabled = settings?.segmentationEnabled !== false;
 
+  // Pre-index bundleDays by bundleId once so the per-bundle reconciliation
+  // check below stays O(n) total instead of O(n²).
+  const bundleDaysByJ = {};
+  for (const d of (bundleDays || [])) {
+    if (!d || !d.j) continue;
+    let arr = bundleDaysByJ[d.j];
+    if (!arr) { arr = []; bundleDaysByJ[d.j] = arr; }
+    arr.push(d);
+  }
+  // bundleDays may not be sorted; sort once per bundle so .slice(-N) is the
+  // last N calendar days, not an arbitrary window.
+  for (const j of Object.keys(bundleDaysByJ)) {
+    bundleDaysByJ[j].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+  }
+  const reconcileRatio = num(settings?.sevenDayReconciliationRatio, 1.0);
+
   const prepped = vendorBundles.map(b => {
     const fallbackDsr = num(b.cd);
-    const segment = segmentationEnabled
+    let segment = segmentationEnabled
       ? (segmentMap && segmentMap[b.j]) || 'STABLE'
       : 'STABLE';
+
+    // 7D reconciliation (Sprint 2 Fix 5b): if last-7d DSR has recovered
+    // to >= ratio × mean60d, override DECLINING → STABLE so the engine
+    // doesn't keep extrapolating a drop that has already reversed.
+    // Done at the recommender layer (not in the pure classifier) because
+    // it's a business override, not a data signal.
+    let sevenDayReconciled = null;
+    if (segment === 'DECLINING') {
+      const series = bundleDaysByJ[b.j] || [];
+      const last7 = series.slice(-7).map(d => Number(d.dsr) || 0);
+      const last60 = series.slice(-60).map(d => Number(d.dsr) || 0);
+      const m7 = last7.length ? last7.reduce((s, v) => s + v, 0) / last7.length : 0;
+      const m60 = last60.length ? last60.reduce((s, v) => s + v, 0) / last60.length : 0;
+      if (m7 > 0 && m60 > 0 && (m7 / m60) >= reconcileRatio) {
+        sevenDayReconciled = { mean7: m7, mean60: m60, ratio: reconcileRatio, originalSegment: 'DECLINING' };
+        segment = 'STABLE';
+      }
+    }
 
     const forecast = calcBundleForecastV4({
       bundleId: b.j,
@@ -369,6 +409,7 @@ export function calcVendorRecommendationV4({
       urgent: false,
       forecast,
       segment,
+      sevenDayReconciled,
       forecastLevel: forecast.flags.noData ? fallbackDsr : (forecast.level || fallbackDsr),
       dsr: forecast.flags.noData ? fallbackDsr : Math.max(forecast.level, fallbackDsr * 0.01),
       spikeVisual: isSpikeVisual(b, spikeThreshold),
@@ -416,6 +457,23 @@ export function calcVendorRecommendationV4({
     b.currentCoverDOC = edsr > 0 ? total / edsr : 99999;
     b.buyNeed = Math.max(0, Math.ceil(b.coverageDemand - total));
     b.urgent = (total - b.ltDemand) < 0;
+
+    // DORMANT_REVIVED policy (Sprint 2 Fix 6): never auto-buy. Force
+    // buyNeed to 0 even when the projection happens to be positive.
+    // Capture wouldHaveBuy in units now; dollar cost is filled in
+    // below once priceMap is built.
+    if (b.segment === 'DORMANT_REVIVED') {
+      const wouldHaveCov = b.forecast?.inputs?.wouldHaveCoverageDemand || 0;
+      const wouldHaveBuy = Math.max(0, Math.ceil(wouldHaveCov - total));
+      b.dormantRevivedSafetyDeclined = {
+        wouldHaveBought: wouldHaveBuy,
+        wouldHaveSafetyStock: b.forecast?.inputs?.wouldHaveSafetyStock || 0,
+        wouldHaveCoverageDemand: wouldHaveCov,
+        wouldHaveCost: 0, // priced after priceMap is built
+      };
+      b.buyNeed = 0;
+      b.urgent = false; // dormant items don't generate urgency by definition
+    }
   }
 
   // buy mode (with reason exposed for the Why Buy panel)
@@ -660,6 +718,15 @@ export function calcVendorRecommendationV4({
     priceMap[b.j] = price;
   }
 
+  // Now that priceMap exists, fill in the dollar value of safety the
+  // engine would have bought for DORMANT_REVIVED bundles.
+  for (const b of prepped) {
+    if (!b.dormantRevivedSafetyDeclined) continue;
+    const unit = priceMap[b.id] || 0;
+    b.dormantRevivedSafetyDeclined.wouldHaveCost =
+      b.dormantRevivedSafetyDeclined.wouldHaveBought * unit;
+  }
+
   const bundleDetails = prepped.map(b => ({
     bundleId: b.id,
     completeDSR: num(b.raw.cd),
@@ -716,6 +783,34 @@ export function calcVendorRecommendationV4({
     spikeVisual: b.spikeVisual,
     yoyInfo: null,
     segment: b.segment,
+    sevenDayReconciled: b.sevenDayReconciled || null,
+    dormantRevived: b.segment === 'DORMANT_REVIVED',
+    dormantRevivedSafetyDeclined: b.dormantRevivedSafetyDeclined || null,
+    // Watchlist support: derived from bundleDays if available.
+    lastSaleDate: (() => {
+      const series = bundleDaysByJ[b.id] || [];
+      for (let i = series.length - 1; i >= 0; i--) {
+        if ((Number(series[i].dsr) || 0) > 0) return series[i].date || null;
+      }
+      return null;
+    })(),
+    daysDormant: (() => {
+      const series = bundleDaysByJ[b.id] || [];
+      let lastSale = null;
+      for (let i = series.length - 1; i >= 0; i--) {
+        if ((Number(series[i].dsr) || 0) > 0) { lastSale = series[i].date; break; }
+      }
+      if (!lastSale) return null;
+      const t = new Date(lastSale);
+      if (isNaN(t.getTime())) return null;
+      return Math.max(0, Math.round((Date.now() - t.getTime()) / 86400000));
+    })(),
+    historicalDsr: (() => {
+      const series = bundleDaysByJ[b.id] || [];
+      const positives = series.map(d => Number(d.dsr) || 0).filter(v => v > 0);
+      if (!positives.length) return 0;
+      return positives.reduce((s, v) => s + v, 0) / positives.length;
+    })(),
     regime: b.segment === 'INTERMITTENT' ? 'intermittent'
           : b.segment === 'NEW_OR_SPARSE' ? 'new_or_sparse'
           : 'continuous',

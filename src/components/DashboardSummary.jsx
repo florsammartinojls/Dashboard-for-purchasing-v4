@@ -1,10 +1,20 @@
 // src/components/DashboardSummary.jsx
+// ============================================================
+// Sprint 2: full migration to v4 waterfall as the single source
+// of truth for all vendor / urgency / cost figures shown here.
+// Cold-start guarded by engineReady — until live + history + worker
+// have all reported success, we render a "Calculando…" placeholder
+// instead of a half-computed number that would jump on refresh.
+//
+// Housekeeping lists (noBundleCores / deadCores) intentionally stay
+// on raw `data.cores` reads — they're not engine outputs, they're
+// data-quality views over the source sheet.
+// ============================================================
 import React, { useState, useMemo } from "react";
-import { R, D1, $, gS, cAI, isD, gTD } from "../lib/utils";
-import { calcPurchaseFrequency } from "../lib/seasonal";
+import { R, D1, $, cAI, isD } from "../lib/utils";
 import { Dot, WorkflowChip } from "./Shared";
 
-export default function DashboardSummary({ data, stg, vendorRecs, goVendor, workflow, saveWorkflow, deleteWorkflow, vendorComments, saveVendorComment, onEnterPurchasing, activeBundleCores }) {
+export default function DashboardSummary({ data, stg, vendorRecs, goVendor, workflow, saveWorkflow, deleteWorkflow, vendorComments, saveVendorComment, onEnterPurchasing, activeBundleCores, liveStatus, historyStatus, workerStatus, loadLive, loadHistory }) {
 if (!vendorRecs || !Object.keys(vendorRecs).length) vendorRecs = {};
   const [originF, setOriginF] = useState("all");
   const [statusF, setStatusF] = useState("untriaged");
@@ -13,6 +23,19 @@ if (!vendorRecs || !Object.keys(vendorRecs).length) vendorRecs = {};
   const [showDead, setShowDead] = useState(false);
   const [showHousekeeping, setShowHousekeeping] = useState(false);
   const [expandedSection, setExpandedSection] = useState({ critical: true, warning: true, ok: false });
+  const [showBlockedModal, setShowBlockedModal] = useState(false);
+
+  // Cold-start gate. Only render real numbers when every dependency is
+  // ready. liveStatus / historyStatus / workerStatus may be undefined
+  // when the parent hasn't wired them yet — be defensive.
+  const liveLoading = !!liveStatus?.loading;
+  const histLoading = !!historyStatus?.loading;
+  const liveErr = liveStatus?.error || null;
+  const histErr = historyStatus?.error || null;
+  const workerErr = workerStatus === 'error';
+  const recsReady = !!vendorRecs && Object.keys(vendorRecs).length > 0;
+  const engineReady = !liveLoading && !histLoading && recsReady && !workerErr;
+  const engineFailed = (!!liveErr || !!histErr || workerErr) && !engineReady;
 
   const vMap = useMemo(() => {
     const m = {};
@@ -57,74 +80,124 @@ if (!vendorRecs || !Object.keys(vendorRecs).length) vendorRecs = {};
     return s;
   }, [noBundleCores, deadCores]);
 
-  // ── Vendor-level aggregation (v2 recommender) ──
+  // ── Vendor-level aggregation (v4 waterfall — single source of truth) ──
+  // Reads exclusively from vendorRecs. Never recomputes anything; presentation
+  // only. Cold-start safety is handled by the engineReady gate higher up.
+  const coreById = useMemo(() => {
+    const m = {};
+    (data.cores || []).forEach(c => { if (c?.id) m[c.id] = c; });
+    return m;
+  }, [data.cores]);
+
   const vendorStats = useMemo(() => {
-    const g = {};
-    (data.cores || []).filter(c => {
-      if (stg.fA === "yes" && c.active !== "Yes") return false;
-      if (stg.fA === "no" && c.active === "Yes") return false;
-      if (stg.fV === "yes" && c.visible !== "Yes") return false;
-      if (stg.fV === "no" && c.visible === "Yes") return false;
-      if (stg.fI === "blank" && !!c.ignoreUntil) return false;
-      if (noBundleSet.has(c.id)) return false;
-      return true;
-    }).forEach(c => {
-      const v = vMap[c.ven] || {};
-      const lt = v.lt || 30;
-      const effectiveDoc = c.dsr > 0 ? Math.round(cAI(c) / c.dsr) : c.doc;
-      const st = gS(effectiveDoc, lt, c.buf || 14, stg);
+    const out = [];
+    for (const [vendorName, rec] of Object.entries(vendorRecs || {})) {
+      if (!rec) continue;
+      const v = vMap[vendorName] || { name: vendorName };
 
-      // v2 recommender lookup (authoritative for need/order/cost)
-      const vRec = vendorRecs[c.ven];
-      const cDet = vRec?.coreDetails?.find(x => x.coreId === c.id);
-      const nq = cDet?.needPieces || 0;
-      const oq = cDet?.finalQty || 0;
-      const unitCost = vRec?.priceMap?.[c.id] || c.cost || 0;
-      const cost = oq * unitCost;
-      const isUrgent = cDet?.urgent || false;
+      const coreDetails = Array.isArray(rec.coreDetails) ? rec.coreDetails : [];
+      const bundleDetails = Array.isArray(rec.bundleDetails) ? rec.bundleDetails : [];
 
-      if (!g[c.ven]) g[c.ven] = {
-        name: c.ven, country: v.country || "", lt, moq: v.moqDollar || 0,
-        payment: v.payment || "", isDom: isD(v.country),
-        cr: 0, wa: 0, he: 0, cores: 0, needBuy: 0,
-        totalCost: 0, minDoc: Infinity, totalDsr: 0,
-        critCores: [], warnCores: [], hasUrgent: false
-      };
-      const vs = g[c.ven];
+      // needBuy / totalCost: count items with real need that the cap didn't block.
+      // Cost comes from the recommender's items[] (already excludes rejected).
+      const buyableItems = (rec.items || []).filter(i => (i.finalQty || 0) > 0 && !i.rejectedByMoqCap);
+      const needBuy = buyableItems.length;
+      const totalCost = buyableItems.reduce((s, i) => s + (i.cost || 0), 0);
 
-      if (st === "critical" && nq > 0) {
-        vs.cr++;
-      } else if (st === "critical" && nq <= 0) {
-        vs.he++; // covered by bundles/raw, not actionable
-      } else if (st === "warning") {
-        vs.wa++;
-      } else {
-        vs.he++;
+      // Critical / warning at the BUNDLE level, then aggregated to vendor.
+      // Critical = at least one bundle urgent.
+      // Warning  = at least one bundle below replenFloor but not urgent.
+      const hasUrgent = bundleDetails.some(bd => bd.urgent === true);
+      const hasWarning = bundleDetails.some(bd =>
+        !bd.urgent &&
+        bd.replenFloorDOC > 0 &&
+        bd.currentCoverDOC < bd.replenFloorDOC
+      );
+
+      // Per-core aggregates for the card body.
+      let cr = 0, wa = 0, he = 0;
+      let minDoc = Infinity;
+      let totalDsr = 0;
+      const critCores = [];
+      const warnCores = [];
+      for (const cd of coreDetails) {
+        const c = coreById[cd.coreId];
+        const dsr = c?.dsr || 0;
+        totalDsr += dsr;
+        const allIn = c ? cAI(c) : 0;
+        const effDoc = dsr > 0 ? Math.round(allIn / dsr) : (c?.doc || 0);
+        if (effDoc < minDoc) minDoc = effDoc;
+        const isCrit = !!cd.urgent && cd.needPieces > 0 && !cd.rejectedByMoqCap;
+        const isWarn = !isCrit && cd.needPieces > 0;
+        if (isCrit) {
+          cr++;
+          critCores.push({ id: cd.coreId, ti: c?.ti || cd.coreId, doc: effDoc, dsr, needQty: cd.needPieces, cost: cd.cost });
+        } else if (isWarn) {
+          wa++;
+          warnCores.push({ id: cd.coreId, ti: c?.ti || cd.coreId, doc: effDoc, dsr, needQty: cd.needPieces, cost: cd.cost });
+        } else {
+          he++;
+        }
       }
 
-      vs.cores++;
-      vs.totalDsr += c.dsr || 0;
-      if (effectiveDoc < vs.minDoc) vs.minDoc = effectiveDoc;
-      if (nq > 0) { vs.needBuy++; vs.totalCost += cost; }
-      if (isUrgent) vs.hasUrgent = true;
-      if (st === "critical" && nq > 0) vs.critCores.push({ id: c.id, ti: c.ti, doc: effectiveDoc, dsr: c.dsr, needQty: nq, cost });
-      if (st === "warning") vs.warnCores.push({ id: c.id, ti: c.ti, doc: effectiveDoc, dsr: c.dsr, needQty: nq, cost });
-    });
+      // MOQ-cap blocked items at this vendor.
+      const blocked = coreDetails.filter(cd => cd.rejectedByMoqCap && cd.moqCapDetail);
+      const blockedCount = blocked.length;
+      const blockedAvoidedCost = blocked.reduce((s, cd) => s + (cd.moqCapDetail?.wouldHaveCost || 0), 0);
 
-    // Use recommender's vendor-level totalCost for consistency with PurchTab
-    for (const vs of Object.values(g)) {
-      const vRec = vendorRecs[vs.name];
-      if (vRec && vRec.totalCost > 0) {
-        vs.totalCost = vRec.totalCost;
+      // Vendor enters the visible list only when there's something to act on.
+      // Pure-info vendors (no need, no urgency, no blocked) drop out entirely.
+      if (needBuy === 0 && !hasUrgent && blockedCount === 0) continue;
+
+      out.push({
+        name: vendorName,
+        country: v.country || '',
+        lt: v.lt || 30,
+        moq: v.moqDollar || 0,
+        payment: v.payment || '',
+        isDom: isD(v.country),
+        cr, wa, he,
+        cores: coreDetails.length,
+        needBuy,
+        totalCost,
+        minDoc: minDoc === Infinity ? 0 : minDoc,
+        totalDsr,
+        critCores,
+        warnCores,
+        hasUrgent,
+        hasWarning,
+        urgency: hasUrgent ? 'critical' : hasWarning ? 'warning' : 'ok',
+        blockedCount,
+        blockedAvoidedCost,
+      });
+    }
+    return out;
+  }, [vendorRecs, vMap, coreById]);
+
+  // ── Consolidated MOQ-cap blocked items (for the top banner + modal) ──
+  const blockedAll = useMemo(() => {
+    const items = [];
+    for (const [vendorName, rec] of Object.entries(vendorRecs || {})) {
+      if (!rec || !Array.isArray(rec.coreDetails)) continue;
+      for (const cd of rec.coreDetails) {
+        if (!cd.rejectedByMoqCap || !cd.moqCapDetail) continue;
+        const c = coreById[cd.coreId];
+        items.push({
+          vendor: vendorName,
+          coreId: cd.coreId,
+          title: c?.ti || cd.coreId,
+          ratio: cd.moqCapDetail.ratio,
+          cap: cd.moqCapDetail.cap,
+          coreNeed: cd.moqCapDetail.coreNeed,
+          wouldHaveBought: cd.moqCapDetail.wouldHaveBought,
+          wouldHaveCost: cd.moqCapDetail.wouldHaveCost,
+        });
       }
     }
-
-    return Object.values(g).map(v => ({
-      ...v,
-      minDoc: v.minDoc === Infinity ? 0 : v.minDoc,
-      urgency: v.cr > 0 ? "critical" : v.wa > 0 ? "warning" : "ok"
-    }));
-  }, [data.cores, vMap, stg, noBundleSet, vendorRecs]);
+    items.sort((a, b) => b.wouldHaveCost - a.wouldHaveCost);
+    return items;
+  }, [vendorRecs, coreById]);
+  const blockedTotalCost = useMemo(() => blockedAll.reduce((s, x) => s + x.wouldHaveCost, 0), [blockedAll]);
 
   // ── Apply origin + status + needsBuy filters ──
   const filtered = useMemo(() => {
@@ -262,8 +335,94 @@ if (!vendorRecs || !Object.keys(vendorRecs).length) vendorRecs = {};
     return deadCores.filter(c => { const v = vMap[c.ven]; return originF === "us" ? isD(v?.country) : !isD(v?.country); });
   }, [deadCores, originF, vMap]);
 
+  // ── Cold-start placeholder ──
+  // Render a quiet placeholder until live + history + worker are all
+  // ready. Prevents the "11 vendors → 50 vendors" jump on cold start.
+  if (!engineReady) {
+    return (
+      <div className="p-4 max-w-4xl mx-auto">
+        {engineFailed ? (
+          <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-6 text-center">
+            <div className="text-red-300 font-semibold mb-2">No se pudo calcular</div>
+            <div className="text-gray-400 text-sm mb-4">
+              {liveErr ? `Live: ${liveErr}` : null}
+              {liveErr && histErr ? ' · ' : null}
+              {histErr ? `History: ${histErr}` : null}
+              {workerErr && !liveErr && !histErr ? 'El motor falló al recomputar.' : null}
+            </div>
+            <div className="flex gap-2 justify-center">
+              {liveErr && loadLive && <button onClick={() => loadLive({ forceRefresh: true })} className="text-xs bg-blue-600 text-white px-3 py-1.5 rounded">Reintentar Live</button>}
+              {histErr && loadHistory && <button onClick={() => loadHistory({ forceRefresh: true })} className="text-xs bg-blue-600 text-white px-3 py-1.5 rounded">Reintentar History</button>}
+            </div>
+          </div>
+        ) : (
+          <div className="flex items-center justify-center gap-3 py-16 text-gray-400">
+            <div className="w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+            <span className="text-sm">Calculando…</span>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="p-4 max-w-4xl mx-auto">
+      {/* MOQ-cap blocked items — consolidated banner */}
+      {blockedAll.length > 0 && (
+        <button
+          onClick={() => setShowBlockedModal(true)}
+          className="w-full bg-orange-500/10 border border-orange-500/30 rounded-xl px-5 py-3 mb-3 text-left hover:bg-orange-500/15 transition-colors"
+          title="Click para ver detalle por item"
+        >
+          <span className="text-orange-300 font-semibold text-sm">⛔ {blockedAll.length} items blocked by MOQ cap</span>
+          <span className="text-orange-200 text-sm ml-2">— ${Math.round(blockedTotalCost).toLocaleString()} potential overspend avoided</span>
+          <span className="text-orange-400 text-xs ml-2">→ ver detalle</span>
+        </button>
+      )}
+
+      {showBlockedModal && (
+        <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4" onClick={() => setShowBlockedModal(false)}>
+          <div className="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-3xl max-h-[85vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+            <div className="sticky top-0 bg-gray-900 border-b border-gray-800 px-5 py-3 flex items-center justify-between">
+              <div>
+                <h2 className="text-white font-bold text-lg">Items bloqueados por MOQ cap</h2>
+                <p className="text-xs text-gray-400">{blockedAll.length} items · ${Math.round(blockedTotalCost).toLocaleString()} potencial evitado</p>
+              </div>
+              <button onClick={() => setShowBlockedModal(false)} className="text-gray-400 hover:text-white text-xl">✕</button>
+            </div>
+            <table className="w-full text-xs">
+              <thead className="bg-gray-800/60 text-gray-400 uppercase">
+                <tr>
+                  <th className="px-3 py-2 text-left">Vendor</th>
+                  <th className="px-3 py-2 text-left">Core</th>
+                  <th className="px-3 py-2 text-left">Title</th>
+                  <th className="px-3 py-2 text-right">Need real</th>
+                  <th className="px-3 py-2 text-right">Hubiera comprado</th>
+                  <th className="px-3 py-2 text-right">Ratio</th>
+                  <th className="px-3 py-2 text-right">$ Evitado</th>
+                </tr>
+              </thead>
+              <tbody>
+                {blockedAll.map((b, i) => (
+                  <tr key={b.vendor + ':' + b.coreId + ':' + i} className="border-t border-gray-800/60 hover:bg-gray-800/30">
+                    <td className="px-3 py-1.5 text-gray-300">{b.vendor}</td>
+                    <td className="px-3 py-1.5 text-blue-400 font-mono">{b.coreId}</td>
+                    <td className="px-3 py-1.5 text-gray-300 truncate max-w-[200px]">{b.title}</td>
+                    <td className="px-3 py-1.5 text-right">{R(b.coreNeed)}</td>
+                    <td className="px-3 py-1.5 text-right text-orange-300">{R(b.wouldHaveBought)}</td>
+                    <td className="px-3 py-1.5 text-right text-orange-300">{(b.ratio || 0).toFixed(1)}x (cap {b.cap})</td>
+                    <td className="px-3 py-1.5 text-right text-amber-300">${Math.round(b.wouldHaveCost).toLocaleString()}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div className="px-5 py-3 text-[11px] text-gray-500 border-t border-gray-800">
+              Tip: en la pestaña Purchasing podés usar el botón "Override MOQ" por core para forzar la compra ignorando el cap.
+            </div>
+          </div>
+        </div>
+      )}
+
       {totalCrit > 0 && (
         <div className="bg-red-500/8 border border-red-500/25 rounded-xl p-5 mb-3">
           <div className="flex justify-between items-start flex-wrap gap-3">

@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect, useContext } from "react";
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
-import { R, D1, $, $2, P, MN, YC, TTP, gS, gY, cMo, fD } from "../lib/utils";
+import { R, D1, $, $2, P, MN, YC, TTP, gS, gY, cMo, fD, resolveVendorFromBundle } from "../lib/utils";
 import { Dot, TH, AbcBadge, HealthBadge, KillBadge, SumCtx, CopyableId } from "./Shared";
 import { SegmentCtx, WhyBuyCtx } from "../App";
 import { SegmentBadge, ConfidenceBadge } from "./SegmentsTab";
@@ -14,7 +14,12 @@ function SC({ v, children, className }) {
   return <td className={`${className || ''} ${sel ? "bg-blue-500/20 ring-1 ring-blue-500" : ""} ${ok ? "cursor-pointer select-none" : ""}`} onClick={tog}>{children}</td>;
 }
 
-export default function BundleTab({ data, stg, hist, daily, bundleId, onBack, goCore }) {
+// Sprint 2: BundleTab now reads buy/coverage figures from the v4
+// waterfall (vendorRecs[v].bundleDetails). DOC, buyNeed, coresUsed,
+// segment etc. all come from the engine — never recomputed here.
+// Legacy raw fields (b.cd, FIB DOC, sale, fee, replen) stay for the
+// operational sections that don't depend on the engine.
+export default function BundleTab({ data, stg, vendorRecs, hist, daily, bundleId, onBack, goCore }) {
   const [s, setS] = useState("");
   const [sel, setSel] = useState(bundleId || null);
   const [abcSort, setAbcSort] = useState("rev");
@@ -29,7 +34,25 @@ export default function BundleTab({ data, stg, hist, daily, bundleId, onBack, go
   const b = sel ? (data.bundles || []).find(x => x.j === sel) : null;
   const fee = b ? (data.fees || []).find(f => f.j === b.j) : null;
   const replen = b ? (data.replenRec || []).find(r => r.j === b.j) : null;
-  const core = b ? (data.cores || []).find(c => c.id === b.core1) : null;
+
+  // ─── v4 waterfall lookup (single source of truth) ───
+  // Walks vendorRecs and returns the first {rec, bd} pair that contains
+  // this bundle. Also returns vendorName so callers (Why buy?) get a
+  // resolved key without needing to re-split b.vendors.
+  const bundleDetail = useMemo(() => {
+    if (!sel || !vendorRecs) return null;
+    for (const [vendorName, rec] of Object.entries(vendorRecs)) {
+      const bd = rec?.bundleDetails?.find(x => x.bundleId === sel);
+      if (bd) return { rec, bd, vendorName };
+    }
+    return null;
+  }, [sel, vendorRecs]);
+  const bd = bundleDetail?.bd || null;
+  const recVendorName = bundleDetail?.vendorName || null;
+
+  // First core: prefer waterfall coresUsed; fall back to legacy core1.
+  const firstCoreId = bd?.coresUsed?.[0]?.coreId || b?.core1 || null;
+  const core = firstCoreId ? (data.cores || []).find(c => c.id === firstCoreId) : null;
   const abcA = useMemo(() => data.abcA || [], [data.abcA]);
   const abcT = useMemo(() => data.abcT || [], [data.abcT]);
   const bAbc = sel ? abcA.find(a => a.j === sel) : null;
@@ -38,7 +61,12 @@ export default function BundleTab({ data, stg, hist, daily, bundleId, onBack, go
   const killMap = useMemo(() => { const m = {}; (data.killMgmt || []).forEach(r => m[r.j] = r); return m }, [data.killMgmt]);
   const bAged = sel ? agedMap[sel] : null;
   const bKill = sel ? killMap[sel] : null;
-  const bStatus = b ? gS(b.doc, 60, 30, { critDays: 30, warnDays: 60 }) : "healthy";
+  // Engine DOC takes precedence over the legacy sheet doc once the rec
+  // is present. When the engine doesn't process this bundle we fall back
+  // to the sheet so the header isn't blank, but the KPI grid below will
+  // show "—" to make the absence explicit.
+  const docForStatus = bd?.currentCoverDOC ?? b?.doc ?? 0;
+  const bStatus = b ? gS(docForStatus, 60, 30, { critDays: 30, warnDays: 60 }) : "healthy";
   const sale = b ? (data.sales || []).find(s => s.j === b.j) : null;
 
   // === INBOUND 7f (match by JLS# and core IDs, same logic as CoreTab) ===
@@ -185,7 +213,7 @@ export default function BundleTab({ data, stg, hist, daily, bundleId, onBack, go
         )}
         {b && (
           <button
-            onClick={() => whyBuy.open({ bundleId: b.j, vendorName: (b.vendors || '').split(',')[0]?.trim() })}
+            onClick={() => whyBuy.open({ bundleId: b.j, vendorName: recVendorName || resolveVendorFromBundle(b.vendors, vendorRecs) })}
             className="text-xs px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25"
             title="Why Buy? — full audit trail"
           >📊 Why buy?</button>
@@ -201,11 +229,21 @@ export default function BundleTab({ data, stg, hist, daily, bundleId, onBack, go
         {b.asin && " · "}{b.vendors}
       </p>
     </div>
+    {/* Engine status banner — visible whenever the bundle isn't in any rec */}
+    {!bd && (
+      <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg px-3 py-2 mb-3 text-xs text-amber-300">
+        ⚠ Bundle no procesado por el motor — verificar configuración (active/ignoreUntil/sin vendor mapeado). Cifras del waterfall mostradas como "—".
+      </div>
+    )}
     {/* KPI Cards */}
     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
       <div className="bg-gray-900 rounded-xl p-4 border border-gray-800"><h4 className="text-gray-500 text-xs uppercase mb-3">Sales & Inventory</h4><div className="grid grid-cols-4 gap-y-4">{[
         { l: "C.DSR", v: D1(b.cd) },
-        { l: "DOC", v: R(b.doc) },
+        // Engine DOC = currentCoverDOC from waterfall — same number as Purchasing's "After/effective" column.
+        { l: "DOC (engine)", v: bd ? R(bd.currentCoverDOC) : "—", c: bd ? "text-white" : "text-gray-600" },
+        { l: "Buy Need", v: bd ? (bd.buyNeed > 0 ? R(bd.buyNeed) : "0") : "—", c: bd && bd.buyNeed > 0 ? "text-amber-300" : (bd ? "text-gray-400" : "text-gray-600") },
+        { l: "Coverage demand", v: bd ? R(bd.coverageDemand) : "—" },
+        { l: "Total available", v: bd ? R(bd.totalAvailable) : "—" },
         { l: "FIB DOC", v: R(b.fibDoc) },
         { l: "FIB Inventory", v: R(b.fibInv) },
         { l: "SC Inventory", v: R(b.scInv) },
@@ -213,7 +251,7 @@ export default function BundleTab({ data, stg, hist, daily, bundleId, onBack, go
         { l: "Inbound to FBA", v: R(b.inbound) },
         { l: "Raw Pieces (core)", v: R(core?.raw ?? 0) },
         { l: "Inbound 7f (core)", v: R(inb7fTotal), sub: inb7fEta ? fD(inb7fEta) + (daysUntilArr != null ? ' · ' + daysUntilArr + 'd' : '') : null },
-      ].map(k => <div key={k.l}><div className="text-gray-500 text-xs">{k.l}</div><div className="text-white font-bold text-lg">{k.v}</div>{k.sub && <div className="text-blue-400 text-xs">{k.sub}</div>}</div>)}</div></div>
+      ].map(k => <div key={k.l}><div className="text-gray-500 text-xs">{k.l}</div><div className={`font-bold text-lg ${k.c || "text-white"}`}>{k.v}</div>{k.sub && <div className="text-blue-400 text-xs">{k.sub}</div>}</div>)}</div></div>
       <div className="bg-gray-900 rounded-xl p-4 border border-gray-800"><h4 className="text-gray-500 text-xs uppercase mb-3">Profitability</h4><div className="grid grid-cols-3 gap-y-4">{[{ l: "Price", v: fee?.pr }, { l: "COGS", v: fee?.pdmtCogs }, { l: "AICOGS", v: fee?.aicogs }, { l: "Fee", v: fee?.totalFee }, { l: "GP", v: fee?.gp, c: "text-emerald-400" }].map(k => <div key={k.l}><div className="text-gray-500 text-xs">{k.l}</div><div className={`font-bold text-lg ${k.c || "text-white"}`}>{k.v != null ? $2(k.v) : "—"}</div></div>)}</div></div>
     </div>
     {/* Revenue Table */}

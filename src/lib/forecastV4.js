@@ -52,6 +52,11 @@ const DEFAULTS = {
   // Trend caps as fraction of level/day
   growingMaxPositiveTrend: 0.005, // +0.5%/day max
   decliningMaxNegativeTrend: 0.01, // -1%/day max (magnitude)
+  // DECLINING projection floor — fraction of `level` (60d mean) that
+  // each day in the projection cannot fall below. Sprint 2 Fix 5a:
+  // prevents the engine from assuming sales drop to zero for items
+  // showing recent positive 7D activity. Tunable from Settings.
+  decliningProjectionFloor: 0.5,
   // Safety multipliers per segment
   growingSafetyMultiplier: 1.2,
   decliningSafetyMultiplier: 0.8,
@@ -452,10 +457,20 @@ function forecastDeclining({ series, lt, td, profABC, settings, today }) {
   const safetyMul = num(settings?.decliningSafetyMultiplier, DEFAULTS.decliningSafetyMultiplier);
   const safetyStock = z * sigma * safetyMul;
 
+  // DECLINING projection floored at decliningProjectionFloor × level base.
+  // Prevents the engine from assuming sales drop to zero — unrealistic for
+  // items showing recent positive 7D activity. The floor is multiplicative
+  // on the 60d level so it scales with each item's own demand baseline.
+  const floorPct = num(settings?.decliningProjectionFloor, DEFAULTS.decliningProjectionFloor);
+  const levelFloor = level * Math.max(0, Math.min(1, floorPct));
+
   const days = td;
   const levelByDay = new Array(days);
   const factorByDay = new Array(days).fill(1);
-  for (let i = 0; i < days; i++) levelByDay[i] = Math.max(0, level + trend * i);
+  for (let i = 0; i < days; i++) {
+    const projected = level + trend * i;
+    levelByDay[i] = Math.max(levelFloor, projected);
+  }
   const proj = projectByDays({ days, levelByDay, seasonalFactorByDay: factorByDay, fromDate: today });
   const coverageDemand = proj.total + safetyStock;
 
@@ -473,12 +488,14 @@ function forecastDeclining({ series, lt, td, profABC, settings, today }) {
       maxNegMag, damp, profABC: profABC || null,
       servicePct, Z: z, sigmaLT: sigma, sigmaFallback,
       safetyMul, targetDoc: td, leadTime: lt,
+      projectionFloorPct: floorPct, projectionFloorAbs: levelFloor,
     },
-    formula: 'declining: avg(60d) + capped (-) trend × days + Z·σ_LT × 0.8',
+    formula: 'declining: max(floor, avg(60d) + capped (-) trend × days) + Z·σ_LT × 0.8',
     reasoning: [
       `Bundle is DECLINING — using 60d window with negative trend.`,
       `Level = mean(60d) = ${level.toFixed(2)} u/day.`,
       `Trend = (recent30 − prev30)/30 = ${trendRaw.toFixed(4)}, capped to [-1%·level/day = ${(-maxNegMag).toFixed(4)}, 0] → ${trend.toFixed(4)}.`,
+      `Projection floor = ${floorPct.toFixed(2)} × level = ${levelFloor.toFixed(2)} u/day (won't drop below this).`,
       `Safety = Z(${z.toFixed(2)}) × σ_LT(${sigma.toFixed(1)}) × ${safetyMul} = ${safetyStock.toFixed(0)} u (lower buffer for declining).`,
       `Coverage = ${coverageDemand.toFixed(0)} u.`,
     ],
@@ -568,13 +585,20 @@ function forecastDormantRevived({ series, lt, td, profABC, settings, today }) {
   const { z, servicePct } = getZ(profABC, settings);
   const { sigma, fallback: sigmaFallback } = sigmaLT(series, lt);
   const safetyMul = num(settings?.dormantSafetyMultiplier, DEFAULTS.dormantSafetyMultiplier);
-  const safetyStock = z * sigma * safetyMul;
+
+  // Sprint 2 Fix 6 — DORMANT_REVIVED business policy: do NOT carry safety
+  // stock for these items. They're potentially dead; we don't want capital
+  // tied up "just in case". The shadow numbers below are kept for the
+  // Watchlist tab so the operator can see what would have been bought.
+  const wouldHaveSafetyStock = z * sigma * safetyMul;
+  const safetyStock = 0;
 
   const days = td;
   const levelByDay = new Array(days).fill(level);
   const factorByDay = new Array(days).fill(1);
   const proj = projectByDays({ days, levelByDay, seasonalFactorByDay: factorByDay, fromDate: today });
-  const coverageDemand = proj.total + safetyStock;
+  const wouldHaveCoverageDemand = proj.total + wouldHaveSafetyStock;
+  const coverageDemand = proj.total + safetyStock; // == proj.total
 
   return {
     level,
@@ -590,13 +614,15 @@ function forecastDormantRevived({ series, lt, td, profABC, settings, today }) {
       profABC: profABC || null, servicePct, Z: z,
       sigmaLT: sigma, sigmaFallback, safetyMul,
       targetDoc: td, leadTime: lt,
+      wouldHaveSafetyStock, wouldHaveCoverageDemand,
     },
-    formula: 'dormant_revived: avg(30d) × targetDoc + Z·σ_LT × 1.5',
+    formula: 'dormant_revived: avg(30d) × targetDoc — safety declined per business policy',
     reasoning: [
       `Bundle is DORMANT_REVIVED — ignoring older history.`,
       `Level = mean(last 30d) = ${level.toFixed(2)} u/day.`,
-      `Safety = Z(${z.toFixed(2)}) × σ_LT(${sigma.toFixed(1)}) × ${safetyMul} (high uncertainty) = ${safetyStock.toFixed(0)} u.`,
-      `Coverage = ${coverageDemand.toFixed(0)} u.`,
+      `Safety stock = 0 (declined per business policy — see Watchlist for items the engine would have bought).`,
+      `Tracked: would-have-safety = Z(${z.toFixed(2)}) × σ_LT(${sigma.toFixed(1)}) × ${safetyMul} = ${wouldHaveSafetyStock.toFixed(0)} u.`,
+      `Coverage = ${coverageDemand.toFixed(0)} u (no safety).`,
     ],
   };
 }

@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useCallback, useEffect, useContext, useRef, Fragment } from "react";
-import { R, D1, $, $2, $4, P, gS, cAI, cNQ, cOQ, cDA, bNQ, isD, gTD, dc, cSeas, fSl, fMY, fE, fDateUS, effectiveDSR, roundToCasePack, genPO, genRFQ, cp7f, cp7g } from "../lib/utils";
+import { R, D1, $, $2, $4, P, gS, cAI, cNQ, cOQ, cDA, bNQ, isD, gTD, dc, cSeas, fSl, fMY, fE, fDateUS, effectiveDSR, roundToCasePack, genPO, genRFQ, cp7f, cp7g, resolveVendorFromBundle } from "../lib/utils";
 import { Dot, Toast, TH, SS, WorkflowChip, NumInput, SumCtx, VendorNotes } from "./Shared";
 import { batchProfiles, batchBundleProfiles, calcCoverageNeed, calcPurchaseFrequency, DEFAULT_PROFILE } from "../lib/seasonal";
 import { batchVendorRecommendationsV4, calcVendorRecommendationV4 } from "../lib/recommenderV4";
@@ -652,6 +652,11 @@ const rows = priceHistoryFull
     // but didn't make it into enr. Respect the vendor filter (vf) and
     // the location filter (locF) — but skip status/min-DOC filters so
     // extras are always discoverable when the vendor card is open.
+    //
+    // Post-Sprint-2: the engine itself now filters inactive/ignored cores,
+    // so this loop won't see them either. Extras are also gated on
+    // needPieces > 0 — a core the engine processed but doesn't ask to buy
+    // adds noise to the vendor card without adding decision value.
     for (const [vName, rec] of Object.entries(effectiveRecs || {})) {
       if (!rec || !Array.isArray(rec.coreDetails)) continue;
       if (vf && vName !== vf) continue;
@@ -659,8 +664,10 @@ const rows = priceHistoryFull
       const present = new Set(g[vName].cores.map(c => c.id));
       for (const cd of rec.coreDetails) {
         if (present.has(cd.coreId)) continue;
+        if (!(cd.needPieces > 0)) continue;
         const raw = coresById[cd.coreId];
         if (!raw) continue;
+        if (raw.active !== 'Yes' || raw.ignoreUntil) continue;
         const enriched = buildEnrichedCore(raw);
         if (locF === "us" && !enriched.isDom) continue;
         if (locF === "intl" && enriched.isDom) continue;
@@ -696,12 +703,7 @@ const rows = priceHistoryFull
     (bundles || []).filter(b => hasBundleOrd(b)).forEach(b => {
       const f = feMap[b.j];
       const cogpOv = gCogP(b.j);
-      const vendorsRaw = (b.vendors || "").trim();
-      let vendorName = vendorsRaw;
-      if (!effectiveRecs[vendorName]) {
-        const firstChunk = vendorsRaw.split(',').map(s => s.trim()).find(v => v && effectiveRecs[v]) || "";
-        if (firstChunk) vendorName = firstChunk;
-      }
+      const vendorName = resolveVendorFromBundle(b.vendors, effectiveRecs) || (b.vendors || '').trim();
       const vendorPrice = getVendorPrice(vendorName, b.j, f?.aicogs || b.aicogs || 0);
       const unitCost = cogpOv > 0 ? cogpOv : vendorPrice;
       items.push({ id: b.j, ti: b.t, vsku: b.asin || b.bundleCode, qty: bundleEffQ(b), cost: unitCost, cp: 1, inbS: gInbS(b.j), isCoreItem: false });
@@ -823,12 +825,7 @@ const rows = priceHistoryFull
     if (vendorSub !== "cores") (grpBundles || []).filter(b => hasBundleOrd(b)).forEach(b => {
       const f = feMap[b.j];
       const cogpOv = gCogP(b.j);
-      const vendorsRaw = (b.vendors || "").trim();
-      let vendorName = vendorsRaw;
-      if (!effectiveRecs[vendorName]) {
-        const firstChunk = vendorsRaw.split(',').map(s => s.trim()).find(v => v && effectiveRecs[v]) || "";
-        if (firstChunk) vendorName = firstChunk;
-      }
+      const vendorName = resolveVendorFromBundle(b.vendors, effectiveRecs) || (b.vendors || '').trim();
       const vendorPrice = getVendorPrice(vendorName, b.j, f?.aicogs || 0);
       currentTotal += bundleEffQ(b) * (cogpOv > 0 ? cogpOv : vendorPrice);
     });
@@ -993,12 +990,7 @@ const rows = priceHistoryFull
     const f = b.fee || feMap[b.j];
     const eq = bundleEffQ(b);
     const cogpOverride = gCogP(b.j);
-    const vendorsRaw = (b.vendors || "").trim();
-    let vendorName = vendorsRaw;
-    if (!effectiveRecs[vendorName]) {
-      const firstChunk = vendorsRaw.split(',').map(s => s.trim()).find(v => v && effectiveRecs[v]) || "";
-      if (firstChunk) vendorName = firstChunk;
-    }
+    const vendorName = resolveVendorFromBundle(b.vendors, effectiveRecs) || (b.vendors || '').trim();
     const vendorPrice = getVendorPrice(vendorName, b.j, f?.aicogs || 0);
     const unitCost = cogpOverride > 0 ? cogpOverride : vendorPrice;
     const cost = eq * unitCost;

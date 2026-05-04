@@ -695,11 +695,13 @@ export default function CoreTab({ data, stg, hist, daily, coreId, onBack, goBund
         vendorRec={vendorRec} allCores={data.cores || []}
       />
 
-      {/* Purchase Rec (v2 — bundle-driven) */}
+      {/* CANONICAL BREAKDOWN UI · single source of truth = v4 waterfall.
+          All cifras leen de coreDetail (vendorRec.coreDetails). No
+          re-computation. The full audit trail lives in WhyBuyPanel. */}
       <div className="bg-gray-900 rounded-xl p-4 border border-gray-800">
         <h3 className="text-white font-semibold text-sm mb-3">
           Purchase Rec
-          <span className="ml-2 text-[10px] text-gray-500 font-normal">v2 · bundle-driven · consistent with Purchasing tab</span>
+          <span className="ml-2 text-[10px] text-gray-500 font-normal">v4 · bundle-driven · consistent with Purchasing tab</span>
         </h3>
         <div className="grid grid-cols-2 sm:grid-cols-5 gap-4 mb-3">
           {[

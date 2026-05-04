@@ -15,6 +15,7 @@ import BridgeTab from "./components/BridgeTab";
 import SegmentsTab from "./components/SegmentsTab";
 import WhyBuyPanel from "./components/WhyBuyPanel";
 import TodaysActionTab from "./components/TodaysActionTab";
+import WatchlistTab from "./components/WatchlistTab";
 import { batchVendorRecommendationsV4 } from "./lib/recommenderV4";
 import { calcPurchaseFrequency, calcBundleSeasonalProfile, DEFAULT_PROFILE } from "./lib/seasonal";
 import { buildAllIndexes } from "./lib/dataIndexes";
@@ -326,6 +327,7 @@ const TABS = [
   { id: "orders", l: "Orders" },
   { id: "vendors", l: "Vendors" },
   { id: "performance", l: "Performance" },
+  { id: "watchlist", l: "Watchlist" },
   { id: "classic", l: "Classic" },
   { id: "glossary", l: "Glossary" }
 ];
@@ -356,6 +358,9 @@ const DEFAULT_SETTINGS = {
   inventoryAnomalyMultiplier: 3,
   anomalyLookbackDays: 7,
   pipeline_days: 25,
+  // Sprint 2 Fix 5 — DECLINING projection guardrails
+  decliningProjectionFloor: 0.5,
+  sevenDayReconciliationRatio: 1.0,
 };
 
 export default function App() {
@@ -947,7 +952,7 @@ export default function App() {
         </div>
         <div style={{ display: tab === "classic" ? "block" : "none" }}>
           <ErrorBoundary label="Classic Dashboard" compact>
-            <DashboardSummary data={dataH} stg={stg} vendorRecs={vendorRecs} goVendor={goVendor} workflow={data.workflow} saveWorkflow={saveWorkflow} deleteWorkflow={deleteWorkflow} vendorComments={data.vendorComments} saveVendorComment={saveVendorComment} onEnterPurchasing={() => setTab("purchasing")} activeBundleCores={activeBundleCores} />
+            <DashboardSummary data={dataH} stg={stg} vendorRecs={vendorRecs} goVendor={goVendor} workflow={data.workflow} saveWorkflow={saveWorkflow} deleteWorkflow={deleteWorkflow} vendorComments={data.vendorComments} saveVendorComment={saveVendorComment} onEnterPurchasing={() => setTab("purchasing")} activeBundleCores={activeBundleCores} liveStatus={liveStatus} historyStatus={historyStatus} workerStatus={workerStatus} loadLive={loadLive} loadHistory={loadHistory} />
           </ErrorBoundary>
         </div>
         <div style={{ display: tab === "purchasing" ? "block" : "none" }}>
@@ -957,17 +962,18 @@ export default function App() {
         </div>
         {tab === "bridge" && <ErrorBoundary label="Bridge" compact><BridgeTab data={dataH} stg={stg} vendorRecs={vendorRecs} goCore={goCore} goBundle={goBundle} /></ErrorBoundary>}
         {tab === "core" && <ErrorBoundary label="Core" compact><CoreTab data={data} stg={stg} hist={{ coreInv: data.coreInv, bundleSales: data.bundleSales, priceHist: data.priceHist }} daily={{ coreDays: data.coreDays, bundleDays: data.bundleDays }} coreId={coreId} onBack={handleBackFromCore} goBundle={goBundle} /></ErrorBoundary>}
-        {tab === "bundle" && <ErrorBoundary label="Bundle" compact><BundleTab data={data} stg={stg} hist={{ coreInv: data.coreInv, bundleSales: data.bundleSales, bundleInv: data.bundleInv, priceHist: data.priceHist }} daily={{ coreDays: data.coreDays, bundleDays: data.bundleDays }} bundleId={bundleId} onBack={handleBackFromBundle} goCore={goCore} /></ErrorBoundary>}
+        {tab === "bundle" && <ErrorBoundary label="Bundle" compact><BundleTab data={data} stg={stg} vendorRecs={vendorRecs} hist={{ coreInv: data.coreInv, bundleSales: data.bundleSales, bundleInv: data.bundleInv, priceHist: data.priceHist }} daily={{ coreDays: data.coreDays, bundleDays: data.bundleDays }} bundleId={bundleId} onBack={handleBackFromBundle} goCore={goCore} /></ErrorBoundary>}
         {tab === "segments" && <ErrorBoundary label="Segments" compact><SegmentsTab data={data} vendorRecs={vendorRecs} goBundle={goBundle} openWhyBuy={openWhyBuy} /></ErrorBoundary>}
         {tab === "orders" && <ErrorBoundary label="Orders" compact><OrdersTab data={data} /></ErrorBoundary>}
         {tab === "vendors" && <ErrorBoundary label="Vendors" compact><VendorsTab data={data} stg={stg} goVendor={goVendor} workflow={data.workflow} saveWorkflow={saveWorkflow} deleteWorkflow={deleteWorkflow} vendorComments={data.vendorComments} saveVendorComment={saveVendorComment} /></ErrorBoundary>}
         {tab === "performance" && <ErrorBoundary label="Performance" compact><PerformanceTab /></ErrorBoundary>}
+        {tab === "watchlist" && <ErrorBoundary label="Watchlist" compact><WatchlistTab data={dataH} vendorRecs={vendorRecs} /></ErrorBoundary>}
         {tab === "glossary" && <ErrorBoundary label="Glossary" compact><GlossTab /></ErrorBoundary>}
       </main>
 
       {showS && <Stg s={stg} setS={setStg} onClose={() => setShowS(false)} />}
       <SlidePanel open={!!(panelCoreId || panelBundleId)} onClose={closePanel}>
-        {panelBundleId ? <BundleTab data={data} stg={stg} hist={{ coreInv: data.coreInv, bundleSales: data.bundleSales, bundleInv: data.bundleInv, priceHist: data.priceHist }} daily={{ coreDays: data.coreDays, bundleDays: data.bundleDays }} bundleId={panelBundleId} onBack={() => { setPanelBundleId(null); if (!panelCoreId) closePanel(); }} goCore={id => { setPanelBundleId(null); setPanelCoreId(id) }} />
+        {panelBundleId ? <BundleTab data={data} stg={stg} vendorRecs={vendorRecs} hist={{ coreInv: data.coreInv, bundleSales: data.bundleSales, bundleInv: data.bundleInv, priceHist: data.priceHist }} daily={{ coreDays: data.coreDays, bundleDays: data.bundleDays }} bundleId={panelBundleId} onBack={() => { setPanelBundleId(null); if (!panelCoreId) closePanel(); }} goCore={id => { setPanelBundleId(null); setPanelCoreId(id) }} />
         : panelCoreId ? <CoreTab data={data} stg={stg} hist={{ coreInv: data.coreInv, bundleSales: data.bundleSales, priceHist: data.priceHist }} daily={{ coreDays: data.coreDays, bundleDays: data.bundleDays }} coreId={panelCoreId} onBack={closePanel} goBundle={id => setPanelBundleId(id)} />
         : null}
       </SlidePanel>
