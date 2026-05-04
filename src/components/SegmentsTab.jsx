@@ -23,6 +23,7 @@ import {
   exportOverrides,
   importOverrides,
 } from "../lib/segments";
+import { SegmentBadge, ConfidenceBadge } from "./SegmentBadges";
 
 const ROW_HEIGHT = 44;
 const VISIBLE_BUFFER = 8;
@@ -60,12 +61,10 @@ function Sparkline({ values, color = '#3b82f6' }) {
   );
 }
 
-// Sprint 3 Fix 6: SegmentBadge / ConfidenceBadge moved to
-// SegmentBadges.jsx so static importers (PurchTab, BundleTab,
-// TodaysActionTab, WhyBuyPanel) don't pull this whole module into
-// the main bundle. Re-exported here to keep external imports
-// working until callers are migrated.
-export { SegmentBadge, ConfidenceBadge } from "./SegmentBadges";
+// Sprint 3 Fix 6: SegmentBadge / ConfidenceBadge live in
+// SegmentBadges.jsx so static importers don't pull this whole
+// module into the main bundle. All known consumers now import
+// from SegmentBadges directly; no back-compat re-export needed.
 
 export default function SegmentsTab({ data, vendorRecs, goBundle, openWhyBuy }) {
   const { autoMap, overrides, overrideMeta = {}, effectiveMap, setOverride, bulkSet, clearAll, refreshOverrides } = useContext(SegmentCtx);

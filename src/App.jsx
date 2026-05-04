@@ -949,7 +949,7 @@ export default function App() {
         )}
         <div style={{ display: tab === "today" ? "block" : "none" }}>
           <ErrorBoundary label="Today's Action" compact>
-            <TodaysActionTab data={dataH} stg={stg} vendorRecs={vendorRecs} goVendor={goVendor} workflow={data.workflow} saveWorkflow={saveWorkflow} deleteWorkflow={deleteWorkflow} vendorComments={data.vendorComments} saveVendorComment={saveVendorComment} onEnterPurchasing={() => setTab("purchasing")} />
+            <TodaysActionTab data={dataH} stg={stg} vendorRecs={vendorRecs} goVendor={goVendor} workflow={data.workflow} saveWorkflow={saveWorkflow} deleteWorkflow={deleteWorkflow} vendorComments={data.vendorComments} saveVendorComment={saveVendorComment} onEnterPurchasing={() => setTab("purchasing")} liveStatus={liveStatus} historyStatus={historyStatus} historyEverLoaded={historyEverLoaded} workerStatus={workerStatus} loadLive={loadLive} loadHistory={loadHistory} />
           </ErrorBoundary>
         </div>
         <div style={{ display: tab === "purchasing" ? "block" : "none" }}>

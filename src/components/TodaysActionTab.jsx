@@ -9,7 +9,7 @@
 // when the helpers fail (e.g. popup blocked).
 // ============================================================
 
-import React, { useContext, useMemo, useState } from "react";
+import React, { useContext, useEffect, useMemo, useRef, useState } from "react";
 import { R, D1, gS, fSl, genPO, genRFQ, cp7f, cp7g } from "../lib/utils";
 import { Dot, WorkflowChip, VendorNotes } from "./Shared";
 import { getEffectiveWfStatus } from "./Shared";
@@ -376,11 +376,44 @@ export default function TodaysActionTab({
   data, stg, vendorRecs, goVendor, workflow,
   saveWorkflow, deleteWorkflow, vendorComments, saveVendorComment,
   onEnterPurchasing,
+  // Sprint 3 hotfix Bug 2: status props piped from App so the cold
+  // start can show a "Calculating…" guard. Previously DashboardSummary
+  // owned this guard; when Fix 2 deleted that file, Today's Action
+  // started rendering the vendor count immediately on partial data,
+  // which produced the "10 vendors → 46 vendors" jump on cold start.
+  liveStatus, historyStatus, historyEverLoaded, workerStatus,
+  loadLive, loadHistory,
 }) {
   const segCtx = useContext(SegmentCtx);
   const whyBuy = useContext(WhyBuyCtx);
   const [originFilter, setOriginFilter] = useState('all'); // 'all' | 'us' | 'intl'
   const [workflowFilter, setWorkflowFilter] = useState('all'); // 'all' | 'untriaged' | 'Buy' | 'Reviewing' | 'Done' | 'Ignore'
+
+  // Sprint 3 hotfix Bug 2: cold-start guardrail.
+  //
+  // We only consider the engine "ready" once all three feeds have
+  // produced at least one full result: live data loaded, history
+  // hydrated, and the worker emitted vendorRecs. Before that the
+  // count would jump (typical "10 → 46 vendors" when forecast data
+  // arrives mid-render).
+  //
+  // We LATCH ready on the first transition. Subsequent worker
+  // recomputes (e.g. after a settings tweak) leave the latch on so
+  // the number stays visible — vendorRecs from the previous run is
+  // still rendered until the new one replaces it, with no flicker
+  // back to the placeholder.
+  const liveErr = liveStatus?.error || null;
+  const histErr = historyStatus?.error || null;
+  const workerErr = workerStatus === 'error';
+  const liveLoading = !!liveStatus?.loading;
+  const histLoadingFirst = !historyEverLoaded;
+  const workerReady = workerStatus === 'ready';
+  const everReadyRef = useRef(false);
+  if (!everReadyRef.current && !liveLoading && !histLoadingFirst && workerReady) {
+    everReadyRef.current = true;
+  }
+  const engineReady = everReadyRef.current;
+  const engineFailed = !engineReady && (liveErr || histErr || workerErr);
 
   const vMap = useMemo(() => {
     const m = {};
@@ -459,6 +492,36 @@ export default function TodaysActionTab({
     setPoSummary({ count: generated.length, total, drafts: generated.filter(g => g.mode === 'draft').length });
     setPoFlowOpen(false);
   };
+
+  // Cold-start placeholder: render before we touch totals so the
+  // operator sees a stable "Calculating…" state instead of a
+  // partial vendor count that jumps once history finishes loading.
+  if (!engineReady) {
+    return (
+      <div className="p-4 max-w-4xl mx-auto">
+        {engineFailed ? (
+          <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-6 text-center">
+            <div className="text-red-300 font-semibold mb-2">Unable to calculate — retry</div>
+            <div className="text-gray-400 text-sm mb-4">
+              {liveErr ? `Live: ${liveErr}` : null}
+              {liveErr && histErr ? ' · ' : null}
+              {histErr ? `History: ${histErr}` : null}
+              {workerErr && !liveErr && !histErr ? 'The engine failed to recompute.' : null}
+            </div>
+            <div className="flex gap-2 justify-center">
+              {liveErr && loadLive && <button onClick={() => loadLive({ forceRefresh: true })} className="text-xs bg-blue-600 text-white px-3 py-1.5 rounded">Retry Live</button>}
+              {histErr && loadHistory && <button onClick={() => loadHistory({ forceRefresh: true })} className="text-xs bg-blue-600 text-white px-3 py-1.5 rounded">Retry History</button>}
+            </div>
+          </div>
+        ) : (
+          <div className="flex items-center justify-center gap-3 py-16 text-gray-400">
+            <div className="w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+            <span className="text-sm">Calculating...</span>
+          </div>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="p-4">
