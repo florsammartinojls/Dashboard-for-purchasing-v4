@@ -2,12 +2,17 @@
 // ============================================================
 // Watchlist — items that need periodic review but are NOT in the
 // Purchasing flow. Three sections:
-//   1. Items dormidos para revisar (DORMANT_REVIVED)
+//   1. Dormant items to review (DORMANT_REVIVED)
 //      Engine declined safety stock (Sprint 2 Fix 6). Operator
 //      decides to discontinue or wait for organic revival.
-//   2. Items intermitentes (DSR < 0.3)
+//   2. Intermittent items (DSR < 0.3)
 //      Low-velocity but still selling. Periodic check-in.
-//   3. Stockouts viejos — placeholder for future sprint.
+//   3. Persistent stockouts — placeholder for future sprint.
+//
+// Sprint 3 Fix 5: dormant + intermittent sections exclude bundles
+// that are inactive or have ignoreUntil set, AND skip bundles
+// whose every associated core is inactive/ignored. Those items
+// are already out of the workflow and don't need review here.
 // ============================================================
 
 import React, { useContext, useMemo, useState } from "react";
@@ -39,11 +44,11 @@ function Section({ title, count, children, defaultOpen = true }) {
 function DiscontinuePlaceholder({ bundleId }) {
   return (
     <button
-      onClick={() => alert(`Marcar ${bundleId} como descontinuado — funcionalidad pendiente. Por ahora gestionalo desde la Sheet.`)}
+      onClick={() => alert(`Mark ${bundleId} as discontinued — feature pending. For now, manage it from the Sheet.`)}
       className="text-[10px] text-red-400/80 hover:text-red-300 underline"
-      title="Placeholder — la integración con el sistema de gestión de items se conecta en un próximo sprint."
+      title="Placeholder — integration with the item-management system ships in a future sprint."
     >
-      Marcar descontinuado
+      Mark discontinued
     </button>
   );
 }
@@ -57,6 +62,30 @@ export default function WatchlistTab({ data, vendorRecs }) {
     return m;
   }, [data.bundles]);
 
+  const coresById = useMemo(() => {
+    const m = {};
+    (data.cores || []).forEach(c => { if (c?.id) m[c.id] = c; });
+    return m;
+  }, [data.cores]);
+
+  // True iff bundle is active+not-ignored AND at least one of its
+  // referenced cores is active+not-ignored. Bundles whose every core
+  // has been deactivated or ignored are out of the workflow already.
+  const isInWorkflow = (b) => {
+    if (!b) return false;
+    if (b.active !== 'Yes' || b.ignoreUntil) return false;
+    const coreIds = [];
+    for (let i = 1; i <= 20; i++) {
+      const cid = b['core' + i];
+      if (cid) coreIds.push(cid);
+    }
+    if (coreIds.length === 0) return true; // no cores referenced → don't filter out
+    return coreIds.some(cid => {
+      const c = coresById[cid];
+      return c && c.active === 'Yes' && !c.ignoreUntil;
+    });
+  };
+
   // ── Section 1: Dormant ──
   const dormantItems = useMemo(() => {
     const out = [];
@@ -64,10 +93,11 @@ export default function WatchlistTab({ data, vendorRecs }) {
       if (!rec?.bundleDetails) continue;
       for (const bd of rec.bundleDetails) {
         if (!bd.dormantRevived) continue;
-        const b = bundleById[bd.bundleId] || {};
+        const b = bundleById[bd.bundleId];
+        if (!isInWorkflow(b)) continue;
         out.push({
           bundleId: bd.bundleId,
-          title: b.t || bd.bundleId,
+          title: b?.t || bd.bundleId,
           vendor: vendorName,
           lastSaleDate: bd.lastSaleDate,
           daysDormant: bd.daysDormant,
@@ -80,7 +110,7 @@ export default function WatchlistTab({ data, vendorRecs }) {
     }
     out.sort((a, b) => (b.daysDormant || 0) - (a.daysDormant || 0));
     return out;
-  }, [vendorRecs, bundleById]);
+  }, [vendorRecs, bundleById, coresById]);
 
   // ── Section 2: Intermittent (DSR < 0.3, not classified DORMANT_REVIVED) ──
   // We compute a 60d mean from bundleDays so we don't depend on legacy b.cd.
@@ -107,10 +137,11 @@ export default function WatchlistTab({ data, vendorRecs }) {
         const totalUnits = last60.reduce((s, d) => s + (Number(d.dsr) || 0), 0);
         const dsr60 = last60.length ? totalUnits / last60.length : 0;
         if (dsr60 >= 0.3) continue;
-        const b = bundleById[bd.bundleId] || {};
+        const b = bundleById[bd.bundleId];
+        if (!isInWorkflow(b)) continue;
         out.push({
           bundleId: bd.bundleId,
-          title: b.t || bd.bundleId,
+          title: b?.t || bd.bundleId,
           vendor: vendorName,
           lastSaleDate: bd.lastSaleDate,
           daysDormant: bd.daysDormant,
@@ -123,20 +154,20 @@ export default function WatchlistTab({ data, vendorRecs }) {
     }
     out.sort((a, b) => a.dsr60 - b.dsr60);
     return out;
-  }, [vendorRecs, data.bundleDaysForecast, bundleById]);
+  }, [vendorRecs, data.bundleDaysForecast, bundleById, coresById]);
 
   return (
     <div className="p-4 max-w-7xl mx-auto">
       <div className="mb-4">
         <h2 className="text-xl font-bold text-white">Watchlist</h2>
         <p className="text-xs text-gray-500 mt-1">
-          Items que merecen review periódico pero no entran al flujo de Purchasing. Los dormidos no compran safety stock por política — el motor trackea acá lo que hubiera comprado.
+          Items that deserve periodic review but don't fit the Purchasing flow. Dormant items don't trigger safety-stock buys by policy — the engine tracks here what it would have bought.
         </p>
       </div>
 
-      <Section title="Items dormidos para revisar (DORMANT_REVIVED)" count={dormantItems.length}>
+      <Section title="Dormant items to review (DORMANT_REVIVED)" count={dormantItems.length}>
         {dormantItems.length === 0 ? (
-          <p className="text-gray-500 text-sm py-6 text-center">Sin items para revisar.</p>
+          <p className="text-gray-500 text-sm py-6 text-center">No items to review.</p>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
@@ -151,7 +182,7 @@ export default function WatchlistTab({ data, vendorRecs }) {
                   <th className="py-2 px-3 text-right">Available inv</th>
                   <th className="py-2 px-3 text-right">Would-have-bought</th>
                   <th className="py-2 px-3 text-right">$ tracked</th>
-                  <th className="py-2 px-3 text-right">Acción</th>
+                  <th className="py-2 px-3 text-right">Action</th>
                 </tr>
               </thead>
               <tbody>
@@ -181,9 +212,9 @@ export default function WatchlistTab({ data, vendorRecs }) {
         )}
       </Section>
 
-      <Section title="Items intermitentes (DSR 60d < 0.3)" count={intermittentItems.length}>
+      <Section title="Intermittent items (DSR 60d < 0.3)" count={intermittentItems.length}>
         {intermittentItems.length === 0 ? (
-          <p className="text-gray-500 text-sm py-6 text-center">Sin items intermitentes para revisar.</p>
+          <p className="text-gray-500 text-sm py-6 text-center">No intermittent items to review.</p>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
@@ -222,9 +253,9 @@ export default function WatchlistTab({ data, vendorRecs }) {
         )}
       </Section>
 
-      <Section title="Stockouts viejos" count={0} defaultOpen={false}>
+      <Section title="Persistent stockouts" count={0} defaultOpen={false}>
         <p className="text-gray-500 text-sm py-6 text-center">
-          TODO: identificar bundles con stockouts persistentes. Slot reservado para próximo sprint.
+          TODO: identify bundles with persistent stockouts. Slot reserved for a future sprint.
         </p>
       </Section>
     </div>

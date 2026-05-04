@@ -62,7 +62,7 @@
         "level_min": 4,
         "level_max": 7,
         "trend_max": 0,
-        "formula_includes": "declining: avg(60d)"
+        "formula_includes": "declining: max(floor, avg(60d) + capped (-) trend × days) + Z·σ_LT × 0.8"
       }
     },
     {

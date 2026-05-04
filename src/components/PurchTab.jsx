@@ -5,7 +5,7 @@ import { batchProfiles, batchBundleProfiles, calcCoverageNeed, calcPurchaseFrequ
 import { batchVendorRecommendationsV4, calcVendorRecommendationV4 } from "../lib/recommenderV4";
 import { saveSnapshotIfNeeded, loadPreviousSnapshot, computeDelta } from "../lib/snapshot";
 import { SegmentCtx, WhyBuyCtx } from "../App";
-import { SegmentBadge } from "./SegmentsTab";
+import { SegmentBadge } from "./SegmentBadges";
 
 // === FLAG DEFINITIONS — compact icons, text in tooltip ===
 const FLAG_DEFS = {
@@ -80,10 +80,10 @@ function MoqBlockedControls({ detail, onOverride }) {
   const ratio = detail.ratio || 0;
   const ratioLabel = ratio >= 10 ? Math.round(ratio) : ratio.toFixed(1);
   const tip =
-    `Necesita ${Math.round(detail.coreNeed).toLocaleString('en-US')}u pero MOQ obliga a ` +
+    `Needs ${Math.round(detail.coreNeed).toLocaleString('en-US')}u but MOQ forces ` +
     `${Math.round(detail.wouldHaveBought).toLocaleString('en-US')}u (${ratioLabel}x). ` +
-    `Bloqueado por moqInflationHardCap=${detail.cap}. ` +
-    `Considerá negociar MOQ menor con vendor o splittear con otros productos.`;
+    `Blocked by moqInflationHardCap=${detail.cap}. ` +
+    `Consider negotiating a lower MOQ with the vendor or splitting with other products.`;
   return (
     <>
       <span
@@ -96,7 +96,7 @@ function MoqBlockedControls({ detail, onOverride }) {
         type="button"
         onClick={onOverride}
         className="text-[10px] text-orange-400 hover:text-orange-300 underline underline-offset-2 flex-shrink-0"
-        title={`Override: forzar compra de ${Math.round(detail.wouldHaveBought).toLocaleString('en-US')}u (${'$' + Math.round(detail.wouldHaveCost).toLocaleString('en-US')}) ignorando el cap.`}
+        title={`Override: force-buy ${Math.round(detail.wouldHaveBought).toLocaleString('en-US')}u (${'$' + Math.round(detail.wouldHaveCost).toLocaleString('en-US')}) bypassing the cap.`}
       >
         Override MOQ
       </button>
@@ -201,7 +201,10 @@ if (!vendorRecs || !Object.keys(vendorRecs).length) vendorRecs = {};
     }
   }, [data.vendors]);
   const [sort, setSort] = useState("status");
-  const [sf, setSf] = useState("");
+  // Sprint 3 Fix 9: status filter as a button bar instead of a select.
+  // Allowed values: "needsbuy" (default), "" (All), "Buy", "Reviewing",
+  // "Ignore", "Done". Workflow statuses match data.workflow entries.
+  const [sf, setSf] = useState("needsbuy");
   const [nf, setNf] = useState("all");
   const [minD, setMinD] = useState(0);
   const [locF, setLocF] = useState("all");
@@ -293,11 +296,42 @@ if (!vendorRecs || !Object.keys(vendorRecs).length) vendorRecs = {};
 
   const profiles = useMemo(() => batchProfiles(data.cores || [], data._coreInv || [], data._coreDays || []), [data.cores, data._coreInv, data._coreDays]);
 
+  // Sprint 3 Fix 9: per-core workflow status lookup. data.workflow
+  // entries are { id, type, status, ... } where status is one of
+  // WF_STATUSES ("Buy" | "Reviewing" | "Ignore" | "Done" | "").
+  const workflowByCoreId = useMemo(() => {
+    const m = {};
+    for (const w of (data.workflow || [])) {
+      if (!w || !w.id) continue;
+      m[w.id] = w.status || '';
+    }
+    return m;
+  }, [data.workflow]);
+
   const purchFreqMap = useMemo(() => {
     const m = {};
     (data.vendors || []).forEach(v => { m[v.name] = calcPurchaseFrequency(v.name, data.receivingFull || []) });
     return m;
   }, [data.vendors, data.receivingFull]);
+
+  // Sprint 3 Fix 10: shortTitle by JLS / core ID, derived from
+  // receivingFull rows (latest non-empty wins). TEMPORARY workaround
+  // until Apps Script exposes shortTitle on bundle objects directly
+  // (see Sprint 3 report § "Pipeline bugs"). Once the backend ships
+  // it, swap callers to b.shortTitle and remove this map.
+  const shortTitleByJ = useMemo(() => {
+    const m = {};
+    const rows = data.receivingFull || data.receiving || [];
+    // Iterate newest-first so the first hit per ID is the latest.
+    const sorted = [...rows].sort((a, b) => (b?.date || '').localeCompare(a?.date || ''));
+    for (const r of sorted) {
+      if (!r || !r.core) continue;
+      const t = (r.shortTitle || '').trim();
+      if (!t) continue;
+      if (!m[r.core]) m[r.core] = t;
+    }
+    return m;
+  }, [data.receivingFull, data.receiving]);
 
   const effectiveRecs = useMemo(() => ({ ...vendorRecs, ...overrideRecs }), [vendorRecs, overrideRecs]);
 
@@ -488,6 +522,8 @@ const rows = priceHistoryFull
     const bundlesAffected = cDet?.bundlesAffected || 0;
     const rejectedByMoqCap = cDet?.rejectedByMoqCap || false;
     const moqCapDetail = cDet?.moqCapDetail || null;
+    const typicalPoSize = cDet?.typicalPoSize ?? null;
+    const poSizeWarning = !!cDet?.poSizeWarning;
 
     const profile = profiles[c.id] || DEFAULT_PROFILE;
 
@@ -518,6 +554,8 @@ const rows = priceHistoryFull
       bundlesAffected,
       rejectedByMoqCap,
       moqCapDetail,
+      typicalPoSize,
+      poSizeWarning,
     };
   }, [vMap, stg, data._coreInv, effectiveRecs, profiles, spikeThr]);
 
@@ -535,7 +573,13 @@ const rows = priceHistoryFull
     .map(buildEnrichedCore)
     .filter(c => {
       if (vf && c.ven !== vf) return false;
-      if (sf && c.status !== sf) return false;
+      // Sprint 3 Fix 9: status filter is now a button bar.
+      // "needsbuy" → only cores with positive engine recommendation.
+      // "" → no filter. Other values are workflow statuses.
+      if (sf === 'needsbuy') { if (!(c.needQty > 0)) return false; }
+      else if (sf) {
+        if ((workflowByCoreId[c.id] || '') !== sf) return false;
+      }
       if (minD > 0 && c.doc < minD) return false;
     if (nf === "inorder") {
       // Show this core if EITHER the core itself OR any of its bundles
@@ -640,6 +684,12 @@ const rows = priceHistoryFull
     return m;
   }, [data.cores]);
 
+  const bundlesById = useMemo(() => {
+    const m = {};
+    (data.bundles || []).forEach(b => { if (b?.j) m[b.j] = b; });
+    return m;
+  }, [data.bundles]);
+
   const vG = useMemo(() => {
     if (vm !== "vendor") return [];
     const g = {};
@@ -686,11 +736,47 @@ const rows = priceHistoryFull
     }
 
     Object.keys(g).forEach(vn => { g[vn].bundles = venBundles.filter(b => (b.vendors || "").indexOf(vn) >= 0) });
+
+    // ────────────────────────────────────────────────────────────
+    // Sprint 3 Fix 3: vendor mapping union for BUNDLES.
+    // The recommender groups bundles by vendor via `vendorBelongsTo`
+    // (recommenderV4.js). PurchTab matches via substring on
+    // `b.vendors`. When the canonical vendor name doesn't match
+    // (e.g. "Changzhou Hantechn IMP & EXP CO., LTD." vs the
+    // shorter alias on the bundle row), the bundle is processed
+    // by the engine but never rendered in the vendor card →
+    // Fill Rec sets ov[id] but no <BundleRow> shows the input.
+    //
+    // Fix: append any bundle present in vendorRec.bundleItems
+    // (mode='bundle', finalQty>0) not already in g[vn].bundles,
+    // tagged __fromRecOnly so the BundleRow renders dimmed and
+    // the operator can see the engine recommended it. Mirrors
+    // the existing __fromRecOnly union for cores.
+    // ────────────────────────────────────────────────────────────
+    for (const [vName, rec] of Object.entries(effectiveRecs || {})) {
+      if (!rec || !Array.isArray(rec.bundleItems)) continue;
+      if (vf && vName !== vf) continue;
+      const bucket = g[vName];
+      if (!bucket) continue;
+      const present = new Set(bucket.bundles.map(b => b.j));
+      for (const bi of rec.bundleItems) {
+        if (!bi || !bi.id) continue;
+        if (present.has(bi.id)) continue;
+        if (!(bi.finalQty > 0)) continue;
+        const raw = bundlesById[bi.id];
+        if (!raw) continue;
+        // Respect bundle active/ignore at the union point so we don't
+        // surface bundles the operator already disabled.
+        if (raw.active !== 'Yes' || raw.ignoreUntil) continue;
+        bucket.bundles.push({ ...raw, __fromRecOnly: true });
+      }
+    }
+
     return Object.values(g)
       .filter(grp => vf || showIgnored || !isIgnored(grp.v.name))
       .filter(grp => grp.cores.length > 0 || grp.bundles.length > 0)
       .sort((a, b) => b.cores.filter(c => c.status === "critical").length - a.cores.filter(c => c.status === "critical").length);
-  }, [enr, vm, vMap, venBundles, isIgnored, showIgnored, vf, locF, effectiveRecs, coresById, buildEnrichedCore, resolveVendorKey]);
+  }, [enr, vm, vMap, venBundles, isIgnored, showIgnored, vf, locF, effectiveRecs, coresById, bundlesById, buildEnrichedCore, resolveVendorKey]);
 
   const getPOI = (cores, bundles) => {
     const items = [];
@@ -807,11 +893,19 @@ const rows = priceHistoryFull
       : effectiveRecs[vendorName];
     if (!rec || !rec.items?.length) { setToast("Nothing to fill"); return; }
     const u = { ...ov };
+    let filled = 0;
     for (const item of rec.items) {
-      if (item.finalQty > 0) u[item.id] = { ...(u[item.id] || {}), pcs: item.finalQty };
+      if (item.finalQty > 0) {
+        u[item.id] = { ...(u[item.id] || {}), pcs: item.finalQty };
+        filled++;
+      }
     }
     setOv(u);
-    setToast(`Filled ${rec.items.length} items`);
+    // Sprint 3 Fix 3: count of FILLED rows, not total items in rec.
+    // Previously the toast said "Filled N items" where N counted every
+    // item (incl. zero-qty rows from rejected MOQ-cap), which never
+    // matched the visible inputs.
+    setToast(filled > 0 ? `Filled ${filled} item${filled > 1 ? 's' : ''}` : "Nothing to fill");
   };
 
   const doFillMOQ = (grpCores, grpBundles, vendorMOQDollar) => {
@@ -906,7 +1000,7 @@ const rows = priceHistoryFull
             {c.__fromRecOnly && (
               <span
                 className="text-[9px] uppercase tracking-wider px-1 py-0.5 rounded bg-gray-700/60 text-gray-400 border border-gray-600 flex-shrink-0"
-                title="Procesado por el motor pero filtrado por la UI (active/visible/ignored/no-bundle). Visible acá para que no quede invisible — aplicá Show No-Bundle o ajustá filtros si lo querés ver siempre."
+                title="Processed by the engine but filtered out by the UI (active/visible/ignored/no-bundle). Surfaced here so it isn't invisible — toggle Show No-Bundle or adjust filters to always show it."
               >
                 rec
               </span>
@@ -921,6 +1015,14 @@ const rows = priceHistoryFull
               />
             )}
             {c.bundlesAffected > 0 && <span className="text-[10px] text-gray-500 flex-shrink-0" title={`Driven by ${c.bundlesAffected} bundle(s). See 📊 Step 3.`}>({c.bundlesAffected}b)</span>}
+            {c.poSizeWarning && (
+              <span
+                className="text-[9px] font-semibold text-amber-300 bg-amber-500/15 border border-amber-500/40 px-1 py-0.5 rounded flex-shrink-0"
+                title={`Engine recommends ${c.orderQty}u — your typical PO for this item is ${c.typicalPoSize}u (median of last 5 receivings). Consider negotiating min order with vendor or splitting with other items.`}
+              >
+                Below typical PO ({c.typicalPoSize}u)
+              </span>
+            )}
           </div>
         </td>
 
@@ -1011,7 +1113,8 @@ const rows = priceHistoryFull
     const regime = bd?.regime || null;
     const regimeReason = bd?.regimeInfo?.reason || '';
 
-    const rowBg = "bg-indigo-950/20";
+    const fromRecOnly = !!b.__fromRecOnly;
+    const rowBg = fromRecOnly ? "bg-indigo-950/20 opacity-70" : "bg-indigo-950/20";
     const stickyBg = "bg-indigo-950/40";
 
     return <tr className={`border-b border-gray-800/20 hover:bg-indigo-900/20 text-xs ${rowBg}`}>
@@ -1024,8 +1127,23 @@ const rows = priceHistoryFull
           title="Why buy?"
         >📊</button>
       </td>
-      <td className={`py-1.5 px-1 text-indigo-200 truncate max-w-[160px] sticky left-[85px] z-10 ${stickyBg}`}>
-        <span className="pl-3">↳ {b.t}</span>
+      <td className={`py-1.5 px-1 text-indigo-200 max-w-[180px] sticky left-[85px] z-10 ${stickyBg}`}>
+        <div className="truncate">
+          <span className="pl-3">↳ {b.t}</span>
+        </div>
+        {shortTitleByJ[b.j] && (
+          <div className="pl-3 text-[9px] text-gray-500 italic truncate" title={shortTitleByJ[b.j]}>
+            {shortTitleByJ[b.j]}
+          </div>
+        )}
+        {fromRecOnly && (
+          <span
+            className="ml-1 text-[9px] uppercase tracking-wider px-1 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40"
+            title="Engine recommended this bundle for this vendor but the bundle's `vendors` field doesn't list this vendor exactly. Surfaced here so the input is visible. Verify the bundle's vendor mapping."
+          >
+            rec
+          </span>
+        )}
         {b.asin && <a href={`https://sellercentral.amazon.com/myinventory/inventory?fulfilledBy=all&page=1&pageSize=25&searchField=all&searchTerm=${b.asin}&sort=date_created_desc&status=all`} target="_blank" rel="noopener noreferrer" className="ml-1 text-gray-500 hover:text-blue-400 text-[9px] font-mono">{b.asin}</a>}
         {(() => {
           const segRec = segCtx.effectiveMap[b.j];
@@ -1135,7 +1253,28 @@ const rows = priceHistoryFull
     <div className="flex flex-wrap gap-2 items-center mb-4">
       <div className="flex bg-gray-800 rounded-lg p-0.5">{["core", "vendor"].map(m => <button key={m} onClick={() => setVm(m)} className={`px-3 py-1.5 rounded-md text-sm font-medium ${vm === m ? "bg-blue-600 text-white" : "text-gray-400"}`}>{m === "core" ? "By Core" : "By Vendor"}</button>)}</div>
       <SS value={vf} onChange={setVf} options={vNames} />
-      <select value={sf} onChange={e => setSf(e.target.value)} className="bg-gray-800 border border-gray-700 text-gray-300 text-sm rounded-lg px-2 py-1.5"><option value="">All Status</option><option value="critical">Critical</option><option value="warning">Warning</option><option value="healthy">Healthy</option></select>
+      {/* Sprint 3 Fix 9: status filter button bar (replaces dropdown) */}
+      <div className="flex bg-gray-800 rounded-lg p-0.5 text-xs">
+        {[
+          { v: 'needsbuy', l: 'Needs Buy Only' },
+          { v: '',         l: 'All' },
+          { v: 'Buy',      l: 'Buy' },
+          { v: 'Reviewing',l: 'Reviewing' },
+          { v: 'Ignore',   l: 'Ignore' },
+          { v: 'Done',     l: 'Done' },
+        ].map(opt => {
+          const active = sf === opt.v;
+          return (
+            <button
+              key={opt.v || 'all'}
+              onClick={() => setSf(opt.v)}
+              className={`px-2.5 py-1 rounded-md font-medium transition-colors ${active ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-gray-200'}`}
+            >
+              {opt.l}{active && opt.v === 'needsbuy' ? ' ✓' : ''}
+            </button>
+          );
+        })}
+      </div>
       {!vf && <select value={locF} onChange={e => setLocF(e.target.value)} className="bg-gray-800 border border-gray-700 text-gray-300 text-sm rounded-lg px-2 py-1.5"><option value="all">All</option><option value="us">US Only</option><option value="intl">International</option></select>}
       <select value={nf} onChange={e => setNf(e.target.value)} className="bg-gray-800 border border-gray-700 text-gray-300 text-sm rounded-lg px-2 py-1.5"><option value="all">All</option><option value="inorder">In Order</option></select>
       {vm === "core" && <><select value={sort} onChange={e => setSort(e.target.value)} className="bg-gray-800 border border-gray-700 text-gray-300 text-sm rounded-lg px-2 py-1.5"><option value="status">Priority</option><option value="doc">DOC</option><option value="dsr">DSR</option><option value="need$">$</option></select><span className="text-gray-500 text-xs">Min:</span><input type="number" value={minD} onChange={e => setMinD(+e.target.value)} className="bg-gray-800 border border-gray-700 text-white text-sm rounded px-2 py-1 w-14" /></>}
@@ -1166,10 +1305,18 @@ const rows = priceHistoryFull
       />
     )}
     {c.bundlesAffected > 0 && <span className="text-[10px] text-gray-500" title={`Driven by ${c.bundlesAffected} bundle(s).`}>({c.bundlesAffected}b)</span>}
+    {c.poSizeWarning && (
+      <span
+        className="text-[9px] font-semibold text-amber-300 bg-amber-500/15 border border-amber-500/40 px-1 py-0.5 rounded"
+        title={`Engine recommends ${c.orderQty}u — your typical PO for this item is ${c.typicalPoSize}u (median of last 5 receivings). Consider negotiating min order with vendor or splitting with other items.`}
+      >
+        Below typical PO ({c.typicalPoSize}u)
+      </span>
+    )}
   </div>
 </td><td className="py-2 px-2 text-right">{D1(c.dsr)}</td><td className="py-2 px-2 text-right">{D1(c.d7)}</td><td className="py-2 px-2 text-center">{c.d7 > c.dsr ? <span className="text-emerald-400">▲</span> : c.d7 < c.dsr ? <span className="text-red-400">▼</span> : "—"}</td><td className={`py-2 px-2 text-right font-semibold ${dc(c.doc, c.critDays, c.warnDays)}`}>{R(c.doc)}</td><td className="py-2 px-2 text-right">{R(c.allIn)}</td><td className="py-2 px-2 text-right text-gray-400 text-xs">{c.moq > 0 ? R(c.moq) : "—"}</td><td className="py-2 px-2 text-center">{c.seas && <span className="text-purple-400 text-xs font-bold">{c.seas.peak}</span>}</td><td className="py-2 px-1 border-l-2 border-blue-500/40" /><td className="py-2 px-2 text-right">{c.needQty > 0 ? (
         c.rejectedByMoqCap ? (
-          <span title={`MOQ blocked. Need real ${R(c.needQty)}, hubiera comprado ${R(c.moqCapDetail?.wouldHaveBought || 0)}.`}>
+          <span title={`MOQ blocked. Real need ${R(c.needQty)}, would have bought ${R(c.moqCapDetail?.wouldHaveBought || 0)}.`}>
             <span className="text-gray-300">{R(c.needQty)}</span>
             <span className="text-orange-400 text-xs ml-1">⛔</span>
           </span>
@@ -1206,8 +1353,21 @@ const rows = priceHistoryFull
       const pf = purchFreqMap[v.name];
       const vRec = effectiveRecs[v.name];
 
+      // Sprint 3 Fix 4: clarify the vendor header counts.
+      // - bundlesNeedingBuy = unique bundles with buyNeed > 0 (no double
+      //   counting between core and bundle modes; bundleDetails carries
+      //   one row per bundle).
+      // - bundlesInBundleMode = bundles purchased as finished units
+      //   (= rec.bundleItems.length, all already gated to finalQty>0).
+      // - coresRecommended = unique cores with finalQty>0 — what the
+      //   "5 via core" label was implying but never actually meant.
+      // Old label said "5 via core, 0 via bundle" while only 2 cores
+      // were recommended — the 5 was bundles-driving-cores, not cores.
+      // The new tooltip spells this out so it can't be misread.
       const bundlesInBundleMode = vRec?.bundleItems?.length || 0;
       const bundlesInCoreMode = (vRec?.bundleDetails || []).filter(bd => bd.buyMode === 'core' && bd.buyNeed > 0).length;
+      const bundlesNeedingBuy = bundlesInBundleMode + bundlesInCoreMode;
+      const coresRecommended = (vRec?.coreItems || []).filter(i => i.finalQty > 0).length;
 
       // [v3.4] count bundles by regime (visible at vendor header)
       const regimeCounts = (vRec?.bundleDetails || []).reduce((acc, bd) => {
@@ -1239,8 +1399,11 @@ const rows = priceHistoryFull
             <span className="text-xs text-gray-400">{v.payment}</span>
             {pf && pf.comment && <span className="text-xs text-amber-400">{pf.comment}</span>}
             {pf && <span className="text-xs text-gray-500">{pf.ordersPerYear}/yr · ×{pf.safetyMultiplier}</span>}
-            {(bundlesInBundleMode > 0 || bundlesInCoreMode > 0) && <span className="text-xs text-cyan-400" title="Based on 7f history: how many of this vendor's active bundles-with-need will be bought as raw core material vs as finished bundles">
-              {bundlesInCoreMode + bundlesInBundleMode} bundle{(bundlesInCoreMode + bundlesInBundleMode) > 1 ? "s" : ""} need buy → {bundlesInCoreMode} via core, {bundlesInBundleMode} via bundle
+            {bundlesNeedingBuy > 0 && <span
+              className="text-xs text-cyan-400"
+              title={`Based on 7f history.\n• ${bundlesInCoreMode} bundle${bundlesInCoreMode === 1 ? '' : 's'} bought as raw cores → engine recommends ${coresRecommended} unique core${coresRecommended === 1 ? '' : 's'} for purchase (cores are shared across bundles, so unique cores ≤ bundles).\n• ${bundlesInBundleMode} bundle${bundlesInBundleMode === 1 ? '' : 's'} bought as finished units (drop-in).\nThis count reflects the engine's current output and updates whenever inputs (settings, history, segments) change.`}
+            >
+              {bundlesNeedingBuy} bundle{bundlesNeedingBuy === 1 ? '' : 's'} need buy · {coresRecommended} core{coresRecommended === 1 ? '' : 's'} + {bundlesInBundleMode} as-bundle
             </span>}
             {(() => {
               const totalExcessMoq = grp.cores.filter(c => c.moqInflated && !c.rejectedByMoqCap).reduce((s, c) => s + c.excessCostFromMoq, 0);
@@ -1254,7 +1417,7 @@ const rows = priceHistoryFull
               const blocked = grp.cores.filter(c => c.rejectedByMoqCap && c.moqCapDetail);
               if (blocked.length === 0) return null;
               const avoided = blocked.reduce((s, c) => s + (c.moqCapDetail?.wouldHaveCost || 0), 0);
-              return <span className="text-xs text-orange-300 font-semibold" title="Items donde el MOQ supera el cap (moqInflationHardCap). El motor no los recomienda — usá Override MOQ por core si querés forzarlos.">
+              return <span className="text-xs text-orange-300 font-semibold" title="Items whose MOQ exceeds the cap (moqInflationHardCap). The engine doesn't recommend buying them — use Override MOQ per core to force the buy.">
                 {blocked.length} item{blocked.length > 1 ? 's' : ''} blocked by MOQ cap — ${Math.round(avoided).toLocaleString()} potential overspend avoided
               </span>;
             })()}
@@ -1337,26 +1500,53 @@ const rows = priceHistoryFull
         </div>
         <div className="overflow-auto max-h-[70vh] max-w-[calc(100vw-2rem)]"><table className="w-full text-xs"><thead><VTH isCol={anyCol} /></thead><tbody>
           {vendorSub === "bundles" ? <>{grp.bundles.filter(b => nf !== "inorder" || hasBundleOrd(b)).map(b => <BundleRow key={b.j} b={b} />)}{grp.bundles.length === 0 && <tr><td colSpan={40} className="py-4 text-center text-gray-500">No bundles</td></tr>}</>
-            : vendorSub === "mix" ? <>{grp.cores.map((c, ci) => {
-              const cBs = (data.bundles || []).filter(b => {
-                let uses = false;
-                for (let i = 1; i <= 20; i++) if (b['core' + i] === c.id) { uses = true; break; }
-                if (!uses) return false;
-                if (bA === "yes" && b.active !== "Yes") return false;
-                if (bA === "no" && b.active === "Yes") return false;
-                if (bI === "blank" && !!b.ignoreUntil) return false;
-                if (bI === "set" && !b.ignoreUntil) return false;
-                return true;
-              }).map(b => ({ ...b, fee: feMap[b.j] })).sort((a, b) => (a.fibDoc || 0) - (b.fibDoc || 0));
-              const orderedBs = nf === "inorder" ? cBs.filter(b => hasBundleOrd(b)) : cBs;
-              if (nf === "inorder" && !hasCoreOrd(c) && orderedBs.length === 0) return null;
-              const isLast = ci === grp.cores.length - 1;
-              const showBundles = !dismissed[c.id] && orderedBs.length > 0;
-              return <Fragment key={c.id}>
-                <CoreRow c={c} isLastOfGroup={!showBundles && isLast === false} />
-                {showBundles && orderedBs.map((b, bi) => <BundleRow key={b.j} b={b} isLastOfBundles={bi === orderedBs.length - 1 && !isLast} />)}
-              </Fragment>;
-            })}</>
+            : vendorSub === "mix" ? (() => {
+              // Track bundle IDs we've already rendered nested under a core
+              // so the trailing "engine extras" section doesn't duplicate.
+              const shownBundleIds = new Set();
+              const coreRows = grp.cores.map((c, ci) => {
+                const cBs = (data.bundles || []).filter(b => {
+                  let uses = false;
+                  for (let i = 1; i <= 20; i++) if (b['core' + i] === c.id) { uses = true; break; }
+                  if (!uses) return false;
+                  if (bA === "yes" && b.active !== "Yes") return false;
+                  if (bA === "no" && b.active === "Yes") return false;
+                  if (bI === "blank" && !!b.ignoreUntil) return false;
+                  if (bI === "set" && !b.ignoreUntil) return false;
+                  return true;
+                }).map(b => ({ ...b, fee: feMap[b.j] })).sort((a, b) => (a.fibDoc || 0) - (b.fibDoc || 0));
+                const orderedBs = nf === "inorder" ? cBs.filter(b => hasBundleOrd(b)) : cBs;
+                if (nf === "inorder" && !hasCoreOrd(c) && orderedBs.length === 0) return null;
+                const isLast = ci === grp.cores.length - 1;
+                const showBundles = !dismissed[c.id] && orderedBs.length > 0;
+                if (showBundles) orderedBs.forEach(b => shownBundleIds.add(b.j));
+                return <Fragment key={c.id}>
+                  <CoreRow c={c} isLastOfGroup={!showBundles && isLast === false} />
+                  {showBundles && orderedBs.map((b, bi) => <BundleRow key={b.j} b={b} isLastOfBundles={bi === orderedBs.length - 1 && !isLast} />)}
+                </Fragment>;
+              });
+              // Sprint 3 Fix 3 (Mix-mode tail): bundles surfaced via the
+              // vendorRec.bundleItems union (b.__fromRecOnly) that don't
+              // hang off any core in this card — typical for bundle-mode
+              // purchases where the underlying cores aren't bought as raw.
+              // Without this, the operator clicks Fill Rec, sees the
+              // "Filled N items" toast, but the engine-recommended bundles
+              // remain invisible.
+              const extras = grp.bundles
+                .filter(b => b.__fromRecOnly && !shownBundleIds.has(b.j))
+                .filter(b => nf !== "inorder" || hasBundleOrd(b));
+              return <>
+                {coreRows}
+                {extras.length > 0 && (
+                  <tr className="bg-gray-900/60">
+                    <td colSpan={40} className="py-1.5 px-3 text-[10px] uppercase tracking-wider text-amber-300/80 border-t border-amber-500/30">
+                      Engine-recommended bundles (not matched to a core in this card)
+                    </td>
+                  </tr>
+                )}
+                {extras.map(b => <BundleRow key={`x-${b.j}`} b={{ ...b, fee: feMap[b.j] }} />)}
+              </>;
+            })()
             : <>{grp.cores.map((c, ci) => <CoreRow key={c.id} c={c} isLastOfGroup={ci < grp.cores.length - 1} />)}</>}
         </tbody></table></div>
       </div>;

@@ -14,7 +14,7 @@ import { R, D1, gS, fSl, genPO, genRFQ, cp7f, cp7g } from "../lib/utils";
 import { Dot, WorkflowChip, VendorNotes } from "./Shared";
 import { getEffectiveWfStatus } from "./Shared";
 import { SegmentCtx, WhyBuyCtx } from "../App";
-import { SegmentBadge } from "./SegmentsTab";
+import { SegmentBadge } from "./SegmentBadges";
 
 const fmt0 = (n) => n == null || !Number.isFinite(n) ? '—' : Math.round(n).toLocaleString('en-US');
 const dollar = (n) => n == null || !Number.isFinite(n) ? '—' : '$' + Math.round(n).toLocaleString('en-US');

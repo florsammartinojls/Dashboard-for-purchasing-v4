@@ -3,7 +3,7 @@ import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, L
 import { R, D1, $, $2, P, MN, YC, TTP, gS, gY, cMo, fD, resolveVendorFromBundle } from "../lib/utils";
 import { Dot, TH, AbcBadge, HealthBadge, KillBadge, SumCtx, CopyableId } from "./Shared";
 import { SegmentCtx, WhyBuyCtx } from "../App";
-import { SegmentBadge, ConfidenceBadge } from "./SegmentsTab";
+import { SegmentBadge, ConfidenceBadge } from "./SegmentBadges";
 
 function SC({ v, children, className }) {
   const { addCell } = React.useContext(SumCtx);
@@ -69,22 +69,32 @@ export default function BundleTab({ data, stg, vendorRecs, hist, daily, bundleId
   const bStatus = b ? gS(docForStatus, 60, 30, { critDays: 30, warnDays: 60 }) : "healthy";
   const sale = b ? (data.sales || []).find(s => s.j === b.j) : null;
 
-  // === INBOUND 7f (match by JLS# and core IDs, same logic as CoreTab) ===
-  const bundleInbound = useMemo(() => {
-    if (!b) return [];
+  // === INBOUND 7f — split into core units + bundle units ===
+  // Sprint 3 Fix 11 isolated core-tagged rows so the "core units"
+  // KPI matched its label. The mini-fix that follows surfaces
+  // bundle-tagged rows (vendor delivers fully assembled bundles)
+  // alongside, since the operator needs visibility on both. Same
+  // filtering pattern as pre-Sprint-3, just split into two groups.
+  const inb7fCore = useMemo(() => {
+    if (!b) return { rows: [], pieces: 0, lastDate: null };
     const cores = [b.core1, b.core2, b.core3].filter(Boolean);
-    const ids = new Set([b.j, ...cores].map(x => (x || "").trim().toLowerCase()));
-    return (data.inbound || []).filter(i => ids.has((i.core || "").trim().toLowerCase()));
+    const ids = new Set(cores.map(x => (x || "").trim().toLowerCase()));
+    if (ids.size === 0) return { rows: [], pieces: 0, lastDate: null };
+    const rows = (data.inbound || []).filter(i => ids.has((i.core || "").trim().toLowerCase()));
+    const pieces = rows.reduce((s, i) => s + (Number(i.pieces) || 0), 0);
+    // `eta` is the operator-curated arrival; falls back to `origEta`
+    // (the originally-promised date) when eta hasn't been refreshed.
+    const dates = rows.map(i => i.eta || i.origEta).filter(Boolean).sort();
+    return { rows, pieces, lastDate: dates.length ? dates[dates.length - 1] : null };
   }, [data.inbound, b]);
-  const inb7fTotal = useMemo(() => bundleInbound.reduce((s, i) => s + (i.pieces || 0), 0), [bundleInbound]);
-  const inb7fEta = useMemo(() => {
-    const etas = bundleInbound.map(i => i.eta).filter(Boolean).sort();
-    return etas.length > 0 ? etas[etas.length - 1] : null;
-  }, [bundleInbound]);
-  const daysUntilArr = useMemo(() => {
-    if (!inb7fEta) return null;
-    return Math.ceil((new Date(inb7fEta) - new Date()) / 86400000);
-  }, [inb7fEta]);
+  const inb7fBundle = useMemo(() => {
+    if (!b || !b.j) return { rows: [], pieces: 0, lastDate: null };
+    const target = b.j.trim().toLowerCase();
+    const rows = (data.inbound || []).filter(i => (i.core || "").trim().toLowerCase() === target);
+    const pieces = rows.reduce((s, i) => s + (Number(i.pieces) || 0), 0);
+    const dates = rows.map(i => i.eta || i.origEta).filter(Boolean).sort();
+    return { rows, pieces, lastDate: dates.length ? dates[dates.length - 1] : null };
+  }, [data.inbound, b]);
   
   // Bundle inventory history (merged summary + daily aggregation) → Units = sum of Complete DSR
   const bInv = useMemo(() => (hist?.bundleSales || []).filter(h => h.j === sel), [hist, sel]);
@@ -111,10 +121,68 @@ export default function BundleTab({ data, stg, vendorRecs, hist, daily, bundleId
   // Daily (last 14d)
   const bDays = useMemo(() => (daily?.bundleDays || []).filter(d => d.j === sel).sort((a, x) => x.date.localeCompare(a.date)).slice(0, 14), [daily, sel]);
 
-  // Price history
+  // Sprint 3 Fix 12: distinguish "past month with 0 sales" from "future
+  // month, no data yet" in the YoY table. Past-empty → render 0; future
+  // → render "—". Computed once per render so YoY cells can branch.
+  const today = useMemo(() => new Date(), []);
+  const currentYear = today.getFullYear();
+  const currentMonth = today.getMonth() + 1;
+  const isMonthInPast = (y, m) => (y < currentYear) || (y === currentYear && m <= currentMonth);
+  const isMonthInFuture = (y, m) => (y > currentYear) || (y === currentYear && m > currentMonth);
+
+  // Sprint 3 Fix 13: month-to-date units (sum of daily DSR for the
+  // current month). Sourced from the full daily series (not the 14-day
+  // slice) so it captures the whole month even early in the month.
+  const mtdUnits = useMemo(() => {
+    if (!sel || !daily?.bundleDays) return 0;
+    const monthStart = new Date(currentYear, currentMonth - 1, 1);
+    let sum = 0;
+    for (const d of daily.bundleDays) {
+      if (!d || d.j !== sel || !d.date) continue;
+      const dt = new Date(d.date);
+      if (isNaN(dt.getTime())) continue;
+      if (dt >= monthStart && dt <= today) sum += Number(d.dsr) || 0;
+    }
+    return Math.round(sum);
+  }, [sel, daily, currentYear, currentMonth, today]);
+
+  // Price history (bundle-level YoY from history pipeline)
   const priceHist = useMemo(() => (hist?.priceHist || []).filter(h => h.j === sel).sort((a, b) => a.y === b.y ? a.m - b.m : a.y - b.y), [hist, sel]);
-  const pYrs = useMemo(() => gY(priceHist), [priceHist]);
-  const pCh = useMemo(() => MN.map((m, i) => { const r = { month: m }; pYrs.forEach(y => { const x = priceHist.find(h => h.y === y && h.m === i + 1); r["p_" + y] = x?.avgPrice ?? null }); return r }), [priceHist, pYrs]);
+
+  // Sprint 3 Fix 7: fallback when bundle-level priceHist is empty.
+  // Derive a monthly CPP series from priceCompFull (per-core PO history)
+  // for the bundle's primary core. CPP = totalCost/pcs, averaged per
+  // (year, month). NOT a substitute for the real bundle-price pipeline
+  // — it's per-core landed CPP, not bundle list price — but it gives
+  // the chart a usable curve when the backend's bundle-priceHist row
+  // set is empty for this JLS#. See Sprint 3 report § "Pipeline bugs".
+  const derivedPriceHist = useMemo(() => {
+    if (priceHist.length > 0 || !b?.core1) return [];
+    const rows = (data.priceCompFull || []).filter(r =>
+      r && r.core === b.core1 && Number(r.pcs) > 0 && Number(r.totalCost) > 0 && r.date
+    );
+    if (rows.length === 0) return [];
+    const byMonth = new Map();
+    for (const r of rows) {
+      const dt = new Date(r.date);
+      if (isNaN(dt.getTime())) continue;
+      const y = dt.getFullYear();
+      const m = dt.getMonth() + 1;
+      const cpp = Number(r.totalCost) / Number(r.pcs);
+      const k = y + '-' + m;
+      const cur = byMonth.get(k);
+      if (cur) { cur.sum += cpp; cur.n += 1; }
+      else byMonth.set(k, { j: b.j, y, m, sum: cpp, n: 1 });
+    }
+    return [...byMonth.values()]
+      .map(x => ({ j: x.j, y: x.y, m: x.m, avgPrice: x.sum / x.n }))
+      .sort((a, b) => a.y === b.y ? a.m - b.m : a.y - b.y);
+  }, [priceHist, data.priceCompFull, b]);
+
+  const priceHistEffective = priceHist.length > 0 ? priceHist : derivedPriceHist;
+  const priceHistFallbackActive = priceHist.length === 0 && derivedPriceHist.length > 0;
+  const pYrs = useMemo(() => gY(priceHistEffective), [priceHistEffective]);
+  const pCh = useMemo(() => MN.map((m, i) => { const r = { month: m }; pYrs.forEach(y => { const x = priceHistEffective.find(h => h.y === y && h.m === i + 1); r["p_" + y] = x?.avgPrice ?? null }); return r }), [priceHistEffective, pYrs]);
 
   // Active bundle filter set
   const activeBundleSet = useMemo(() => {
@@ -232,34 +300,74 @@ export default function BundleTab({ data, stg, vendorRecs, hist, daily, bundleId
     {/* Engine status banner — visible whenever the bundle isn't in any rec */}
     {!bd && (
       <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg px-3 py-2 mb-3 text-xs text-amber-300">
-        ⚠ Bundle no procesado por el motor — verificar configuración (active/ignoreUntil/sin vendor mapeado). Cifras del waterfall mostradas como "—".
+        ⚠ Bundle not processed by the engine — check configuration (active/ignoreUntil/no vendor mapped). Waterfall figures shown as "—".
       </div>
     )}
-    {/* KPI Cards */}
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-      <div className="bg-gray-900 rounded-xl p-4 border border-gray-800"><h4 className="text-gray-500 text-xs uppercase mb-3">Sales & Inventory</h4><div className="grid grid-cols-4 gap-y-4">{[
-        { l: "C.DSR", v: D1(b.cd) },
-        // Engine DOC = currentCoverDOC from waterfall — same number as Purchasing's "After/effective" column.
-        { l: "DOC (engine)", v: bd ? R(bd.currentCoverDOC) : "—", c: bd ? "text-white" : "text-gray-600" },
-        { l: "Buy Need", v: bd ? (bd.buyNeed > 0 ? R(bd.buyNeed) : "0") : "—", c: bd && bd.buyNeed > 0 ? "text-amber-300" : (bd ? "text-gray-400" : "text-gray-600") },
-        { l: "Coverage demand", v: bd ? R(bd.coverageDemand) : "—" },
-        { l: "Total available", v: bd ? R(bd.totalAvailable) : "—" },
-        { l: "FIB DOC", v: R(b.fibDoc) },
-        { l: "FIB Inventory", v: R(b.fibInv) },
-        { l: "SC Inventory", v: R(b.scInv) },
-        { l: "Pre-Processed", v: R(replen?.pprcUnits ?? b.reserved) },
-        { l: "Inbound to FBA", v: R(b.inbound) },
-        { l: "Raw Pieces (core)", v: R(core?.raw ?? 0) },
-        { l: "Inbound 7f (core)", v: R(inb7fTotal), sub: inb7fEta ? fD(inb7fEta) + (daysUntilArr != null ? ' · ' + daysUntilArr + 'd' : '') : null },
-      ].map(k => <div key={k.l}><div className="text-gray-500 text-xs">{k.l}</div><div className={`font-bold text-lg ${k.c || "text-white"}`}>{k.v}</div>{k.sub && <div className="text-blue-400 text-xs">{k.sub}</div>}</div>)}</div></div>
-      <div className="bg-gray-900 rounded-xl p-4 border border-gray-800"><h4 className="text-gray-500 text-xs uppercase mb-3">Profitability</h4><div className="grid grid-cols-3 gap-y-4">{[{ l: "Price", v: fee?.pr }, { l: "COGS", v: fee?.pdmtCogs }, { l: "AICOGS", v: fee?.aicogs }, { l: "Fee", v: fee?.totalFee }, { l: "GP", v: fee?.gp, c: "text-emerald-400" }].map(k => <div key={k.l}><div className="text-gray-500 text-xs">{k.l}</div><div className={`font-bold text-lg ${k.c || "text-white"}`}>{k.v != null ? $2(k.v) : "—"}</div></div>)}</div></div>
+    {/* KPI Cards — Sprint 3 Fix 11: split into Sheet Data, Engine Calculations, Profitability */}
+    <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
+      <div className="bg-gray-900 rounded-xl p-4 border border-gray-800">
+        <h4 className="text-gray-500 text-xs uppercase mb-3 flex items-center gap-2">
+          Sheet Data
+          <span className="text-[9px] text-gray-600 normal-case font-normal" title="Values read directly from the live sheet — no engine logic applied.">direct from sheet</span>
+        </h4>
+        <div className="grid grid-cols-2 gap-y-4">{[
+          { l: "C.DSR", v: D1(b.cd) },
+          { l: "FIB Inventory", v: R(b.fibInv) },
+          { l: "SC Inventory", v: R(b.scInv) },
+          { l: "Pre-Processed", v: R(replen?.pprcUnits ?? b.reserved) },
+          { l: "Inbound to FBA", v: R(b.inbound) },
+          { l: "Raw Pieces (core)", v: R(core?.raw ?? 0) },
+          // Sprint 3 mini-fix: Inbound 7f split into core + bundle so
+          // the operator can see assembled-bundle inbound separately.
+          // Adjacent in the grid for easy comparison. Subtitle is the
+          // most recent ETA among contributing rows (origEta when the
+          // operator hasn't refreshed eta yet); shows "—" when empty.
+          {
+            l: "Inbound 7f (core units)",
+            v: R(inb7fCore.pieces),
+            sub: inb7fCore.lastDate ? "Last update: " + fD(inb7fCore.lastDate) : "Last update: —",
+          },
+          {
+            l: "Inbound 7f (bundle units)",
+            v: R(inb7fBundle.pieces),
+            sub: inb7fBundle.lastDate ? "Last update: " + fD(inb7fBundle.lastDate) : "Last update: —",
+          },
+        ].map(k => <div key={k.l}><div className="text-gray-500 text-xs">{k.l}</div><div className={`font-bold text-lg ${k.c || "text-white"}`}>{k.v}</div>{k.sub && <div className="text-gray-500 text-[10px] mt-0.5">{k.sub}</div>}</div>)}</div>
+      </div>
+      <div className="bg-gray-900 rounded-xl p-4 border border-gray-800">
+        <h4 className="text-emerald-400/90 text-xs uppercase mb-3 flex items-center gap-2">
+          ⚙ Engine Calculations
+          <span className="text-[9px] text-gray-600 normal-case font-normal" title="Computed by the v4 recommender (segment-aware forecast + waterfall). See the Why Buy panel for the full audit trail.">v4 waterfall</span>
+        </h4>
+        <div className="grid grid-cols-2 gap-y-4">{[
+          // Engine DOC = currentCoverDOC from waterfall — same number as Purchasing's "After/effective" column.
+          { l: "DOC (engine)", v: bd ? R(bd.currentCoverDOC) : "—", c: bd ? "text-white" : "text-gray-600" },
+          { l: "Buy Need", v: bd ? (bd.buyNeed > 0 ? R(bd.buyNeed) : "0") : "—", c: bd && bd.buyNeed > 0 ? "text-amber-300" : (bd ? "text-gray-400" : "text-gray-600") },
+          { l: "Coverage demand", v: bd ? R(bd.coverageDemand) : "—" },
+          { l: "Total available", v: bd ? R(bd.totalAvailable) : "—" },
+          { l: "FIB DOC", v: R(b.fibDoc) },
+        ].map(k => <div key={k.l}><div className="text-gray-500 text-xs">{k.l}</div><div className={`font-bold text-lg ${k.c || "text-white"}`}>{k.v}</div></div>)}</div>
+      </div>
+      <div className="bg-gray-900 rounded-xl p-4 border border-gray-800">
+        <h4 className="text-gray-500 text-xs uppercase mb-3">Profitability</h4>
+        <div className="grid grid-cols-2 gap-y-4">{[{ l: "Price", v: fee?.pr }, { l: "COGS", v: fee?.pdmtCogs }, { l: "AICOGS", v: fee?.aicogs }, { l: "Fee", v: fee?.totalFee }, { l: "GP", v: fee?.gp, c: "text-emerald-400" }].map(k => <div key={k.l}><div className="text-gray-500 text-xs">{k.l}</div><div className={`font-bold text-lg ${k.c || "text-white"}`}>{k.v != null ? $2(k.v) : "—"}</div></div>)}</div>
+      </div>
     </div>
     {/* Revenue Table */}
     {sale && <div className="bg-gray-900 rounded-xl p-4 mb-4 border border-gray-800"><h3 className="text-white font-semibold text-sm mb-3">Revenue</h3><table className="w-full text-sm"><thead><tr className="text-gray-500 text-xs uppercase"><th className="py-2 text-left" /><th className="py-2 text-right border-r border-gray-700">Lifetime</th><th className="py-2 text-right">Last Year</th><th className="py-2 text-right border-r border-gray-700">%LT</th><th className="py-2 text-right">This Year</th><th className="py-2 text-right">%LT</th></tr></thead><tbody><tr className="border-t border-gray-800"><td className="py-2 text-gray-400">Revenue</td><td className="py-2 text-right text-white border-r border-gray-700">{$(sale.ltR)}</td><td className="py-2 text-right">{$(sale.lyR)}</td><td className="py-2 text-right text-gray-400 text-xs border-r border-gray-700">{sale.ltR > 0 ? P(sale.lyR / sale.ltR * 100) : ""}</td><td className="py-2 text-right">{$(sale.tyR)}</td><td className="py-2 text-right text-gray-400 text-xs">{sale.ltR > 0 ? P(sale.tyR / sale.ltR * 100) : ""}</td></tr><tr className="border-t border-gray-800"><td className="py-2 text-gray-400">Profit</td><td className="py-2 text-right text-emerald-400 border-r border-gray-700">{$(sale.ltP)}</td><td className="py-2 text-right text-emerald-400">{$(sale.lyP)}</td><td className="py-2 text-right text-gray-400 text-xs border-r border-gray-700">{sale.ltP > 0 ? P(sale.lyP / sale.ltP * 100) : ""}</td><td className="py-2 text-right text-emerald-400">{$(sale.tyP)}</td><td className="py-2 text-right text-gray-400 text-xs">{sale.ltP > 0 ? P(sale.tyP / sale.ltP * 100) : ""}</td></tr></tbody></table></div>}
     {/* Daily */}
     {bDays.length > 0 && <div className="bg-gray-900 rounded-xl p-4 mb-4 border border-gray-800"><h3 className="text-white font-semibold text-sm mb-3">Daily ({bDays.length}d)</h3><div className="overflow-x-auto"><table className="w-full text-xs"><thead><tr className="text-gray-500 uppercase"><th className="py-1 px-1 text-left">Date</th><th className="py-1 px-1 text-right">DSR</th><th className="py-1 px-1 text-right">1D</th><th className="py-1 px-1 text-right">3D</th><th className="py-1 px-1 text-right">7D</th><th className="py-1 px-1 text-right">DOC</th><th className="py-1 px-1 text-right">FIB DOC</th><th className="py-1 px-1 text-right">FIB Inv</th><th className="py-1 px-1 text-right">SC Inv</th><th className="py-1 px-1 text-right">Res</th><th className="py-1 px-1 text-right">Inb</th><th className="py-1 px-1 text-right">BRaw</th><th className="py-1 px-1 text-right">BPPR</th></tr></thead><tbody>{bDays.map((d, i) => <tr key={d.date} className={i % 2 === 0 ? "bg-gray-800/30" : ""}><td className="py-1 px-1 text-gray-300 whitespace-nowrap">{fD(d.date)}</td><td className="py-1 px-1 text-right text-white font-semibold">{D1(d.dsr)}</td><td className="py-1 px-1 text-right">{D1(d.d1)}</td><td className="py-1 px-1 text-right">{D1(d.d3)}</td><td className="py-1 px-1 text-right">{D1(d.d7)}</td><td className="py-1 px-1 text-right">{R(d.doc)}</td><td className="py-1 px-1 text-right">{d.dsr > 0 && d.fib > 0 ? R(Math.round(d.fib / d.dsr)) : "—"}</td><td className="py-1 px-1 text-right">{R(d.fib)}</td><td className="py-1 px-1 text-right">{R(d.sc)}</td><td className="py-1 px-1 text-right">{R(d.res)}</td><td className="py-1 px-1 text-right">{R(d.inb)}</td><td className="py-1 px-1 text-right">{R(d.bRaw)}</td><td className="py-1 px-1 text-right">{R(d.bPprc)}</td></tr>)}</tbody></table></div></div>}
     {/* Recent Sales */}
-    {sale && <div className="bg-gray-900 rounded-xl p-4 mb-4 border border-gray-800"><h3 className="text-white font-semibold text-sm mb-3">Recent</h3><div className="grid grid-cols-2 sm:grid-cols-4 gap-4">{[{ l: "This Mo", u: sale.tmU, r: sale.tmR, p: sale.tmP }, { l: "Last Mo", u: sale.lmU, r: sale.lmR, p: sale.lmP }, { l: "7d", u: sale.l7U, r: sale.l7R, p: sale.l7P }, { l: "28d", u: sale.l28U, r: sale.l28R, p: sale.l28P }].map(x => <div key={x.l}><div className="text-gray-500 text-xs">{x.l}</div><div className="text-white font-semibold">{R(x.u)} u</div><div className="text-gray-400 text-xs">{$(x.r)}</div><div className="text-emerald-400 text-xs">{$(x.p)}</div></div>)}</div></div>}
+    {sale && <div className="bg-gray-900 rounded-xl p-4 mb-4 border border-gray-800"><h3 className="text-white font-semibold text-sm mb-3">Recent</h3>
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
+        <div title="Month-to-date — sum of daily DSR for the current month so far. Computed from the daily forecast series, not the sales summary.">
+          <div className="text-gray-500 text-xs">MTD</div>
+          <div className="text-white font-semibold">{R(mtdUnits)} u</div>
+          <div className="text-gray-500 text-[10px]">this month so far</div>
+        </div>
+        {[{ l: "This Mo", u: sale.tmU, r: sale.tmR, p: sale.tmP }, { l: "Last Mo", u: sale.lmU, r: sale.lmR, p: sale.lmP }, { l: "7d", u: sale.l7U, r: sale.l7R, p: sale.l7P }, { l: "28d", u: sale.l28U, r: sale.l28R, p: sale.l28P }].map(x => <div key={x.l}><div className="text-gray-500 text-xs">{x.l}</div><div className="text-white font-semibold">{R(x.u)} u</div><div className="text-gray-400 text-xs">{$(x.r)}</div><div className="text-emerald-400 text-xs">{$(x.p)}</div></div>)}
+      </div>
+    </div>}
     {/* YoY Units (sum of Complete DSR) + Price History */}
     {bInv.length > 0 && <div className="bg-gray-900 rounded-xl p-4 mb-4 border border-gray-800">
       <h3 className="text-white font-semibold text-sm mb-2">YoY Units & Price</h3>
@@ -276,8 +384,15 @@ export default function BundleTab({ data, stg, vendorRecs, hist, daily, bundleId
             </BarChart>
           </ResponsiveContainer>
           <div className="mt-3">
-            <h4 className="text-gray-400 text-xs font-semibold mb-1">YoY Price</h4>
-            {priceHist.length > 0 ? (
+            <h4 className="text-gray-400 text-xs font-semibold mb-1 flex items-center gap-2">
+              YoY Price
+              {priceHistFallbackActive && (
+                <span className="text-[9px] font-normal text-amber-400/80 normal-case" title="Bundle-level price history is missing from the backend pipeline. Showing CPP (totalCost/pcs) derived from per-core PO history as a fallback. Numbers are landed cost per core piece, not bundle list price.">
+                  ⚠ derived from per-core CPP
+                </span>
+              )}
+            </h4>
+            {priceHistEffective.length > 0 ? (
               <ResponsiveContainer width="100%" height={140}>
                 <LineChart data={pCh}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
@@ -290,7 +405,7 @@ export default function BundleTab({ data, stg, vendorRecs, hist, daily, bundleId
               </ResponsiveContainer>
             ) : (
               <div className="border border-dashed border-gray-700 rounded p-4 text-center text-gray-500 text-xs">
-                Price history not available for this bundle.
+                No price history yet for this bundle.
               </div>
             )}
           </div>
@@ -303,21 +418,39 @@ export default function BundleTab({ data, stg, vendorRecs, hist, daily, bundleId
               {uYrs.length >= 2 && <th className="py-1 px-1 text-right text-gray-500">Var %<br/>{String(uYrs[uYrs.length - 1]).slice(-2)} vs {String(uYrs[uYrs.length - 2]).slice(-2)}</th>}
             </tr></thead>
             <tbody>
-              {yD.map((r, i) => <tr key={i} className={i % 2 === 0 ? "bg-gray-800/20" : ""}>
+              {yD.map((r, i) => {
+                // Sprint 3 Fix 12: month index (1-12) for the row.
+                const monthIdx = MN.indexOf(r.month) + 1;
+                return <tr key={i} className={i % 2 === 0 ? "bg-gray-800/20" : ""}>
                 <td className="py-0.5 px-1 text-gray-300">{r.month}</td>
-              {uYrs.map((y) => (
-                  <SC key={y} v={r["u_" + y]} className="py-0.5 px-1 text-right text-white">{r["u_" + y] != null ? R(r["u_" + y]) : ""}</SC>
-                ))}
+              {uYrs.map((y) => {
+                  const raw = r["u_" + y];
+                  // Past month with no recorded sales → render explicit 0
+                  // (avoids confusion with "no data"). Future month → "—".
+                  let display;
+                  if (raw != null) display = R(raw);
+                  else if (isMonthInFuture(y, monthIdx)) display = "—";
+                  else if (isMonthInPast(y, monthIdx)) display = "0";
+                  else display = "";
+                  return <SC key={y} v={raw} className="py-0.5 px-1 text-right text-white">{display}</SC>;
+                })}
                 {uYrs.length >= 2 && (() => {
                   const curY = uYrs[uYrs.length - 1];
                   const prevY = uYrs[uYrs.length - 2];
-                  const cur = r["u_" + curY];
-                  const prev = r["u_" + prevY];
+                  // Treat past-month nulls as 0 for the variance calc, future as null.
+                  const norm = (raw, y) => {
+                    if (raw != null) return raw;
+                    if (isMonthInPast(y, monthIdx)) return 0;
+                    return null;
+                  };
+                  const cur = norm(r["u_" + curY], curY);
+                  const prev = norm(r["u_" + prevY], prevY);
                   const showPct = cur != null && prev != null && prev > 0;
                   const pct = showPct ? ((cur - prev) / prev * 100) : null;
                   return <td className={`py-0.5 px-1 text-right ${pct == null ? "text-gray-600" : pct >= 0 ? "text-emerald-400" : "text-red-400"}`} title={prev != null ? `${curY}: ${cur ?? "—"} vs ${prevY}: ${prev}` : ""}>{pct != null ? (pct >= 0 ? "+" : "") + pct.toFixed(0) : "—"}</td>;
                 })()}
-              </tr>)}
+              </tr>;
+              })}
             <tr className="border-t border-gray-700 font-semibold">
                 <td className="py-1 px-1">Total</td>
                 {uYrs.map(y => <SC key={y} v={uYTot[y]} className="py-1 px-1 text-right text-white">{R(uYTot[y])}</SC>)}

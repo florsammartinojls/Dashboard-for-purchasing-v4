@@ -18,7 +18,7 @@
 // ============================================================
 
 import React, { useMemo, useState } from "react";
-import { SegmentBadge, ConfidenceBadge } from "./SegmentsTab";
+import { SegmentBadge, ConfidenceBadge } from "./SegmentBadges";
 
 const fmt0 = (n) => n == null || !Number.isFinite(n) ? '—' : Math.round(n).toLocaleString('en-US');
 const fmt1 = (n) => n == null || !Number.isFinite(n) ? '—' : Number(n).toFixed(1);

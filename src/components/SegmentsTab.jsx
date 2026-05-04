@@ -60,34 +60,12 @@ function Sparkline({ values, color = '#3b82f6' }) {
   );
 }
 
-export function SegmentBadge({ segment, override, small }) {
-  if (!segment) return null;
-  const eff = override || segment;
-  const cls = SEGMENT_COLORS[eff] || SEGMENT_COLORS.STABLE;
-  const label = SEGMENT_LABELS[eff] || eff;
-  const tip = override
-    ? `Override: ${label}. Auto-detected was ${SEGMENT_LABELS[segment] || segment}.`
-    : `Auto: ${label}.`;
-  return (
-    <span
-      className={`inline-flex items-center gap-1 ${small ? 'text-[10px] px-1.5 py-0.5' : 'text-xs px-2 py-0.5'} rounded font-medium ${cls}`}
-      title={tip}
-    >
-      {label}
-      {override && <span className="text-[9px] opacity-80">✎</span>}
-    </span>
-  );
-}
-
-export function ConfidenceBadge({ confidence }) {
-  if (!confidence) return null;
-  const cls = CONFIDENCE_COLORS[confidence] || CONFIDENCE_COLORS.medium;
-  return (
-    <span className={`text-[10px] px-1.5 py-0.5 rounded uppercase font-semibold ${cls}`}>
-      {confidence}
-    </span>
-  );
-}
+// Sprint 3 Fix 6: SegmentBadge / ConfidenceBadge moved to
+// SegmentBadges.jsx so static importers (PurchTab, BundleTab,
+// TodaysActionTab, WhyBuyPanel) don't pull this whole module into
+// the main bundle. Re-exported here to keep external imports
+// working until callers are migrated.
+export { SegmentBadge, ConfidenceBadge } from "./SegmentBadges";
 
 export default function SegmentsTab({ data, vendorRecs, goBundle, openWhyBuy }) {
   const { autoMap, overrides, overrideMeta = {}, effectiveMap, setOverride, bulkSet, clearAll, refreshOverrides } = useContext(SegmentCtx);
@@ -101,18 +79,39 @@ export default function SegmentsTab({ data, vendorRecs, goBundle, openWhyBuy }) 
   const [selectedIds, setSelectedIds] = useState(() => new Set());
   const [sortMode, setSortMode] = useState('review');
 
+  // Sprint 3 Fix 10: shortTitle by JLS / core ID, derived from
+  // receivingFull rows (latest non-empty wins). TEMPORARY workaround
+  // until Apps Script exposes shortTitle on bundle objects directly
+  // (see Sprint 3 report § "Pipeline bugs").
+  const shortTitleByJ = useMemo(() => {
+    const m = {};
+    const rows = data.receivingFull || data.receiving || [];
+    const sorted = [...rows].sort((a, b) => (b?.date || '').localeCompare(a?.date || ''));
+    for (const r of sorted) {
+      if (!r || !r.core) continue;
+      const t = (r.shortTitle || '').trim();
+      if (!t) continue;
+      if (!m[r.core]) m[r.core] = t;
+    }
+    return m;
+  }, [data.receivingFull, data.receiving]);
+
   const bundleMeta = useMemo(() => {
     const out = {};
     for (const b of (data.bundles || [])) {
       if (!b || !b.j) continue;
+      // Sprint 3 Fix 10: bug — was reading b.ti (undefined). Bundles
+      // expose long title as b.t. shortTitle is wired through the
+      // shortTitleByJ map until backend exposes b.shortTitle.
       out[b.j] = {
-        title: b.ti || '',
+        title: b.t || '',
+        shortTitle: shortTitleByJ[b.j] || '',
         vendor: (b.vendors || '').split(',')[0]?.trim() || '',
         active: b.active,
       };
     }
     return out;
-  }, [data.bundles]);
+  }, [data.bundles, shortTitleByJ]);
 
   const abcMap = useMemo(() => {
     const m = {};
@@ -148,17 +147,31 @@ export default function SegmentsTab({ data, vendorRecs, goBundle, openWhyBuy }) 
     return m;
   }, [data.bundles]);
 
+  // Sprint 3 Fix 6: previously this re-filtered the full daily series
+  // for each bundle (O(n_bundles × n_days) ≈ 120M iterations on a real
+  // dataset → SegmentsTab froze for 1-2s on first render). Now we
+  // bucket the days by bundle once and pull the latest non-zero per
+  // bundle in O(n_days).
   const lastSaleMap = useMemo(() => {
     const m = {};
-    for (const [j, vals] of Object.entries(sparklineMap)) {
-      // Find last index with non-zero
-      const days = data.bundleDaysForecast || data.bundleDays || [];
-      const rows = days.filter(d => d?.j === j).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
-      const lastWithSale = rows.find(r => Number(r.dsr) > 0);
-      m[j] = lastWithSale?.date || null;
+    const days = data.bundleDaysForecast || data.bundleDays || [];
+    const byJ = new Map();
+    for (const d of days) {
+      if (!d || !d.j) continue;
+      let arr = byJ.get(d.j);
+      if (!arr) { arr = []; byJ.set(d.j, arr); }
+      arr.push(d);
+    }
+    for (const [j, arr] of byJ.entries()) {
+      let latest = null;
+      for (const r of arr) {
+        if (!(Number(r.dsr) > 0)) continue;
+        if (!latest || (r.date || '') > (latest.date || '')) latest = r;
+      }
+      m[j] = latest?.date || null;
     }
     return m;
-  }, [sparklineMap, data.bundleDaysForecast, data.bundleDays]);
+  }, [data.bundleDaysForecast, data.bundleDays]);
 
   // Build complete row set
   const allRows = useMemo(() => {
@@ -168,6 +181,7 @@ export default function SegmentsTab({ data, vendorRecs, goBundle, openWhyBuy }) 
       out.push({
         bundleId: bid,
         title: meta.title,
+        shortTitle: meta.shortTitle,
         vendor: meta.vendor,
         active: meta.active,
         autoSegment: rec.segment,
@@ -213,6 +227,7 @@ export default function SegmentsTab({ data, vendorRecs, goBundle, openWhyBuy }) 
       rows = rows.filter(r =>
         (r.bundleId || '').toLowerCase().includes(q) ||
         (r.title || '').toLowerCase().includes(q) ||
+        (r.shortTitle || '').toLowerCase().includes(q) ||
         (r.vendor || '').toLowerCase().includes(q)
       );
     }
@@ -453,10 +468,11 @@ export default function SegmentsTab({ data, vendorRecs, goBundle, openWhyBuy }) 
       </div>
 
       {/* Header */}
-      <div className="grid grid-cols-[28px_minmax(120px,1.2fr)_minmax(180px,2fr)_minmax(140px,1fr)_minmax(170px,1fr)_minmax(150px,1fr)_70px_55px_60px_90px_64px] gap-2 px-2 py-2 text-[10px] uppercase text-gray-500 border-b border-gray-800 sticky top-[100px] bg-gray-950 z-10">
+      <div className="grid grid-cols-[28px_minmax(120px,1.2fr)_minmax(160px,1.6fr)_minmax(120px,1fr)_minmax(140px,1fr)_minmax(170px,1fr)_minmax(150px,1fr)_70px_55px_60px_90px_64px] gap-2 px-2 py-2 text-[10px] uppercase text-gray-500 border-b border-gray-800 sticky top-[100px] bg-gray-950 z-10">
         <span><input type="checkbox" onChange={toggleSelectVisible} className="accent-blue-500" /></span>
         <span>Bundle</span>
         <span>Name</span>
+        <span title="Short title pulled from receiving (7f) records — temporary fallback until Apps Script exposes shortTitle on bundles directly.">Short Title</span>
         <span>Vendor</span>
         <span>Auto → Effective</span>
         <span>Override</span>
@@ -480,7 +496,7 @@ export default function SegmentsTab({ data, vendorRecs, goBundle, openWhyBuy }) 
           return (
             <div
               key={r.bundleId}
-              className={`grid grid-cols-[28px_minmax(120px,1.2fr)_minmax(180px,2fr)_minmax(140px,1fr)_minmax(170px,1fr)_minmax(150px,1fr)_70px_55px_60px_90px_64px] gap-2 px-2 items-center text-xs border-b border-gray-900 ${isSel ? 'bg-blue-500/10' : 'hover:bg-gray-900/50'}`}
+              className={`grid grid-cols-[28px_minmax(120px,1.2fr)_minmax(160px,1.6fr)_minmax(120px,1fr)_minmax(140px,1fr)_minmax(170px,1fr)_minmax(150px,1fr)_70px_55px_60px_90px_64px] gap-2 px-2 items-center text-xs border-b border-gray-900 ${isSel ? 'bg-blue-500/10' : 'hover:bg-gray-900/50'}`}
               style={{ height: ROW_HEIGHT }}
             >
               <input
@@ -497,6 +513,7 @@ export default function SegmentsTab({ data, vendorRecs, goBundle, openWhyBuy }) 
                 {r.bundleId}
               </button>
               <span className="text-gray-300 truncate" title={r.title}>{r.title}</span>
+              <span className="text-gray-500 truncate text-[11px] italic" title={r.shortTitle || ''}>{r.shortTitle || '—'}</span>
               <span className="text-gray-400 truncate" title={r.vendor}>{r.vendor}</span>
               <span className="flex items-center gap-1.5 truncate" title={r.reason}>
                 <SegmentBadge segment={r.autoSegment} override={r.override !== r.autoSegment ? r.override : null} small />

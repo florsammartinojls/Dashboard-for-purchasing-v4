@@ -1,21 +1,24 @@
 // src/App.jsx
-import React, { useState, useMemo, useCallback, useEffect, useTransition, useRef } from "react";
+import React, { useState, useMemo, useCallback, useEffect, useTransition, useRef, Suspense, lazy } from "react";
 import { fetchLive, fetchHistory, refreshHistoryOnServer, fetchInfo, apiPost } from "./lib/api";
 import { R, D1, gS, fTs, gTD, isD, cAI, cNQ } from "./lib/utils";
 import { Loader, Stg, QuickSum, SumCtx, SlidePanel, Dot, WorkflowChip, VendorNotes } from "./components/Shared";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { SkeletonHero, HistoryProgressBanner } from "./components/Skeleton";
-import DashboardSummary from "./components/DashboardSummary";
+// Sprint 3 Fix 6: keep the two highest-traffic tabs eager (Today's
+// Action loads first paint; Purchasing is the working surface). Lazy
+// the rest to slim the initial bundle and keep cold start under the
+// 5s target.
 import PurchTab from "./components/PurchTab";
-import CoreTab from "./components/CoreTab";
-import BundleTab from "./components/BundleTab";
-import OrdersTab from "./components/OrdersTab";
-import PerformanceTab from "./components/PerformanceTab";
-import BridgeTab from "./components/BridgeTab";
-import SegmentsTab from "./components/SegmentsTab";
-import WhyBuyPanel from "./components/WhyBuyPanel";
 import TodaysActionTab from "./components/TodaysActionTab";
-import WatchlistTab from "./components/WatchlistTab";
+import WhyBuyPanel from "./components/WhyBuyPanel";
+const CoreTab        = lazy(() => import("./components/CoreTab"));
+const BundleTab      = lazy(() => import("./components/BundleTab"));
+const OrdersTab      = lazy(() => import("./components/OrdersTab"));
+const PerformanceTab = lazy(() => import("./components/PerformanceTab"));
+const BridgeTab      = lazy(() => import("./components/BridgeTab"));
+const SegmentsTab    = lazy(() => import("./components/SegmentsTab"));
+const WatchlistTab   = lazy(() => import("./components/WatchlistTab"));
 import { batchVendorRecommendationsV4 } from "./lib/recommenderV4";
 import { calcPurchaseFrequency, calcBundleSeasonalProfile, DEFAULT_PROFILE } from "./lib/seasonal";
 import { buildAllIndexes } from "./lib/dataIndexes";
@@ -328,7 +331,6 @@ const TABS = [
   { id: "vendors", l: "Vendors" },
   { id: "performance", l: "Performance" },
   { id: "watchlist", l: "Watchlist" },
-  { id: "classic", l: "Classic" },
   { id: "glossary", l: "Glossary" }
 ];
 
@@ -942,7 +944,7 @@ export default function App() {
       </nav>
 
       <main className="max-w-7xl mx-auto">
-        {historyStatus.loading && !historyEverLoaded && tab !== "glossary" && tab !== "orders" && tab !== "vendors" && tab !== "performance" && tab !== "classic" && (
+        {historyStatus.loading && !historyEverLoaded && tab !== "glossary" && tab !== "orders" && tab !== "vendors" && tab !== "performance" && (
           <SkeletonHero />
         )}
         <div style={{ display: tab === "today" ? "block" : "none" }}>
@@ -950,32 +952,31 @@ export default function App() {
             <TodaysActionTab data={dataH} stg={stg} vendorRecs={vendorRecs} goVendor={goVendor} workflow={data.workflow} saveWorkflow={saveWorkflow} deleteWorkflow={deleteWorkflow} vendorComments={data.vendorComments} saveVendorComment={saveVendorComment} onEnterPurchasing={() => setTab("purchasing")} />
           </ErrorBoundary>
         </div>
-        <div style={{ display: tab === "classic" ? "block" : "none" }}>
-          <ErrorBoundary label="Classic Dashboard" compact>
-            <DashboardSummary data={dataH} stg={stg} vendorRecs={vendorRecs} goVendor={goVendor} workflow={data.workflow} saveWorkflow={saveWorkflow} deleteWorkflow={deleteWorkflow} vendorComments={data.vendorComments} saveVendorComment={saveVendorComment} onEnterPurchasing={() => setTab("purchasing")} activeBundleCores={activeBundleCores} liveStatus={liveStatus} historyStatus={historyStatus} workerStatus={workerStatus} loadLive={loadLive} loadHistory={loadHistory} />
-          </ErrorBoundary>
-        </div>
         <div style={{ display: tab === "purchasing" ? "block" : "none" }}>
           <ErrorBoundary label="Purchasing" compact>
             <PurchTab data={dataH} stg={stg} vendorRecs={vendorRecs} goCore={goCore} goBundle={goBundle} goVendor={goVendor} ov={ov} setOv={setOv} initV={initV} clearIV={clearIV} saveWorkflow={saveWorkflow} deleteWorkflow={deleteWorkflow} saveVendorComment={saveVendorComment} activeBundleCores={activeBundleCores} />
           </ErrorBoundary>
         </div>
-        {tab === "bridge" && <ErrorBoundary label="Bridge" compact><BridgeTab data={dataH} stg={stg} vendorRecs={vendorRecs} goCore={goCore} goBundle={goBundle} /></ErrorBoundary>}
-        {tab === "core" && <ErrorBoundary label="Core" compact><CoreTab data={data} stg={stg} hist={{ coreInv: data.coreInv, bundleSales: data.bundleSales, priceHist: data.priceHist }} daily={{ coreDays: data.coreDays, bundleDays: data.bundleDays }} coreId={coreId} onBack={handleBackFromCore} goBundle={goBundle} /></ErrorBoundary>}
-        {tab === "bundle" && <ErrorBoundary label="Bundle" compact><BundleTab data={data} stg={stg} vendorRecs={vendorRecs} hist={{ coreInv: data.coreInv, bundleSales: data.bundleSales, bundleInv: data.bundleInv, priceHist: data.priceHist }} daily={{ coreDays: data.coreDays, bundleDays: data.bundleDays }} bundleId={bundleId} onBack={handleBackFromBundle} goCore={goCore} /></ErrorBoundary>}
-        {tab === "segments" && <ErrorBoundary label="Segments" compact><SegmentsTab data={data} vendorRecs={vendorRecs} goBundle={goBundle} openWhyBuy={openWhyBuy} /></ErrorBoundary>}
-        {tab === "orders" && <ErrorBoundary label="Orders" compact><OrdersTab data={data} /></ErrorBoundary>}
-        {tab === "vendors" && <ErrorBoundary label="Vendors" compact><VendorsTab data={data} stg={stg} goVendor={goVendor} workflow={data.workflow} saveWorkflow={saveWorkflow} deleteWorkflow={deleteWorkflow} vendorComments={data.vendorComments} saveVendorComment={saveVendorComment} /></ErrorBoundary>}
-        {tab === "performance" && <ErrorBoundary label="Performance" compact><PerformanceTab /></ErrorBoundary>}
-        {tab === "watchlist" && <ErrorBoundary label="Watchlist" compact><WatchlistTab data={dataH} vendorRecs={vendorRecs} /></ErrorBoundary>}
-        {tab === "glossary" && <ErrorBoundary label="Glossary" compact><GlossTab /></ErrorBoundary>}
+        <Suspense fallback={<Loader text="Loading view..." />}>
+          {tab === "bridge" && <ErrorBoundary label="Bridge" compact><BridgeTab data={dataH} stg={stg} vendorRecs={vendorRecs} goCore={goCore} goBundle={goBundle} /></ErrorBoundary>}
+          {tab === "core" && <ErrorBoundary label="Core" compact><CoreTab data={data} stg={stg} hist={{ coreInv: data.coreInv, bundleSales: data.bundleSales, priceHist: data.priceHist }} daily={{ coreDays: data.coreDays, bundleDays: data.bundleDays }} coreId={coreId} onBack={handleBackFromCore} goBundle={goBundle} /></ErrorBoundary>}
+          {tab === "bundle" && <ErrorBoundary label="Bundle" compact><BundleTab data={data} stg={stg} vendorRecs={vendorRecs} hist={{ coreInv: data.coreInv, bundleSales: data.bundleSales, bundleInv: data.bundleInv, priceHist: data.priceHist }} daily={{ coreDays: data.coreDays, bundleDays: data.bundleDays }} bundleId={bundleId} onBack={handleBackFromBundle} goCore={goCore} /></ErrorBoundary>}
+          {tab === "segments" && <ErrorBoundary label="Segments" compact><SegmentsTab data={data} vendorRecs={vendorRecs} goBundle={goBundle} openWhyBuy={openWhyBuy} /></ErrorBoundary>}
+          {tab === "orders" && <ErrorBoundary label="Orders" compact><OrdersTab data={data} /></ErrorBoundary>}
+          {tab === "vendors" && <ErrorBoundary label="Vendors" compact><VendorsTab data={data} stg={stg} goVendor={goVendor} workflow={data.workflow} saveWorkflow={saveWorkflow} deleteWorkflow={deleteWorkflow} vendorComments={data.vendorComments} saveVendorComment={saveVendorComment} /></ErrorBoundary>}
+          {tab === "performance" && <ErrorBoundary label="Performance" compact><PerformanceTab /></ErrorBoundary>}
+          {tab === "watchlist" && <ErrorBoundary label="Watchlist" compact><WatchlistTab data={dataH} vendorRecs={vendorRecs} /></ErrorBoundary>}
+          {tab === "glossary" && <ErrorBoundary label="Glossary" compact><GlossTab /></ErrorBoundary>}
+        </Suspense>
       </main>
 
       {showS && <Stg s={stg} setS={setStg} onClose={() => setShowS(false)} />}
       <SlidePanel open={!!(panelCoreId || panelBundleId)} onClose={closePanel}>
+        <Suspense fallback={<Loader text="Loading panel..." />}>
         {panelBundleId ? <BundleTab data={data} stg={stg} vendorRecs={vendorRecs} hist={{ coreInv: data.coreInv, bundleSales: data.bundleSales, bundleInv: data.bundleInv, priceHist: data.priceHist }} daily={{ coreDays: data.coreDays, bundleDays: data.bundleDays }} bundleId={panelBundleId} onBack={() => { setPanelBundleId(null); if (!panelCoreId) closePanel(); }} goCore={id => { setPanelBundleId(null); setPanelCoreId(id) }} />
         : panelCoreId ? <CoreTab data={data} stg={stg} hist={{ coreInv: data.coreInv, bundleSales: data.bundleSales, priceHist: data.priceHist }} daily={{ coreDays: data.coreDays, bundleDays: data.bundleDays }} coreId={panelCoreId} onBack={closePanel} goBundle={id => setPanelBundleId(id)} />
         : null}
+        </Suspense>
       </SlidePanel>
       <QuickSum cells={sumCells} onClear={clearSum} />
       <WhyBuyPanel

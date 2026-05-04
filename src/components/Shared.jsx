@@ -22,7 +22,7 @@ export function CopyableId({ value, className, prefix }) {
   return (
     <span
       onClick={handleCopy}
-      title={copied ? "¡Copiado!" : `Click para copiar ${value}`}
+      title={copied ? "Copied!" : `Click to copy ${value}`}
       className={`cursor-pointer hover:bg-blue-500/20 rounded px-1 transition-colors select-none ${copied ? "bg-emerald-500/30" : ""} ${className || ""}`}
     >
       {prefix}{value}{copied && <span className="ml-1 text-[9px] text-emerald-400">✓</span>}
@@ -134,14 +134,14 @@ export function Stg({ s, setS, onClose }) {
               <p className="text-[10px] text-gray-500 mt-1">Default 95% · Z≈1.65</p>
             </div>
             <div>
-              <label className="text-sm text-gray-400 block mb-1" title="Si el motor clasifica un bundle como DECLINING, su proyección mensual nunca cae bajo este % del DSR base. 0.5 evita que el motor crea que vas a vender 0 unidades a partir del mes 5. Subí a 0.7 para ser más conservador.">
+              <label className="text-sm text-gray-400 block mb-1" title="When the engine classifies a bundle as DECLINING, its monthly projection never falls below this % of the base DSR. 0.5 prevents the engine from assuming zero sales after month 5. Raise to 0.7 for a more conservative buffer.">
                 DECLINING projection floor
               </label>
               <input type="number" step="0.05" min="0" max="1" value={l.decliningProjectionFloor ?? 0.5} onChange={e => setL({ ...l, decliningProjectionFloor: +e.target.value })} className="bg-gray-800 border border-gray-600 text-white rounded px-3 py-2 w-full" />
-              <p className="text-[10px] text-gray-500 mt-1">Default 0.5 · piso = floor × level base</p>
+              <p className="text-[10px] text-gray-500 mt-1">Default 0.5 · floor = floor × base level</p>
             </div>
             <div>
-              <label className="text-sm text-gray-400 block mb-1" title="Si las ventas de los últimos 7 días son N veces el DSR de 60d, el motor asume que la caída se revirtió y reclasifica como STABLE. Default 1.0 = 7D igual o mayor que 60d-DSR. Bajalo a 0.8 si querés más sensibilidad.">
+              <label className="text-sm text-gray-400 block mb-1" title="When last-7-day sales are N times the 60d DSR, the engine assumes the decline reversed and reclassifies as STABLE. Default 1.0 = last 7D equal to or above the 60d-DSR. Lower to 0.8 for more sensitivity.">
                 7D reconciliation ratio
               </label>
               <input type="number" step="0.1" min="0.5" max="2" value={l.sevenDayReconciliationRatio ?? 1.0} onChange={e => setL({ ...l, sevenDayReconciliationRatio: +e.target.value })} className="bg-gray-800 border border-gray-600 text-white rounded px-3 py-2 w-full" />
@@ -208,11 +208,11 @@ export function Stg({ s, setS, onClose }) {
               <p className="text-[10px] text-gray-500 mt-1">Default 1.5 · ≥ triggers ⚠MOQ</p>
             </div>
             <div>
-              <label className="text-sm text-gray-400 block mb-1" title="Si el MOQ obliga a comprar más de Nx el need real, bloquear la compra. 3x es conservador, 5x más permisivo. No afecta a case-packs domésticos típicos (~1.1x).">
+              <label className="text-sm text-gray-400 block mb-1" title="If the MOQ forces buying more than N× the real need, block the purchase. 3x is conservative, 5x is more permissive. Doesn't affect typical domestic case-packs (~1.1x).">
                 MOQ Inflation Hard Cap
               </label>
               <input type="number" step="0.5" min="1" value={l.moqInflationHardCap ?? 3.0} onChange={e => setL({ ...l, moqInflationHardCap: +e.target.value })} className="bg-gray-800 border border-gray-600 text-white rounded px-3 py-2 w-full" />
-              <p className="text-[10px] text-gray-500 mt-1">Default 3.0 · ratio &gt; cap ⇒ bloqueado</p>
+              <p className="text-[10px] text-gray-500 mt-1">Default 3.0 · ratio &gt; cap ⇒ blocked</p>
             </div>
             <div>
               <label className="text-sm text-gray-400 block mb-1" title="When Bundle MOQ forces more than needed, max extra DOC days before suggesting 'wait'. Default 30.">

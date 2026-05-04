@@ -313,7 +313,7 @@ export function calcVendorRecommendationV4({
 
   // Inactive/ignored cores are NOT processed by the recommender.
   // They reappear automatically when reactivated upstream — no code change needed.
-  // Same gate that PurchTab/DashboardSummary already apply at the UI layer; making
+  // Same gate that PurchTab already applies at the UI layer; making
   // it authoritative here removes the "core in coreDetails but invisible to UI"
   // class of bugs (see Sprint 1 vendor-mapping audit).
   const vendorCores = (cores || []).filter(
@@ -334,6 +334,38 @@ export function calcVendorRecommendationV4({
     receivingRows: receivingFull,
     settings,
   });
+
+  // Sprint 3 Fix 8: typical PO size per core for THIS vendor.
+  // Median of the most recent 5 receiving rows tagged to this vendor
+  // and core. UI surfaces a "Below typical PO" warning when the
+  // engine recommends less than 30% of this baseline. Output-only:
+  // not consumed by the recommender, never alters finalQty/cost.
+  const typicalPoSizeByCore = (() => {
+    const out = {};
+    if (!Array.isArray(receivingFull) || !vendor?.name) return out;
+    const vNameLower = vendor.name.toLowerCase().trim();
+    const byCore = new Map();
+    for (const r of receivingFull) {
+      if (!r || !r.core) continue;
+      const rv = (r.vendor || '').toLowerCase().trim();
+      if (rv !== vNameLower) continue;
+      const pcs = Number(r.pieces);
+      if (!(pcs > 0)) continue;
+      const cid = r.core;
+      let arr = byCore.get(cid);
+      if (!arr) { arr = []; byCore.set(cid, arr); }
+      arr.push({ date: r.date || '', pcs });
+    }
+    for (const [cid, arr] of byCore.entries()) {
+      arr.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+      const last = arr.slice(0, 5).map(x => x.pcs).sort((a, b) => a - b);
+      if (last.length === 0) continue;
+      const mid = Math.floor(last.length / 2);
+      const median = last.length % 2 === 1 ? last[mid] : (last[mid - 1] + last[mid]) / 2;
+      out[cid] = Math.round(median);
+    }
+    return out;
+  })();
 
   const segmentationEnabled = settings?.segmentationEnabled !== false;
 
@@ -635,6 +667,16 @@ export function calcVendorRecommendationV4({
       excessCostFromMoq = 0;
     }
 
+    // Sprint 3 Fix 8: Below-typical-PO warning. Fires only when the
+    // engine actually recommends a buy (finalQty>0), there's PO history
+    // (typicalPoSize defined), and the recommendation falls below 30%
+    // of the typical size. Doesn't affect finalQty.
+    const typicalPoSize = typicalPoSizeByCore[coreId] ?? null;
+    const poSizeWarning = !!(
+      typicalPoSize && typicalPoSize > 0 && finalQty > 0 &&
+      finalQty < typicalPoSize * 0.3
+    );
+
     coreItems.push({
       id: coreId,
       mode: 'core',
@@ -659,6 +701,8 @@ export function calcVendorRecommendationV4({
       intermittentExcess,
       rejectedByMoqCap,
       moqCapDetail,
+      typicalPoSize,
+      poSizeWarning,
     });
   }
 
@@ -860,6 +904,8 @@ export function calcVendorRecommendationV4({
       intermittentExcess: !!item?.intermittentExcess,
       rejectedByMoqCap: !!item?.rejectedByMoqCap,
       moqCapDetail: item?.moqCapDetail || null,
+      typicalPoSize: item?.typicalPoSize ?? null,
+      poSizeWarning: !!item?.poSizeWarning,
     };
   });
 
