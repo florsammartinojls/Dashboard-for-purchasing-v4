@@ -13,7 +13,7 @@
 
 const SNAPSHOT_LS_KEY = 'fba_last_forecast_snapshot_date';
 const SNAPSHOT_INTERVAL_DAYS = 7;
-const APPS_SCRIPT_ENDPOINT = '[REPLACE_WITH_GAS_WEB_APP_URL_AFTER_DEPLOY]';
+const APPS_SCRIPT_ENDPOINT = 'https://script.google.com/macros/s/AKfycbyxFvNQjWvF6Ckajd_H-OZ8WsXixoCWtjSxtChs8SmpL5CvidjT5P161tn0RXgYawd3sg/exec';
 
 function daysSince(isoDate) {
   if (!isoDate) return Infinity;
@@ -86,11 +86,11 @@ async function postSnapshotBatch(rows) {
   if (!APPS_SCRIPT_ENDPOINT || APPS_SCRIPT_ENDPOINT.includes('REPLACE')) {
     throw new Error('APPS_SCRIPT_ENDPOINT not configured in forecastSnapshots.js');
   }
-  const res = await fetch(APPS_SCRIPT_ENDPOINT, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ action: 'appendForecastSnapshots', rows }),
-  });
+const res = await fetch(APPS_SCRIPT_ENDPOINT, {
+  method: 'POST',
+  headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+  body: JSON.stringify({ action: 'appendForecastSnapshots', rows }),
+});
   if (!res.ok) throw new Error(`Snapshot endpoint HTTP ${res.status}`);
   const json = await res.json();
   if (!json.ok) throw new Error(json.error || 'Snapshot endpoint returned ok=false');
