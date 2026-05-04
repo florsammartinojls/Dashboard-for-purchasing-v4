@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useContext } from "react";
+import React, { useState, useMemo, useEffect, useContext, useRef } from "react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceArea, ReferenceDot } from "recharts";
 import { R, D1, $, $2, P, MN, YC, TTP, BL, TL, gS, cAI, cNQ, cOQ, cDA, gTD, dc, fE, fD, cMo, gY, cSeas } from "../lib/utils";
 import { Dot, TH, SumCtx, CopyableId } from "./Shared";
@@ -166,10 +166,38 @@ function BundlesTable({ cB, core, stg, ven, replenMap, missingMap, agedMap, kill
   );
 }
 
-export default function CoreTab({ data, stg, hist, daily, coreId, onBack, goBundle }) {
+export default function CoreTab({
+  data, stg, hist, daily, coreId, onBack, goBundle,
+  // Sprint 4 Fix 1: cold-start guard props. CoreTab computes its
+  // own vendor recommendation synchronously (calcVendorRecommendationV4)
+  // and the underlying inputs (receivingFull, priceCompFull,
+  // bundleDaysForecast) all come from the history feed. Until history
+  // is hydrated those arrays are empty and the recommender returns
+  // partial numbers — same UX problem PurchTab had.
+  liveStatus, historyStatus, historyEverLoaded, workerStatus,
+  loadLive, loadHistory,
+}) {
   const [s, setS] = useState("");
   const [sel, setSel] = useState(coreId || null);
   useEffect(() => { if (coreId) setSel(coreId) }, [coreId]);
+
+  // Sprint 4 Fix 1: latch identical in spirit to PurchTab/TodaysActionTab.
+  // Worker readiness is included for consistency with the prop set even
+  // though CoreTab doesn't read vendorRecs directly — by the time the
+  // worker is 'ready', history has fully landed and CoreTab's own
+  // recommender call returns stable numbers.
+  const liveErr = liveStatus?.error || null;
+  const histErr = historyStatus?.error || null;
+  const workerErr = workerStatus === 'error';
+  const liveLoading = !!liveStatus?.loading;
+  const histLoadingFirst = !historyEverLoaded;
+  const workerReady = workerStatus === 'ready';
+  const everReadyRef = useRef(false);
+  if (!everReadyRef.current && !liveLoading && !histLoadingFirst && workerReady) {
+    everReadyRef.current = true;
+  }
+  const engineReady = everReadyRef.current;
+  const engineFailed = !engineReady && (liveErr || histErr || workerErr);
 
   const core = sel ? (data.cores || []).find(c => c.id === sel) : null;
   const ven = core ? (data.vendors || []).find(v => v.name === core.ven) : null;
@@ -363,6 +391,37 @@ export default function CoreTab({ data, stg, hist, daily, coreId, onBack, goBund
   );
 
   // === DETAIL VIEW ===
+  // Sprint 4 Fix 1: cold-start placeholder. The header back button is
+  // still rendered so the operator can return to the previous tab
+  // even before the engine warms up.
+  if (!engineReady) {
+    return (
+      <div className="p-4 max-w-4xl mx-auto">
+        <button onClick={() => { if (coreId) onBack(); else setSel(null); }} className="text-gray-400 hover:text-white text-sm mb-4">← Back</button>
+        {engineFailed ? (
+          <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-6 text-center">
+            <div className="text-red-300 font-semibold mb-2">Unable to calculate — retry</div>
+            <div className="text-gray-400 text-sm mb-4">
+              {liveErr ? `Live: ${liveErr}` : null}
+              {liveErr && histErr ? ' · ' : null}
+              {histErr ? `History: ${histErr}` : null}
+              {workerErr && !liveErr && !histErr ? 'The engine failed to recompute.' : null}
+            </div>
+            <div className="flex gap-2 justify-center">
+              {liveErr && loadLive && <button onClick={() => loadLive({ forceRefresh: true })} className="text-xs bg-blue-600 text-white px-3 py-1.5 rounded">Retry Live</button>}
+              {histErr && loadHistory && <button onClick={() => loadHistory({ forceRefresh: true })} className="text-xs bg-blue-600 text-white px-3 py-1.5 rounded">Retry History</button>}
+            </div>
+          </div>
+        ) : (
+          <div className="flex items-center justify-center gap-3 py-16 text-gray-400">
+            <div className="w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+            <span className="text-sm">Calculating...</span>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="p-4 max-w-7xl mx-auto">
       <button onClick={() => { if (coreId) onBack(); else setSel(null); }} className="text-gray-400 hover:text-white text-sm mb-4">← Back</button>

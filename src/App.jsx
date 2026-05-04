@@ -2,7 +2,7 @@
 import React, { useState, useMemo, useCallback, useEffect, useTransition, useRef, Suspense, lazy } from "react";
 import { fetchLive, fetchHistory, refreshHistoryOnServer, fetchInfo, apiPost } from "./lib/api";
 import { R, D1, gS, fTs, gTD, isD, cAI, cNQ } from "./lib/utils";
-import { Loader, Stg, QuickSum, SumCtx, SlidePanel, Dot, WorkflowChip, VendorNotes } from "./components/Shared";
+import { Loader, Stg, QuickSum, SumCtx, SlidePanel, Dot, WorkflowChip, VendorNotes, Toast } from "./components/Shared";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { SkeletonHero, HistoryProgressBanner } from "./components/Skeleton";
 // Sprint 3 Fix 6: keep the two highest-traffic tabs eager (Today's
@@ -25,6 +25,7 @@ import { buildAllIndexes } from "./lib/dataIndexes";
 import { batchClassifySegments } from "./lib/segmentClassifier";
 import { loadOverrides, buildEffectiveMap, setOverride as setSegmentOverridePersist, bulkSetOverrides as bulkSetOverridesPersist, clearAllOverrides as clearAllOverridesPersist, fromRemoteRows, isMigrated, markMigrated, loadLocalOnly } from "./lib/segments";
 import { useVendorRecsWorker } from "./hooks/useVendorRecsWorker";
+import { generateWeeklySnapshotIfDue, forceSnapshotNow } from "./lib/forecastSnapshots";
 
 const DEV = import.meta.env.DEV;
 
@@ -789,6 +790,38 @@ export default function App() {
     lastUpdated: workerLastUpdated,
   } = useVendorRecsWorker(workerInput);
 
+  // ─── Sprint 4 Fix 4: weekly forecast snapshot ───
+  // Once the worker emits its first 'ready' result with non-empty
+  // vendorRecs, fire generateWeeklySnapshotIfDue. The function gates
+  // on a localStorage timestamp so it only POSTs once every 7 days
+  // even if the effect re-runs on every recompute. Errors (incl.
+  // unconfigured endpoint) are caught inside and surfaced via the
+  // optional onToast callback — they never propagate to the app.
+  const [snapshotToast, setSnapshotToast] = useState(null);
+  const snapshotFiredRef = useRef(false);
+  useEffect(() => {
+    if (!vendorRecs) return;
+    if (Object.keys(vendorRecs).length === 0) return;
+    if (workerStatus !== 'ready') return;
+    if (snapshotFiredRef.current) return;
+    snapshotFiredRef.current = true;
+    generateWeeklySnapshotIfDue(vendorRecs, {
+      onToast: (msg, kind) => {
+        setSnapshotToast({ msg, kind: kind || 'info' });
+        if (DEV) console.log('[snapshot]', kind || 'info', msg);
+      },
+    });
+  }, [vendorRecs, workerStatus]);
+
+  // Manual trigger for dev console: window.__forceSnapshot()
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.__forceSnapshot = () => forceSnapshotNow(vendorRecs, {
+      onToast: (msg, kind) => setSnapshotToast({ msg, kind: kind || 'info' }),
+    });
+    return () => { try { delete window.__forceSnapshot; } catch {} };
+  }, [vendorRecs]);
+
 
   const sc = useMemo(() => {
     const c = { critical: 0, warning: 0, healthy: 0 };
@@ -884,9 +917,14 @@ export default function App() {
                   ⚠ ERROR
                 </span>
               )}
+              {/* Sprint 4 Fix 2: calc indicator subdued. Only visible
+                  while the worker is actively calculating; hidden on
+                  idle / ready / error states. Smaller font and gray
+                  color so it sits behind Live/Hist instead of competing
+                  with them. */}
               {workerStatus === 'calculating' && (
-                <span className="text-blue-300" title="Recomputing recommendations off the main thread">
-                  ⏱ calc {Math.round((workerProgress || 0) * 100)}%
+                <span className="text-gray-500 text-[10px] opacity-70" title="Engine is recalculating with new inputs...">
+                  · calc {Math.round((workerProgress || 0) * 100)}%
                 </span>
               )}
               {workerStatus === 'error' && (
@@ -954,12 +992,12 @@ export default function App() {
         </div>
         <div style={{ display: tab === "purchasing" ? "block" : "none" }}>
           <ErrorBoundary label="Purchasing" compact>
-            <PurchTab data={dataH} stg={stg} vendorRecs={vendorRecs} goCore={goCore} goBundle={goBundle} goVendor={goVendor} ov={ov} setOv={setOv} initV={initV} clearIV={clearIV} saveWorkflow={saveWorkflow} deleteWorkflow={deleteWorkflow} saveVendorComment={saveVendorComment} activeBundleCores={activeBundleCores} />
+            <PurchTab data={dataH} stg={stg} vendorRecs={vendorRecs} goCore={goCore} goBundle={goBundle} goVendor={goVendor} ov={ov} setOv={setOv} initV={initV} clearIV={clearIV} saveWorkflow={saveWorkflow} deleteWorkflow={deleteWorkflow} saveVendorComment={saveVendorComment} activeBundleCores={activeBundleCores} liveStatus={liveStatus} historyStatus={historyStatus} historyEverLoaded={historyEverLoaded} workerStatus={workerStatus} loadLive={loadLive} loadHistory={loadHistory} />
           </ErrorBoundary>
         </div>
         <Suspense fallback={<Loader text="Loading view..." />}>
           {tab === "bridge" && <ErrorBoundary label="Bridge" compact><BridgeTab data={dataH} stg={stg} vendorRecs={vendorRecs} goCore={goCore} goBundle={goBundle} /></ErrorBoundary>}
-          {tab === "core" && <ErrorBoundary label="Core" compact><CoreTab data={data} stg={stg} hist={{ coreInv: data.coreInv, bundleSales: data.bundleSales, priceHist: data.priceHist }} daily={{ coreDays: data.coreDays, bundleDays: data.bundleDays }} coreId={coreId} onBack={handleBackFromCore} goBundle={goBundle} /></ErrorBoundary>}
+          {tab === "core" && <ErrorBoundary label="Core" compact><CoreTab data={data} stg={stg} hist={{ coreInv: data.coreInv, bundleSales: data.bundleSales, priceHist: data.priceHist }} daily={{ coreDays: data.coreDays, bundleDays: data.bundleDays }} coreId={coreId} onBack={handleBackFromCore} goBundle={goBundle} liveStatus={liveStatus} historyStatus={historyStatus} historyEverLoaded={historyEverLoaded} workerStatus={workerStatus} loadLive={loadLive} loadHistory={loadHistory} /></ErrorBoundary>}
           {tab === "bundle" && <ErrorBoundary label="Bundle" compact><BundleTab data={data} stg={stg} vendorRecs={vendorRecs} hist={{ coreInv: data.coreInv, bundleSales: data.bundleSales, bundleInv: data.bundleInv, priceHist: data.priceHist }} daily={{ coreDays: data.coreDays, bundleDays: data.bundleDays }} bundleId={bundleId} onBack={handleBackFromBundle} goCore={goCore} /></ErrorBoundary>}
           {tab === "segments" && <ErrorBoundary label="Segments" compact><SegmentsTab data={data} vendorRecs={vendorRecs} goBundle={goBundle} openWhyBuy={openWhyBuy} /></ErrorBoundary>}
           {tab === "orders" && <ErrorBoundary label="Orders" compact><OrdersTab data={data} /></ErrorBoundary>}
@@ -974,7 +1012,7 @@ export default function App() {
       <SlidePanel open={!!(panelCoreId || panelBundleId)} onClose={closePanel}>
         <Suspense fallback={<Loader text="Loading panel..." />}>
         {panelBundleId ? <BundleTab data={data} stg={stg} vendorRecs={vendorRecs} hist={{ coreInv: data.coreInv, bundleSales: data.bundleSales, bundleInv: data.bundleInv, priceHist: data.priceHist }} daily={{ coreDays: data.coreDays, bundleDays: data.bundleDays }} bundleId={panelBundleId} onBack={() => { setPanelBundleId(null); if (!panelCoreId) closePanel(); }} goCore={id => { setPanelBundleId(null); setPanelCoreId(id) }} />
-        : panelCoreId ? <CoreTab data={data} stg={stg} hist={{ coreInv: data.coreInv, bundleSales: data.bundleSales, priceHist: data.priceHist }} daily={{ coreDays: data.coreDays, bundleDays: data.bundleDays }} coreId={panelCoreId} onBack={closePanel} goBundle={id => setPanelBundleId(id)} />
+        : panelCoreId ? <CoreTab data={data} stg={stg} hist={{ coreInv: data.coreInv, bundleSales: data.bundleSales, priceHist: data.priceHist }} daily={{ coreDays: data.coreDays, bundleDays: data.bundleDays }} coreId={panelCoreId} onBack={closePanel} goBundle={id => setPanelBundleId(id)} liveStatus={liveStatus} historyStatus={historyStatus} historyEverLoaded={historyEverLoaded} workerStatus={workerStatus} loadLive={loadLive} loadHistory={loadHistory} />
         : null}
         </Suspense>
       </SlidePanel>
@@ -987,6 +1025,10 @@ export default function App() {
         segmentMap={effectiveSegmentMap}
         data={data}
       />
+      {/* Sprint 4 Fix 4: snapshot status toast (info or error). */}
+      {snapshotToast && (
+        <Toast msg={snapshotToast.msg} onClose={() => setSnapshotToast(null)} />
+      )}
     </div>
   </SumCtx.Provider></WhyBuyCtx.Provider></SegmentCtx.Provider>;
 }

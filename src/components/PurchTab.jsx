@@ -186,7 +186,16 @@ function DeltaModal({ vendorName, delta, onClose }) {
   );
 }
 
-export default function PurchTab({ data, stg, vendorRecs, goCore, goBundle, goVendor, ov, setOv, initV, clearIV, saveWorkflow, deleteWorkflow, saveVendorComment, activeBundleCores }) {
+export default function PurchTab({
+  data, stg, vendorRecs, goCore, goBundle, goVendor, ov, setOv, initV, clearIV,
+  saveWorkflow, deleteWorkflow, saveVendorComment, activeBundleCores,
+  // Sprint 4 Fix 1: cold-start guard props piped from App so the
+  // vendor list waits for full data + worker output. Without these
+  // PurchTab paints partial cards (e.g. "1 bundle need buy · 0 cores")
+  // and then jumps to the real numbers when history finishes loading.
+  liveStatus, historyStatus, historyEverLoaded, workerStatus,
+  loadLive, loadHistory,
+}) {
   const segCtx = useContext(SegmentCtx);
   const whyBuy = useContext(WhyBuyCtx);
 if (!vendorRecs || !Object.keys(vendorRecs).length) vendorRecs = {};
@@ -208,6 +217,25 @@ if (!vendorRecs || !Object.keys(vendorRecs).length) vendorRecs = {};
   const [nf, setNf] = useState("all");
   const [minD, setMinD] = useState(0);
   const [locF, setLocF] = useState("all");
+
+  // Sprint 4 Fix 1: cold-start guardrail mirroring TodaysActionTab.
+  // engineReady latches true on the first transition where live +
+  // history + worker have all produced full output. Subsequent
+  // worker recomputes (settings tweak, MOQ override) leave the
+  // latch on so the vendor list updates in place rather than
+  // flickering back to a placeholder.
+  const liveErr = liveStatus?.error || null;
+  const histErr = historyStatus?.error || null;
+  const workerErr = workerStatus === 'error';
+  const liveLoading = !!liveStatus?.loading;
+  const histLoadingFirst = !historyEverLoaded;
+  const workerReady = workerStatus === 'ready';
+  const everReadyRef = useRef(false);
+  if (!everReadyRef.current && !liveLoading && !histLoadingFirst && workerReady) {
+    everReadyRef.current = true;
+  }
+  const engineReady = everReadyRef.current;
+  const engineFailed = !engineReady && (liveErr || histErr || workerErr);
   const [toast, setToast] = useState(null);
   const [toastPersist, setToastPersist] = useState(false);
   const [poN, setPoN] = useState("");
@@ -1291,7 +1319,36 @@ const rows = priceHistoryFull
     </div>
     {vm === "vendor" && <div className="flex flex-wrap gap-3 mb-4 items-center text-sm"><span className="text-gray-500 text-xs">PO#:</span><input type="text" value={poN} onChange={e => setPoN(e.target.value)} placeholder="Auto" className="bg-gray-800 border border-gray-700 text-white rounded px-2 py-1 w-28 text-sm" />{!vf && <><span className="text-gray-500 text-xs">Date:</span><input type="date" value={poD} onChange={e => setPoD(e.target.value)} className="bg-gray-800 border border-gray-700 text-white rounded px-2 py-1 text-sm" /></>}<span className="text-gray-500 text-xs">Buyer:</span><span className="text-white font-semibold">{stg.buyer || <span className="text-red-400">Set in ⚙️</span>}</span></div>}
 
-    {vm === "core" && <div className="overflow-x-auto rounded-xl border border-gray-800"><table className="w-full"><thead><tr className="bg-gray-900/80 text-xs text-gray-400 uppercase sticky top-0 z-20"><th className="py-3 px-2 w-8" /><th className="py-3 px-2 text-left">Core</th><th className="py-3 px-2 text-left">Vendor</th><th className="py-3 px-2 text-left">Title</th><TH tip="DSR" className="py-3 px-2 text-right">DSR</TH><TH tip="7D" className="py-3 px-2 text-right">7D</TH><th className="py-3 px-2 text-center">T</th><TH tip="DOC" className="py-3 px-2 text-right">DOC</TH><TH tip="All-In" className="py-3 px-2 text-right">All-In</TH><th className="py-3 px-2 text-right">MOQ</th><th className="py-3 px-2 text-center">S</th><th className="py-3 px-1 border-l-2 border-blue-500/40" /><TH tip="Need (bundle-driven)" className="py-3 px-2 text-right text-blue-300">Need</TH><th className="py-3 px-2 text-right text-blue-300">Order</th><th className="py-3 px-2 text-right text-blue-300">Cost</th><TH tip="After DOC" className="py-3 px-2 text-right text-blue-300">After</TH><th className="py-3 px-2 w-14" /></tr></thead>
+    {/* Sprint 4 Fix 1: cold-start placeholder. Filter bar above stays
+        visible so the operator can prep their selection while the
+        engine warms up. Once latched, real vendor / core rendering
+        replaces this and never reverts. */}
+    {!engineReady && (
+      <div className="max-w-4xl mx-auto">
+        {engineFailed ? (
+          <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-6 text-center">
+            <div className="text-red-300 font-semibold mb-2">Unable to calculate — retry</div>
+            <div className="text-gray-400 text-sm mb-4">
+              {liveErr ? `Live: ${liveErr}` : null}
+              {liveErr && histErr ? ' · ' : null}
+              {histErr ? `History: ${histErr}` : null}
+              {workerErr && !liveErr && !histErr ? 'The engine failed to recompute.' : null}
+            </div>
+            <div className="flex gap-2 justify-center">
+              {liveErr && loadLive && <button onClick={() => loadLive({ forceRefresh: true })} className="text-xs bg-blue-600 text-white px-3 py-1.5 rounded">Retry Live</button>}
+              {histErr && loadHistory && <button onClick={() => loadHistory({ forceRefresh: true })} className="text-xs bg-blue-600 text-white px-3 py-1.5 rounded">Retry History</button>}
+            </div>
+          </div>
+        ) : (
+          <div className="flex items-center justify-center gap-3 py-16 text-gray-400">
+            <div className="w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+            <span className="text-sm">Calculating...</span>
+          </div>
+        )}
+      </div>
+    )}
+
+    {engineReady && vm === "core" && <div className="overflow-x-auto rounded-xl border border-gray-800"><table className="w-full"><thead><tr className="bg-gray-900/80 text-xs text-gray-400 uppercase sticky top-0 z-20"><th className="py-3 px-2 w-8" /><th className="py-3 px-2 text-left">Core</th><th className="py-3 px-2 text-left">Vendor</th><th className="py-3 px-2 text-left">Title</th><TH tip="DSR" className="py-3 px-2 text-right">DSR</TH><TH tip="7D" className="py-3 px-2 text-right">7D</TH><th className="py-3 px-2 text-center">T</th><TH tip="DOC" className="py-3 px-2 text-right">DOC</TH><TH tip="All-In" className="py-3 px-2 text-right">All-In</TH><th className="py-3 px-2 text-right">MOQ</th><th className="py-3 px-2 text-center">S</th><th className="py-3 px-1 border-l-2 border-blue-500/40" /><TH tip="Need (bundle-driven)" className="py-3 px-2 text-right text-blue-300">Need</TH><th className="py-3 px-2 text-right text-blue-300">Order</th><th className="py-3 px-2 text-right text-blue-300">Cost</th><TH tip="After DOC" className="py-3 px-2 text-right text-blue-300">After</TH><th className="py-3 px-2 w-14" /></tr></thead>
       <tbody>{enr.map(c => <tr key={c.id} className={`border-b border-gray-800/50 hover:bg-gray-800/30 text-sm ${c.sCoverage?.urgent ? "bg-red-900/10" : ""}`}><td className="py-2 px-2"><Dot status={c.status} /></td><td className="py-2 px-2"><button onClick={() => goCore(c.id)} className="text-blue-400 font-mono text-xs hover:underline">{c.id}</button></td><td className="py-2 px-2 text-blue-300 text-xs truncate max-w-[100px] cursor-pointer hover:underline" onClick={() => goVendor(c.ven)}>{c.ven}</td><td className="py-2 px-2 text-gray-200 max-w-[260px]">
   <div className="flex items-center gap-1.5 flex-wrap">
     <span className="truncate max-w-[170px]">{c.ti}</span>
@@ -1340,7 +1397,7 @@ const rows = priceHistoryFull
       <tfoot><tr className="bg-gray-900 border-t-2 border-gray-700 text-sm font-semibold"><td colSpan={4} className="py-3 px-2 text-gray-300">{enr.length}</td><td className="py-3 px-2 text-right text-white">{D1(tot.d)}</td><td colSpan={3} /><td className="py-3 px-2 text-right text-white">{R(tot.a)}</td><td colSpan={2} /><td className="border-l-2 border-blue-500/40" /><td className="py-3 px-2 text-right">{R(tot.n)}</td><td className="py-3 px-2 text-right text-white">{R(tot.o)}</td><td className="py-3 px-2 text-right text-amber-300">{$(tot.co)}</td><td colSpan={2} /></tr></tfoot>
     </table></div>}
 
-    {vm === "vendor" && vG.map(grp => {
+    {engineReady && vm === "vendor" && vG.map(grp => {
       const v = grp.v; const tg = gTD(v, stg);
       const poI = getPOI(grp.cores, vendorSub !== "cores" ? grp.bundles : []);
       const poT = poI.reduce((s, i) => s + i.qty * i.cost, 0);
@@ -1552,6 +1609,6 @@ const rows = priceHistoryFull
       </div>;
     })}
 
-    {vm === "vendor" && vG.length === 0 && <div className="text-center text-gray-500 py-12">No vendors match current filters.</div>}
+    {engineReady && vm === "vendor" && vG.length === 0 && <div className="text-center text-gray-500 py-12">No vendors match current filters.</div>}
   </div>;
 }

@@ -71,6 +71,23 @@ const DEFAULTS = {
 const MIN_DAYS_FOR_SIGMA = 30;
 const FALLBACK_CV = 0.3;
 
+// Sprint 4 Fix 3: uniform 180-day forecast horizon for the
+// projection that ships in the output. Coverage demand (input to
+// the waterfall) stays bound to each vendor's targetDoc — these
+// are two independent things that previously shared the same
+// horizon. Decoupling them lets snapshots / accuracy log / cross-
+// vendor analytics consume a uniform 6-month projection without
+// affecting purchase math.
+const FORECAST_HORIZON_DAYS = 180;
+// Cap on the number of monthly buckets surfaced. 180 days starting
+// mid-month spans 7 calendar months in the worst case (today's
+// partial month + 5 full + final partial); we truncate to 6 so
+// downstream consumers can rely on a fixed shape.
+const PROJECTION_MONTHS = 6;
+function trimMonthly(monthly) {
+  return Array.isArray(monthly) ? monthly.slice(0, PROJECTION_MONTHS) : monthly;
+}
+
 function num(x, d = 0) {
   const n = Number(x);
   return Number.isFinite(n) ? n : d;
@@ -234,11 +251,18 @@ function forecastStable({ series, lt, td, profABC, settings, today }) {
   // For full transparency we skip seasonality on STABLE — caller can opt
   // in by passing a seasonalProfile if desired.
 
-  const days = td;
-  const levelByDay = new Array(days).fill(level);
-  const seasonalFactorByDay = new Array(days).fill(1.0);
-  const proj = projectByDays({ days, levelByDay, seasonalFactorByDay, fromDate: today });
-  const coverageDemand = proj.total + safetyStock;
+  // Sprint 4 Fix 3: uniform 180d projection; coverage uses first td days.
+  const horizonDays = FORECAST_HORIZON_DAYS;
+  const levelByDay = new Array(horizonDays).fill(level);
+  const seasonalFactorByDay = new Array(horizonDays).fill(1.0);
+  const proj = projectByDays({ days: horizonDays, levelByDay, seasonalFactorByDay, fromDate: today });
+  const covProj = projectByDays({
+    days: td,
+    levelByDay: levelByDay.slice(0, td),
+    seasonalFactorByDay: seasonalFactorByDay.slice(0, td),
+    fromDate: today,
+  });
+  const coverageDemand = covProj.total + safetyStock;
 
   return {
     level,
@@ -248,7 +272,7 @@ function forecastStable({ series, lt, td, profABC, settings, today }) {
     safetyStock,
     sigmaLT: sigma,
     Z: z,
-    projection: { monthly: proj.monthly, total: proj.total },
+    projection: { monthly: trimMonthly(proj.monthly), total: proj.total },
     inputs: {
       window,
       mean60d: level,
@@ -297,7 +321,10 @@ function forecastSeasonalPeaked({ series, lt, td, profABC, settings, bundleSales
 
   // For each day in horizon, compute level_M from the surrounding months
   // last year × growthFactor. We use the month-of-year of `today + d`.
-  const days = td;
+  // Sprint 4 Fix 3: build over a uniform 180d horizon; coverage uses
+  // the first td days only so the waterfall keeps its current sizing.
+  const horizonDays = FORECAST_HORIZON_DAYS;
+  const days = horizonDays;
   const levelByDay = new Array(days);
   const factorByDay = new Array(days);
   const baseLevelToday = monthlyLY?.get(today.getMonth() + 1) || recentAvg || 0;
@@ -340,10 +367,20 @@ function forecastSeasonalPeaked({ series, lt, td, profABC, settings, bundleSales
   const proj = projectByDays({
     days, levelByDay, seasonalFactorByDay: factorByDay, fromDate: today,
   });
+  // Coverage proj is bound to vendor td so the waterfall sees the
+  // same number it always did. levelByDay already encodes the per-
+  // day shape, so slicing to td is exactly what the pre-Fix-3 code
+  // produced for that vendor.
+  const covProj = projectByDays({
+    days: td,
+    levelByDay: levelByDay.slice(0, td),
+    seasonalFactorByDay: factorByDay.slice(0, td),
+    fromDate: today,
+  });
 
   const { sigma, fallback: sigmaFallback } = sigmaLT(series, lt);
   const safetyStock = z * sigma;
-  const coverageDemand = proj.total + safetyStock;
+  const coverageDemand = covProj.total + safetyStock;
 
   // Decorate monthly entries with the damp that was used (for the panel)
   for (const m of proj.monthly) {
@@ -360,7 +397,7 @@ function forecastSeasonalPeaked({ series, lt, td, profABC, settings, bundleSales
     safetyStock,
     sigmaLT: sigma,
     Z: z,
-    projection: { monthly: proj.monthly, total: proj.total },
+    projection: { monthly: trimMonthly(proj.monthly), total: proj.total },
     inputs: {
       growthFactor,
       recentAvg60d: recentAvg,
@@ -407,12 +444,21 @@ function forecastGrowing({ series, lt, td, profABC, settings, today }) {
   const safetyMul = num(settings?.growingSafetyMultiplier, DEFAULTS.growingSafetyMultiplier);
   const safetyStock = z * sigma * safetyMul;
 
-  const days = td;
-  const levelByDay = new Array(days);
-  const factorByDay = new Array(days).fill(1);
-  for (let i = 0; i < days; i++) levelByDay[i] = Math.max(0, level + trend * i);
-  const proj = projectByDays({ days, levelByDay, seasonalFactorByDay: factorByDay, fromDate: today });
-  const coverageDemand = proj.total + safetyStock;
+  // Sprint 4 Fix 3: project over uniform 180d, then slice to td for
+  // coverage. The trend ramp continues linearly through the full
+  // horizon — first td values are identical to pre-Fix-3 output.
+  const horizonDays = FORECAST_HORIZON_DAYS;
+  const levelByDay = new Array(horizonDays);
+  const factorByDay = new Array(horizonDays).fill(1);
+  for (let i = 0; i < horizonDays; i++) levelByDay[i] = Math.max(0, level + trend * i);
+  const proj = projectByDays({ days: horizonDays, levelByDay, seasonalFactorByDay: factorByDay, fromDate: today });
+  const covProj = projectByDays({
+    days: td,
+    levelByDay: levelByDay.slice(0, td),
+    seasonalFactorByDay: factorByDay.slice(0, td),
+    fromDate: today,
+  });
+  const coverageDemand = covProj.total + safetyStock;
 
   return {
     level,
@@ -422,7 +468,7 @@ function forecastGrowing({ series, lt, td, profABC, settings, today }) {
     safetyStock,
     sigmaLT: sigma,
     Z: z,
-    projection: { monthly: proj.monthly, total: proj.total },
+    projection: { monthly: trimMonthly(proj.monthly), total: proj.total },
     inputs: {
       window: 30, mean30d: level, trendRaw, trend,
       cap, damp, profABC: profABC || null,
@@ -464,15 +510,22 @@ function forecastDeclining({ series, lt, td, profABC, settings, today }) {
   const floorPct = num(settings?.decliningProjectionFloor, DEFAULTS.decliningProjectionFloor);
   const levelFloor = level * Math.max(0, Math.min(1, floorPct));
 
-  const days = td;
-  const levelByDay = new Array(days);
-  const factorByDay = new Array(days).fill(1);
-  for (let i = 0; i < days; i++) {
+  // Sprint 4 Fix 3: project over uniform 180d, slice to td for coverage.
+  const horizonDays = FORECAST_HORIZON_DAYS;
+  const levelByDay = new Array(horizonDays);
+  const factorByDay = new Array(horizonDays).fill(1);
+  for (let i = 0; i < horizonDays; i++) {
     const projected = level + trend * i;
     levelByDay[i] = Math.max(levelFloor, projected);
   }
-  const proj = projectByDays({ days, levelByDay, seasonalFactorByDay: factorByDay, fromDate: today });
-  const coverageDemand = proj.total + safetyStock;
+  const proj = projectByDays({ days: horizonDays, levelByDay, seasonalFactorByDay: factorByDay, fromDate: today });
+  const covProj = projectByDays({
+    days: td,
+    levelByDay: levelByDay.slice(0, td),
+    seasonalFactorByDay: factorByDay.slice(0, td),
+    fromDate: today,
+  });
+  const coverageDemand = covProj.total + safetyStock;
 
   return {
     level,
@@ -482,7 +535,7 @@ function forecastDeclining({ series, lt, td, profABC, settings, today }) {
     safetyStock,
     sigmaLT: sigma,
     Z: z,
-    projection: { monthly: proj.monthly, total: proj.total },
+    projection: { monthly: trimMonthly(proj.monthly), total: proj.total },
     inputs: {
       window: 60, mean60d: level, trendRaw, trend,
       maxNegMag, damp, profABC: profABC || null,
@@ -514,12 +567,14 @@ function forecastIntermittent({ series, lt, td, profABC, settings, today }) {
 
   const level = ratePerDay;
   const safetyStock = avgWhenSelling; // 1 average sale of cushion
+  // Coverage analytic — independent of projection horizon.
   const coverageDemand = ratePerDay * td + safetyStock;
 
-  const days = td;
-  const levelByDay = new Array(days).fill(level);
-  const factorByDay = new Array(days).fill(1);
-  const proj = projectByDays({ days, levelByDay, seasonalFactorByDay: factorByDay, fromDate: today });
+  // Sprint 4 Fix 3: projection extended to 180d for uniform output.
+  const horizonDays = FORECAST_HORIZON_DAYS;
+  const levelByDay = new Array(horizonDays).fill(level);
+  const factorByDay = new Array(horizonDays).fill(1);
+  const proj = projectByDays({ days: horizonDays, levelByDay, seasonalFactorByDay: factorByDay, fromDate: today });
 
   return {
     level,
@@ -529,7 +584,7 @@ function forecastIntermittent({ series, lt, td, profABC, settings, today }) {
     safetyStock,
     sigmaLT: 0,
     Z: 0,
-    projection: { monthly: proj.monthly, total: proj.total },
+    projection: { monthly: trimMonthly(proj.monthly), total: proj.total },
     inputs: {
       totalDays, totalUnits, nonZeroDays,
       ratePerDay, avgWhenSelling,
@@ -548,12 +603,14 @@ function forecastIntermittent({ series, lt, td, profABC, settings, today }) {
 function forecastNewOrSparse({ series, lt, td, sheetDsr, settings, today }) {
   const cap = num(settings?.newSparseDsrCap, DEFAULTS.newSparseDsrCap);
   const level = Math.min(num(sheetDsr, 0), cap);
+  // Coverage analytic — independent of projection horizon.
   const coverageDemand = level * td;
 
-  const days = td;
-  const levelByDay = new Array(days).fill(level);
-  const factorByDay = new Array(days).fill(1);
-  const proj = projectByDays({ days, levelByDay, seasonalFactorByDay: factorByDay, fromDate: today });
+  // Sprint 4 Fix 3: projection extended to 180d for uniform output.
+  const horizonDays = FORECAST_HORIZON_DAYS;
+  const levelByDay = new Array(horizonDays).fill(level);
+  const factorByDay = new Array(horizonDays).fill(1);
+  const proj = projectByDays({ days: horizonDays, levelByDay, seasonalFactorByDay: factorByDay, fromDate: today });
 
   return {
     level,
@@ -563,7 +620,7 @@ function forecastNewOrSparse({ series, lt, td, sheetDsr, settings, today }) {
     safetyStock: 0,
     sigmaLT: 0,
     Z: 0,
-    projection: { monthly: proj.monthly, total: proj.total },
+    projection: { monthly: trimMonthly(proj.monthly), total: proj.total },
     inputs: {
       totalDays: series.length, sheetDsr, cap,
       targetDoc: td, leadTime: lt,
@@ -593,12 +650,19 @@ function forecastDormantRevived({ series, lt, td, profABC, settings, today }) {
   const wouldHaveSafetyStock = z * sigma * safetyMul;
   const safetyStock = 0;
 
-  const days = td;
-  const levelByDay = new Array(days).fill(level);
-  const factorByDay = new Array(days).fill(1);
-  const proj = projectByDays({ days, levelByDay, seasonalFactorByDay: factorByDay, fromDate: today });
-  const wouldHaveCoverageDemand = proj.total + wouldHaveSafetyStock;
-  const coverageDemand = proj.total + safetyStock; // == proj.total
+  // Sprint 4 Fix 3: project over uniform 180d, slice to td for coverage.
+  const horizonDays = FORECAST_HORIZON_DAYS;
+  const levelByDay = new Array(horizonDays).fill(level);
+  const factorByDay = new Array(horizonDays).fill(1);
+  const proj = projectByDays({ days: horizonDays, levelByDay, seasonalFactorByDay: factorByDay, fromDate: today });
+  const covProj = projectByDays({
+    days: td,
+    levelByDay: levelByDay.slice(0, td),
+    seasonalFactorByDay: factorByDay.slice(0, td),
+    fromDate: today,
+  });
+  const wouldHaveCoverageDemand = covProj.total + wouldHaveSafetyStock;
+  const coverageDemand = covProj.total + safetyStock; // == covProj.total
 
   return {
     level,
@@ -608,7 +672,7 @@ function forecastDormantRevived({ series, lt, td, profABC, settings, today }) {
     safetyStock,
     sigmaLT: sigma,
     Z: z,
-    projection: { monthly: proj.monthly, total: proj.total },
+    projection: { monthly: trimMonthly(proj.monthly), total: proj.total },
     inputs: {
       window: 30, mean30d: level, damp,
       profABC: profABC || null, servicePct, Z: z,

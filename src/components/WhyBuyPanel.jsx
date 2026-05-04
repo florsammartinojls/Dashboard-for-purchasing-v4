@@ -132,7 +132,11 @@ function BundleAuditCard({ bundle, segRec, vendor, vendorRec }) {
 
           {projection.monthly && projection.monthly.length > 0 && (
             <li>
-              <b>Per-month projection.</b>
+              {/* Sprint 4 Fix 3: projection is now uniform 180d (6 months)
+                  regardless of vendor targetDoc. Coverage demand below
+                  uses targetDoc only — the projection's footer total
+                  reflects the full 180d trajectory. */}
+              <b>Per-month projection (180d horizon).</b>
               <table className="w-full mt-1 text-[11px] border border-gray-800">
                 <thead className="bg-gray-900 text-gray-500 uppercase">
                   <tr>
@@ -180,8 +184,16 @@ function BundleAuditCard({ bundle, segRec, vendor, vendorRec }) {
           </li>
 
           <li>
+            {/* Sprint 4 Fix 3: coverage equation uses td-bound demand,
+                not the 180d projection.total. The displayed "demand"
+                here is coverageDemand − safety, which equals the
+                projection over targetDoc days (the figure that feeds
+                the waterfall). */}
             <b>Coverage demand (total).</b>{' '}
-            <span className="text-gray-300">{fmt0(projection.total)} + {fmt0(safety)} = {fmt0(total)} u</span>
+            <span className="text-gray-300">
+              {fmt0(Math.max(0, total - safety))} + {fmt0(safety)} = {fmt0(total)} u
+              {(inputs.targetDoc || bundle.targetDOC) ? ` (over ${inputs.targetDoc || bundle.targetDOC}d)` : ''}
+            </span>
           </li>
 
           <li>

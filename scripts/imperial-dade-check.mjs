@@ -116,3 +116,21 @@ console.log(` ${vendorName} — ${id}`);
 console.log('══════════════════════════════════════════════════');
 console.log('coreItem:', JSON.stringify(item, null, 2));
 console.log('\ncoreDetail:', JSON.stringify(detail, null, 2));
+
+// Sprint 4 Fix 3 sanity: projection.monthly length per segment.
+console.log('\n--- projection.monthly length check ---');
+const sampleVendors = [
+  ['Imperial Dade', 'USA targetDoc=90'],
+  ['Wuxi Topteam', 'China targetDoc=180'],
+];
+for (const [vName, label] of sampleVendors) {
+  const r = recs[vName];
+  if (!r || !r.bundleDetails || !r.bundleDetails.length) {
+    console.log(`  ${vName}: no rec`);
+    continue;
+  }
+  const lens = r.bundleDetails.map(bd => bd.forecast?.projection?.monthly?.length || 0);
+  const cdSamples = r.bundleDetails.slice(0, 3).map(bd => ({ b: bd.bundleId, cd: Math.round(bd.coverageDemand || 0), td: bd.targetDOC, mlen: bd.forecast?.projection?.monthly?.length || 0 }));
+  const minL = Math.min(...lens), maxL = Math.max(...lens);
+  console.log(`  ${vName} (${label}): bundles=${lens.length}, monthly len min=${minL} max=${maxL}; sample:`, JSON.stringify(cdSamples));
+}
