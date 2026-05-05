@@ -117,6 +117,21 @@ console.log('══════════════════════�
 console.log('coreItem:', JSON.stringify(item, null, 2));
 console.log('\ncoreDetail:', JSON.stringify(detail, null, 2));
 
+// Sprint 5 Fix 2 sanity: DV Plastics Core-11825 should appear with
+// finalQty>0 even if needPieces=0 (MOQ-inflated).
+console.log('\n--- Sprint 5 Fix 2: DV Plastics Core-11825 ---');
+const dv = recs['DV Plastics'];
+if (dv) {
+  const cd = (dv.coreDetails || []).find(x => x.coreId === 'Core-11825');
+  if (cd) {
+    console.log(`  needPieces=${cd.needPieces} finalQty=${cd.finalQty} cost=$${(cd.cost || 0).toFixed(2)}`);
+  } else {
+    console.log('  Core-11825 not in DV Plastics coreDetails');
+  }
+} else {
+  console.log('  DV Plastics not in vendorRecs (key mismatch?)');
+}
+
 // Sprint 4 Fix 3 sanity: projection.monthly length per segment.
 console.log('\n--- projection.monthly length check ---');
 const sampleVendors = [

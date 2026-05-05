@@ -86,7 +86,7 @@ function VendorsTab({ data, stg, goVendor, workflow, saveWorkflow, deleteWorkflo
       <button onClick={() => setFilterNeed(!filterNeed)} className={`text-xs px-3 py-2 rounded-lg font-medium ${filterNeed ? "bg-amber-600 text-white" : "bg-gray-800 border border-gray-700 text-gray-400"}`}>{filterNeed ? "Needs Buy ✓" : "Needs Buy"}</button>
     </div>
     {vSF.length > 0 ? <div className="space-y-1">{vSF.map(v => <div key={v.name} className="flex items-center gap-2 px-4 py-3 rounded-lg bg-gray-900/50 hover:bg-gray-800">
-      <button onClick={() => goVendor(v.name)} className="flex items-center gap-4 flex-1 text-left">
+      <button onClick={(e) => goVendor(v.name, e)} className="flex items-center gap-4 flex-1 text-left">
         <div className="flex gap-1 min-w-[80px]">{v.cr > 0 && <span className="text-xs bg-red-500/20 text-red-400 px-1.5 py-0.5 rounded font-semibold">{v.cr}</span>}{v.wa > 0 && <span className="text-xs bg-amber-500/20 text-amber-400 px-1.5 py-0.5 rounded font-semibold">{v.wa}</span>}<span className="text-xs bg-emerald-500/20 text-emerald-400 px-1.5 py-0.5 rounded">{v.he}</span></div>
         <span className="text-white font-medium flex-1">{v.name}</span>
         <div className="flex gap-3 text-xs text-gray-500"><span>{v.cores} cores</span><span>DSR:{D1(v.dsr)}</span>{v.needBuy > 0 && <span className="text-amber-400">{v.needBuy} need</span>}</div>
@@ -543,6 +543,24 @@ export default function App() {
     loadHistory();
   }, [loadLive, loadHistory]);
 
+  // Sprint 5 Fix 1: keep state in sync with browser back/forward when
+  // goVendor pushes URLs. Reads ?vendor= and ?tab= from the new URL
+  // and updates initV / tab without a reload. setState is idempotent
+  // so we don't bother diffing against the current value.
+  useEffect(() => {
+    const onPop = () => {
+      try {
+        const params = new URLSearchParams(window.location.search);
+        const v = params.get('vendor');
+        const t = params.get('tab');
+        if (v != null) setInitV(v || null);
+        if (t) setTab(t);
+      } catch {}
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
+
   const dataH = useMemo(() => ({
     ...data,
     _coreInv: data.coreInv,
@@ -790,20 +808,32 @@ export default function App() {
     lastUpdated: workerLastUpdated,
   } = useVendorRecsWorker(workerInput);
 
-  // ─── Sprint 4 Fix 4: weekly forecast snapshot ───
-  // Once the worker emits its first 'ready' result with non-empty
-  // vendorRecs, fire generateWeeklySnapshotIfDue. The function gates
-  // on a localStorage timestamp so it only POSTs once every 7 days
-  // even if the effect re-runs on every recompute. Errors (incl.
-  // unconfigured endpoint) are caught inside and surfaced via the
-  // optional onToast callback — they never propagate to the app.
+  // ─── Sprint 4 Fix 4 + Sprint 5 Fix 4: weekly forecast snapshot ───
+  // Sprint 5 hardening: gate on engineReady (live + history + worker
+  // all complete) AND on segment-distribution sanity. The first
+  // production snapshot fired before history finished hydrating —
+  // every bundle defaulted to NEW_OR_SPARSE, producing 1050 useless
+  // rows. Both checks together prevent that.
+  const engineReady = !liveStatus.loading && historyEverLoaded && workerStatus === 'ready';
   const [snapshotToast, setSnapshotToast] = useState(null);
   const snapshotFiredRef = useRef(false);
   useEffect(() => {
-    if (!vendorRecs) return;
-    if (Object.keys(vendorRecs).length === 0) return;
-    if (workerStatus !== 'ready') return;
+    if (!engineReady) return;
+    if (!vendorRecs || Object.keys(vendorRecs).length === 0) return;
     if (snapshotFiredRef.current) return;
+
+    // Segment-distribution sanity check. If history isn't fully loaded,
+    // segmentClassifier defaults to NEW_OR_SPARSE for everything. Any
+    // dataset where >80% of bundles fall there is suspicious; abort
+    // and let the next render attempt retry once classification settles.
+    const allDetails = Object.values(vendorRecs).flatMap(r => r?.bundleDetails || []);
+    if (allDetails.length === 0) return;
+    const newOrSparseCount = allDetails.filter(d => d.segment === 'NEW_OR_SPARSE').length;
+    if (newOrSparseCount / allDetails.length > 0.8) {
+      if (DEV) console.warn('[snapshot] Skipping: ' + newOrSparseCount + '/' + allDetails.length + ' bundles are NEW_OR_SPARSE — history likely not fully classified yet.');
+      return;
+    }
+
     snapshotFiredRef.current = true;
     generateWeeklySnapshotIfDue(vendorRecs, {
       onToast: (msg, kind) => {
@@ -811,16 +841,26 @@ export default function App() {
         if (DEV) console.log('[snapshot]', kind || 'info', msg);
       },
     });
-  }, [vendorRecs, workerStatus]);
+  }, [engineReady, vendorRecs]);
 
   // Manual trigger for dev console: window.__forceSnapshot()
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    window.__forceSnapshot = () => forceSnapshotNow(vendorRecs, {
-      onToast: (msg, kind) => setSnapshotToast({ msg, kind: kind || 'info' }),
-    });
+    window.__forceSnapshot = () => {
+      // Sprint 5 Fix 4: same gate as the auto path. Forcing a snapshot
+      // before the engine is ready was how we got 1050 NEW_OR_SPARSE
+      // rows on the first deploy — the manual path needs the same
+      // guard so it can't repeat that.
+      if (!engineReady) {
+        console.warn('[snapshot] forceSnapshotNow blocked: engine not ready (live/history/worker still loading)');
+        return Promise.resolve({ skipped: true, reason: 'engine_not_ready' });
+      }
+      return forceSnapshotNow(vendorRecs, {
+        onToast: (msg, kind) => setSnapshotToast({ msg, kind: kind || 'info' }),
+      });
+    };
     return () => { try { delete window.__forceSnapshot; } catch {} };
-  }, [vendorRecs]);
+  }, [vendorRecs, engineReady]);
 
 
   const sc = useMemo(() => {
@@ -847,7 +887,26 @@ export default function App() {
     else { setPrevTab(tab); setBundleId(id); setTab("bundle"); clearSum(); }
   }, [tab, panelCoreId, openPanelBundle, clearSum]);
 
-  const goVendor = useCallback(n => { window.open(window.location.pathname + '?vendor=' + encodeURIComponent(n), '_blank') }, []);
+  // Sprint 5 Fix 1: vendor navigation defaults to in-place. Each new
+  // tab is a full cold-start (banner + placeholders ~5-10s) — opening
+  // every vendor in a new tab made navigation feel slow even on warm
+  // IDB cache. In-place: switch tab to Purchasing, set initV, update
+  // URL silently. Ctrl/Cmd/middle-click preserves the open-in-new-tab
+  // workflow for buyers who want vendors side-by-side.
+  const goVendor = useCallback((n, evt) => {
+    if (!n) return;
+    const isModified = evt && (evt.ctrlKey || evt.metaKey || evt.shiftKey || evt.button === 1);
+    if (isModified) {
+      window.open(window.location.pathname + '?vendor=' + encodeURIComponent(n), '_blank');
+      return;
+    }
+    try {
+      const url = window.location.pathname + '?vendor=' + encodeURIComponent(n) + '&tab=purchasing';
+      window.history.pushState({ vendor: n, tab: 'purchasing' }, '', url);
+    } catch {}
+    setInitV(n);
+    setTab('purchasing');
+  }, []);
   const clearIV = useCallback(() => setInitV(null), []);
   const handleBackFromCore = useCallback(() => setTab("purchasing"), []);
   const handleBackFromBundle = useCallback(() => { if (prevTab === "core" && coreId) setTab("core"); else setTab("purchasing") }, [prevTab, coreId]);

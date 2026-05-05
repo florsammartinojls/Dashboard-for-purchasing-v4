@@ -209,6 +209,10 @@ if (!vendorRecs || !Object.keys(vendorRecs).length) vendorRecs = {};
       if (match) setVf(match.name);
     }
   }, [data.vendors]);
+  // Sprint 5 Fix 1 note: in-place vendor switching from App's goVendor
+  // (setInitV) is already handled by the existing initV-consumption
+  // effect at line ~303 below, which sets vm/vf and calls clearIV.
+  // No additional handler needed here.
   const [sort, setSort] = useState("status");
   // Sprint 3 Fix 9: status filter as a button bar instead of a select.
   // Allowed values: "needsbuy" (default), "" (All), "Buy", "Reviewing",
@@ -604,7 +608,12 @@ const rows = priceHistoryFull
       // Sprint 3 Fix 9: status filter is now a button bar.
       // "needsbuy" → only cores with positive engine recommendation.
       // "" → no filter. Other values are workflow statuses.
-      if (sf === 'needsbuy') { if (!(c.needQty > 0)) return false; }
+      // Sprint 5 Fix 2: gate on c.orderQty (= finalQty from waterfall),
+      // not c.needQty (= needPieces). MOQ-inflated cores have
+      // needPieces=0 but finalQty>0 — they ARE recommended buys and
+      // must surface under "Needs Buy Only" (e.g. DV Plastics
+      // Core-11825 at 408,000 pcs).
+      if (sf === 'needsbuy') { if (!(c.orderQty > 0)) return false; }
       else if (sf) {
         if ((workflowByCoreId[c.id] || '') !== sf) return false;
       }
@@ -733,8 +742,10 @@ const rows = priceHistoryFull
     //
     // Post-Sprint-2: the engine itself now filters inactive/ignored cores,
     // so this loop won't see them either. Extras are also gated on
-    // needPieces > 0 — a core the engine processed but doesn't ask to buy
-    // adds noise to the vendor card without adding decision value.
+    // (needPieces > 0 || finalQty > 0) — a core the engine processed
+    // but doesn't ask to buy adds noise. Sprint 5 Fix 2: include
+    // finalQty>0 so MOQ-inflated cores (needPieces=0, finalQty>0)
+    // still surface under the active vendor card.
     for (const [vName, rec] of Object.entries(effectiveRecs || {})) {
       if (!rec || !Array.isArray(rec.coreDetails)) continue;
       if (vf && vName !== vf) continue;
@@ -742,7 +753,7 @@ const rows = priceHistoryFull
       const present = new Set(g[vName].cores.map(c => c.id));
       for (const cd of rec.coreDetails) {
         if (present.has(cd.coreId)) continue;
-        if (!(cd.needPieces > 0)) continue;
+        if (!(cd.needPieces > 0 || cd.finalQty > 0)) continue;
         const raw = coresById[cd.coreId];
         if (!raw) continue;
         if (raw.active !== 'Yes' || raw.ignoreUntil) continue;
@@ -922,18 +933,33 @@ const rows = priceHistoryFull
     if (!rec || !rec.items?.length) { setToast("Nothing to fill"); return; }
     const u = { ...ov };
     let filled = 0;
+    // Sprint 5 Fix 3: collect IDs visible under the current filter so
+    // the toast can warn the operator about items that were filled
+    // but live outside the active filter (and are therefore invisible
+    // until the filter is changed).
+    const visibleIds = new Set();
+    (cores || []).forEach(c => visibleIds.add(c.id));
+    (bundles || []).forEach(b => visibleIds.add(b.j));
+    let hidden = 0;
     for (const item of rec.items) {
       if (item.finalQty > 0) {
         u[item.id] = { ...(u[item.id] || {}), pcs: item.finalQty };
         filled++;
+        if (visibleIds.size > 0 && !visibleIds.has(item.id)) hidden++;
       }
     }
     setOv(u);
     // Sprint 3 Fix 3: count of FILLED rows, not total items in rec.
-    // Previously the toast said "Filled N items" where N counted every
-    // item (incl. zero-qty rows from rejected MOQ-cap), which never
-    // matched the visible inputs.
-    setToast(filled > 0 ? `Filled ${filled} item${filled > 1 ? 's' : ''}` : "Nothing to fill");
+    // Sprint 5 Fix 3: append "(N hidden by current filter)" so the
+    // operator knows why some inputs aren't visible despite the toast
+    // claiming they were filled.
+    let msg;
+    if (filled === 0) msg = "Nothing to fill";
+    else {
+      msg = `Filled ${filled} item${filled > 1 ? 's' : ''}`;
+      if (hidden > 0) msg += ` (${hidden} hidden by current filter — change filter to see them)`;
+    }
+    setToast(msg);
   };
 
   const doFillMOQ = (grpCores, grpBundles, vendorMOQDollar) => {
@@ -1349,7 +1375,7 @@ const rows = priceHistoryFull
     )}
 
     {engineReady && vm === "core" && <div className="overflow-x-auto rounded-xl border border-gray-800"><table className="w-full"><thead><tr className="bg-gray-900/80 text-xs text-gray-400 uppercase sticky top-0 z-20"><th className="py-3 px-2 w-8" /><th className="py-3 px-2 text-left">Core</th><th className="py-3 px-2 text-left">Vendor</th><th className="py-3 px-2 text-left">Title</th><TH tip="DSR" className="py-3 px-2 text-right">DSR</TH><TH tip="7D" className="py-3 px-2 text-right">7D</TH><th className="py-3 px-2 text-center">T</th><TH tip="DOC" className="py-3 px-2 text-right">DOC</TH><TH tip="All-In" className="py-3 px-2 text-right">All-In</TH><th className="py-3 px-2 text-right">MOQ</th><th className="py-3 px-2 text-center">S</th><th className="py-3 px-1 border-l-2 border-blue-500/40" /><TH tip="Need (bundle-driven)" className="py-3 px-2 text-right text-blue-300">Need</TH><th className="py-3 px-2 text-right text-blue-300">Order</th><th className="py-3 px-2 text-right text-blue-300">Cost</th><TH tip="After DOC" className="py-3 px-2 text-right text-blue-300">After</TH><th className="py-3 px-2 w-14" /></tr></thead>
-      <tbody>{enr.map(c => <tr key={c.id} className={`border-b border-gray-800/50 hover:bg-gray-800/30 text-sm ${c.sCoverage?.urgent ? "bg-red-900/10" : ""}`}><td className="py-2 px-2"><Dot status={c.status} /></td><td className="py-2 px-2"><button onClick={() => goCore(c.id)} className="text-blue-400 font-mono text-xs hover:underline">{c.id}</button></td><td className="py-2 px-2 text-blue-300 text-xs truncate max-w-[100px] cursor-pointer hover:underline" onClick={() => goVendor(c.ven)}>{c.ven}</td><td className="py-2 px-2 text-gray-200 max-w-[260px]">
+      <tbody>{enr.map(c => <tr key={c.id} className={`border-b border-gray-800/50 hover:bg-gray-800/30 text-sm ${c.sCoverage?.urgent ? "bg-red-900/10" : ""}`}><td className="py-2 px-2"><Dot status={c.status} /></td><td className="py-2 px-2"><button onClick={() => goCore(c.id)} className="text-blue-400 font-mono text-xs hover:underline">{c.id}</button></td><td className="py-2 px-2 text-blue-300 text-xs truncate max-w-[100px] cursor-pointer hover:underline" onClick={(e) => goVendor(c.ven, e)}>{c.ven}</td><td className="py-2 px-2 text-gray-200 max-w-[260px]">
   <div className="flex items-center gap-1.5 flex-wrap">
     <span className="truncate max-w-[170px]">{c.ti}</span>
     {c.sCoverage?.urgent && <Flag type="OOS" />}
@@ -1445,7 +1471,7 @@ const rows = priceHistoryFull
       return <div key={v.name} className="mb-5 border border-gray-800 rounded-xl overflow-hidden">
         <div className="bg-gray-900 px-4 py-3">
           <div className="flex flex-wrap items-center gap-3 mb-2">
-            <span className="text-white font-semibold cursor-pointer hover:text-blue-400 hover:underline" onClick={() => window.open(window.location.pathname + '?vendor=' + encodeURIComponent(v.name), '_blank')}>{v.name}</span>
+            <span className="text-white font-semibold cursor-pointer hover:text-blue-400 hover:underline" onClick={(e) => goVendor(v.name, e)}>{v.name}</span>
             <div className="relative"><WorkflowChip id={v.name} type="vendor" workflow={data.workflow} onSave={saveWorkflow} onDelete={deleteWorkflow} buyer={stg.buyer} country={v.country} /></div>
             <div className="relative"><VendorNotes vendor={v.name} comments={data.vendorComments} onSave={saveVendorComment} buyer={stg.buyer} /></div>
             {v.country && <span className="text-xs text-gray-500">{v.country}</span>}
