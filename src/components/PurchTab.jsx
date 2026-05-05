@@ -1582,7 +1582,21 @@ const rows = priceHistoryFull
           </div>
         </div>
         <div className="overflow-auto max-h-[70vh] max-w-[calc(100vw-2rem)]"><table className="w-full text-xs"><thead><VTH isCol={anyCol} /></thead><tbody>
-          {vendorSub === "bundles" ? <>{grp.bundles.filter(b => nf !== "inorder" || hasBundleOrd(b)).map(b => <BundleRow key={b.j} b={b} />)}{grp.bundles.length === 0 && <tr><td colSpan={40} className="py-4 text-center text-gray-500">No bundles</td></tr>}</>
+          {vendorSub === "bundles" ? (() => {
+              // Sprint 7 Fix 1: apply Needs Buy Only to bundles via the
+              // waterfall's bundleDetails.buyNeed. Mirrors the cores'
+              // c.orderQty>0 gate (Sprint 5 Fix 2) so the filter has a
+              // consistent meaning across modes.
+              const filtered = grp.bundles.filter(b => {
+                if (sf === 'needsbuy' && !((bundleEffMap[b.j]?.buyNeed || 0) > 0)) return false;
+                if (nf === "inorder" && !hasBundleOrd(b)) return false;
+                return true;
+              });
+              return <>
+                {filtered.map(b => <BundleRow key={b.j} b={b} />)}
+                {filtered.length === 0 && <tr><td colSpan={40} className="py-4 text-center text-gray-500">No bundles</td></tr>}
+              </>;
+            })()
             : vendorSub === "mix" ? (() => {
               // Track bundle IDs we've already rendered nested under a core
               // so the trailing "engine extras" section doesn't duplicate.
@@ -1608,19 +1622,28 @@ const rows = priceHistoryFull
                   {showBundles && orderedBs.map((b, bi) => <BundleRow key={b.j} b={b} isLastOfBundles={bi === orderedBs.length - 1 && !isLast} />)}
                 </Fragment>;
               });
-              // Sprint 3 Fix 3 (Mix-mode tail): bundles surfaced via the
-              // vendorRec.bundleItems union (b.__fromRecOnly) that don't
-              // hang off any core in this card — typical for bundle-mode
-              // purchases where the underlying cores aren't bought as raw.
-              // Without this, the operator clicks Fill Rec, sees the
-              // "Filled N items" toast, but the engine-recommended bundles
-              // remain invisible.
+              // Sprint 3 Fix 3 + Sprint 7 Fix 1: Mix-mode tail surfaces
+              // every bundle in grp.bundles that isn't already nested
+              // under a visible core. Previously this was gated on
+              // b.__fromRecOnly, which only flags bundles whose vendor
+              // substring didn't match — a tiny subset. For 100%
+              // as-bundle vendors (e.g. WENZHOU YIBEI, 0 cores + 53
+              // as-bundle) the gate excluded every bundle and the
+              // table rendered empty despite the engine recommending
+              // 53 buys. The Needs Buy Only filter is also applied
+              // here using the waterfall's buyNeed so the operator
+              // sees what the engine actually wants to buy (mirrors
+              // Sprint 5 Fix 2 for cores).
               const extras = grp.bundles
-                .filter(b => b.__fromRecOnly && !shownBundleIds.has(b.j))
+                .filter(b => !shownBundleIds.has(b.j))
+                .filter(b => sf !== 'needsbuy' || ((bundleEffMap[b.j]?.buyNeed || 0) > 0))
                 .filter(b => nf !== "inorder" || hasBundleOrd(b));
+              // Header is meaningful only when the card also has cores —
+              // otherwise it's noise on a pure-bundle vendor card.
+              const showHeader = extras.length > 0 && grp.cores.length > 0;
               return <>
                 {coreRows}
-                {extras.length > 0 && (
+                {showHeader && (
                   <tr className="bg-gray-900/60">
                     <td colSpan={40} className="py-1.5 px-3 text-[10px] uppercase tracking-wider text-amber-300/80 border-t border-amber-500/30">
                       Engine-recommended bundles (not matched to a core in this card)
