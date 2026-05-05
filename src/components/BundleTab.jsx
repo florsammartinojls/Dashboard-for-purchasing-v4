@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useContext } from "react";
-import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
+import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine } from "recharts";
 import { R, D1, $, $2, P, MN, YC, TTP, gS, gY, cMo, fD, resolveVendorFromBundle } from "../lib/utils";
 import { Dot, TH, AbcBadge, HealthBadge, KillBadge, SumCtx, CopyableId } from "./Shared";
 import { SegmentCtx, WhyBuyCtx } from "../App";
@@ -149,40 +149,54 @@ export default function BundleTab({ data, stg, vendorRecs, hist, daily, bundleId
   // Price history (bundle-level YoY from history pipeline)
   const priceHist = useMemo(() => (hist?.priceHist || []).filter(h => h.j === sel).sort((a, b) => a.y === b.y ? a.m - b.m : a.y - b.y), [hist, sel]);
 
-  // Sprint 3 Fix 7: fallback when bundle-level priceHist is empty.
-  // Derive a monthly CPP series from priceCompFull (per-core PO history)
-  // for the bundle's primary core. CPP = totalCost/pcs, averaged per
-  // (year, month). NOT a substitute for the real bundle-price pipeline
-  // — it's per-core landed CPP, not bundle list price — but it gives
-  // the chart a usable curve when the backend's bundle-priceHist row
-  // set is empty for this JLS#. See Sprint 3 report § "Pipeline bugs".
-  const derivedPriceHist = useMemo(() => {
-    if (priceHist.length > 0 || !b?.core1) return [];
-    const rows = (data.priceCompFull || []).filter(r =>
-      r && r.core === b.core1 && Number(r.pcs) > 0 && Number(r.totalCost) > 0 && r.date
-    );
-    if (rows.length === 0) return [];
-    const byMonth = new Map();
-    for (const r of rows) {
-      const dt = new Date(r.date);
-      if (isNaN(dt.getTime())) continue;
-      const y = dt.getFullYear();
-      const m = dt.getMonth() + 1;
-      const cpp = Number(r.totalCost) / Number(r.pcs);
-      const k = y + '-' + m;
-      const cur = byMonth.get(k);
-      if (cur) { cur.sum += cpp; cur.n += 1; }
-      else byMonth.set(k, { j: b.j, y, m, sum: cpp, n: 1 });
-    }
-    return [...byMonth.values()]
-      .map(x => ({ j: x.j, y: x.y, m: x.m, avgPrice: x.sum / x.n }))
-      .sort((a, b) => a.y === b.y ? a.m - b.m : a.y - b.y);
-  }, [priceHist, data.priceCompFull, b]);
+ // === YoY series — all four metrics derive from hist.bundleSales ===
+  // Sprint 6 overhaul: replaces the priceHist + CPP fallback chain.
+  // bundleSales has ~95.6% avgPrice coverage and 100% profit coverage,
+  // so the legacy fallback path (derivedPriceHist using priceCompFull
+  // CPP) is no longer needed. Profit can be negative — null check is
+  // explicit (`!= null`), not truthy.
+  const pCh = useMemo(() => MN.map((m, i) => {
+    const r = { month: m };
+    uYrs.forEach(y => {
+      const x = bInv.find(h => h.y === y && h.m === i + 1);
+      r["p_" + y] = x?.avgPrice > 0 ? x.avgPrice : null;
+    });
+    return r;
+  }), [bInv, uYrs]);
 
-  const priceHistEffective = priceHist.length > 0 ? priceHist : derivedPriceHist;
-  const priceHistFallbackActive = priceHist.length === 0 && derivedPriceHist.length > 0;
-  const pYrs = useMemo(() => gY(priceHistEffective), [priceHistEffective]);
-  const pCh = useMemo(() => MN.map((m, i) => { const r = { month: m }; pYrs.forEach(y => { const x = priceHistEffective.find(h => h.y === y && h.m === i + 1); r["p_" + y] = x?.avgPrice ?? null }); return r }), [priceHistEffective, pYrs]);
+  const rCh = useMemo(() => MN.map((m, i) => {
+    const r = { month: m };
+    uYrs.forEach(y => {
+      const x = bInv.find(h => h.y === y && h.m === i + 1);
+      r["r_" + y] = x?.rev > 0 ? x.rev : null;
+    });
+    return r;
+  }), [bInv, uYrs]);
+
+  const profCh = useMemo(() => MN.map((m, i) => {
+    const r = { month: m };
+    uYrs.forEach(y => {
+      const x = bInv.find(h => h.y === y && h.m === i + 1);
+      r["pr_" + y] = x?.profit != null ? x.profit : null;
+    });
+    return r;
+  }), [bInv, uYrs]);
+
+  // Year totals (used in legends — weighted avg price = totalRev/totalUnits).
+  const totals = useMemo(() => {
+    const t = {};
+    uYrs.forEach(y => {
+      const rows = bInv.filter(h => h.y === y);
+      const totalRev = rows.reduce((s, x) => s + (x.rev || 0), 0);
+      const totalProfit = rows.reduce((s, x) => s + (x.profit || 0), 0);
+      const totalUnits = rows.reduce((s, x) => {
+        const u = x.units > 0 ? x.units : (x.avgDsr > 0 && x.dataDays > 0 ? Math.round(x.avgDsr * x.dataDays) : 0);
+        return s + u;
+      }, 0);
+      t[y] = { rev: totalRev, profit: totalProfit, avgPrice: totalUnits > 0 ? totalRev / totalUnits : null };
+    });
+    return t;
+  }, [bInv, uYrs]);
 
   // Active bundle filter set
   const activeBundleSet = useMemo(() => {
@@ -369,64 +383,93 @@ export default function BundleTab({ data, stg, vendorRecs, hist, daily, bundleId
       </div>
     </div>}
     {/* YoY Units (sum of Complete DSR) + Price History */}
+{/* === YoY Performance — Units → Price → Revenue → Profit === */}
     {bInv.length > 0 && <div className="bg-gray-900 rounded-xl p-4 mb-4 border border-gray-800">
-      <h3 className="text-white font-semibold text-sm mb-2">YoY Units & Price</h3>
-      <div className="flex flex-col lg:flex-row gap-4">
-        <div className="flex-1 min-w-0">
-          <ResponsiveContainer width="100%" height={240}>
-            <BarChart data={yD}>
+      <h3 className="text-white font-semibold text-sm mb-3">YoY Performance</h3>
+
+      <div className="space-y-5 mb-5">
+
+        {/* 1. UNITS */}
+        <div>
+          <h4 className="text-gray-400 text-xs font-semibold mb-1">Units</h4>
+          <ResponsiveContainer width="100%" height={180}>
+            <LineChart data={yD}>
               <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
               <XAxis dataKey="month" tick={{ fill: "#9ca3af", fontSize: 10 }} />
               <YAxis tick={{ fill: "#9ca3af", fontSize: 10 }} />
               <Tooltip {...TTP} formatter={(v) => v != null ? Math.round(v).toLocaleString('en-US') : '—'} />
-              <Legend />
-              {uYrs.map(y => <Bar key={y} dataKey={"u_" + y} fill={YC[y] || "#6b7280"} opacity={0.85} radius={[2, 2, 0, 0]} name={"Units " + y} />)}
-            </BarChart>
+              <Legend wrapperStyle={{ fontSize: 11 }} />
+              {uYrs.map(y => <Line key={y} dataKey={"u_" + y} stroke={YC[y] || "#6b7280"} strokeWidth={y === currentYear ? 3 : 1.5} dot={{ r: 2.5 }} connectNulls={false} name={`${y} (${R(uYTot[y])} u)`} />)}
+            </LineChart>
           </ResponsiveContainer>
-          <div className="mt-3">
-            <h4 className="text-gray-400 text-xs font-semibold mb-1 flex items-center gap-2">
-              YoY Price
-              {priceHistFallbackActive && (
-                <span className="text-[9px] font-normal text-amber-400/80 normal-case" title="Bundle-level price history is missing from the backend pipeline. Showing CPP (totalCost/pcs) derived from per-core PO history as a fallback. Numbers are landed cost per core piece, not bundle list price.">
-                  ⚠ derived from per-core CPP
-                </span>
-              )}
-            </h4>
-            {priceHistEffective.length > 0 ? (
-              <ResponsiveContainer width="100%" height={140}>
-                <LineChart data={pCh}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
-                  <XAxis dataKey="month" tick={{ fill: "#9ca3af", fontSize: 10 }} />
-                  <YAxis tick={{ fill: "#9ca3af", fontSize: 10 }} domain={['auto', 'auto']} />
-                  <Tooltip {...TTP} formatter={(v) => v != null ? Math.round(v).toLocaleString('en-US') : '—'} />
-                  <Legend />
-                  {pYrs.map(y => <Line key={y} dataKey={"p_" + y} stroke={YC[y] || "#6b7280"} strokeWidth={2} dot={{ r: 2 }} connectNulls name={"$" + y} />)}
-                </LineChart>
-              </ResponsiveContainer>
-            ) : (
-              <div className="border border-dashed border-gray-700 rounded p-4 text-center text-gray-500 text-xs">
-                No price history yet for this bundle.
-              </div>
-            )}
-          </div>
         </div>
-        <div className="lg:w-72 overflow-x-auto">
-          <table className="w-full text-xs">
+
+        {/* 2. AVG SELLING PRICE */}
+        <div>
+          <h4 className="text-gray-400 text-xs font-semibold mb-1">Avg selling price</h4>
+          <ResponsiveContainer width="100%" height={180}>
+            <LineChart data={pCh}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+              <XAxis dataKey="month" tick={{ fill: "#9ca3af", fontSize: 10 }} />
+              <YAxis tick={{ fill: "#9ca3af", fontSize: 10 }} domain={['auto', 'auto']} tickFormatter={(v) => '$' + v.toFixed(2)} />
+              <Tooltip {...TTP} formatter={(v) => v != null ? '$' + Number(v).toFixed(2) : '—'} />
+              <Legend wrapperStyle={{ fontSize: 11 }} />
+              {uYrs.map(y => <Line key={y} dataKey={"p_" + y} stroke={YC[y] || "#6b7280"} strokeWidth={y === currentYear ? 3 : 1.5} dot={{ r: 2.5 }} connectNulls={false} name={totals[y]?.avgPrice != null ? `${y} ($${totals[y].avgPrice.toFixed(2)} avg)` : `${y}`} />)}
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+
+        {/* 3. REVENUE */}
+        <div>
+          <h4 className="text-gray-400 text-xs font-semibold mb-1">Revenue</h4>
+          <ResponsiveContainer width="100%" height={180}>
+            <LineChart data={rCh}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+              <XAxis dataKey="month" tick={{ fill: "#9ca3af", fontSize: 10 }} />
+              <YAxis tick={{ fill: "#9ca3af", fontSize: 10 }} tickFormatter={(v) => '$' + (v >= 1000 ? (v/1000).toFixed(1) + 'k' : v.toFixed(0))} />
+              <Tooltip {...TTP} formatter={(v) => v != null ? $(v) : '—'} />
+              <Legend wrapperStyle={{ fontSize: 11 }} />
+              {uYrs.map(y => <Line key={y} dataKey={"r_" + y} stroke={YC[y] || "#6b7280"} strokeWidth={y === currentYear ? 3 : 1.5} dot={{ r: 2.5 }} connectNulls={false} name={`${y} (${$(totals[y]?.rev || 0)} total)`} />)}
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+
+        {/* 4. PROFIT — with breakeven reference line */}
+        <div>
+          <h4 className="text-gray-400 text-xs font-semibold mb-1 flex items-center gap-2">
+            Profit
+            <span className="text-[10px] font-normal text-gray-500 normal-case">dashed = breakeven</span>
+          </h4>
+          <ResponsiveContainer width="100%" height={180}>
+            <LineChart data={profCh}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+              <XAxis dataKey="month" tick={{ fill: "#9ca3af", fontSize: 10 }} />
+              <YAxis tick={{ fill: "#9ca3af", fontSize: 10 }} tickFormatter={(v) => '$' + (Math.abs(v) >= 1000 ? (v/1000).toFixed(1) + 'k' : v.toFixed(0))} />
+              <Tooltip {...TTP} formatter={(v) => v != null ? $(v) : '—'} />
+              <Legend wrapperStyle={{ fontSize: 11 }} />
+              <ReferenceLine y={0} stroke="#6b7280" strokeDasharray="4 4" />
+              {uYrs.map(y => <Line key={y} dataKey={"pr_" + y} stroke={YC[y] || "#6b7280"} strokeWidth={y === currentYear ? 3 : 1.5} dot={{ r: 2.5 }} connectNulls={false} name={`${y} (${$(totals[y]?.profit || 0)} total)`} />)}
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+
+      </div>
+
+      {/* YoY Units Table — sin cambios desde Sprint 3 Fix 12 */}
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs max-w-2xl">
           <thead><tr className="text-gray-500">
-              <th className="py-1 px-1 text-left">Mo</th>
-              {uYrs.map((y, yi) => <th key={y} className="py-1 px-1 text-right" style={{ color: YC[y] || "#6b7280" }}>{y}</th>)}
-              {uYrs.length >= 2 && <th className="py-1 px-1 text-right text-gray-500">Var %<br/>{String(uYrs[uYrs.length - 1]).slice(-2)} vs {String(uYrs[uYrs.length - 2]).slice(-2)}</th>}
-            </tr></thead>
-            <tbody>
-              {yD.map((r, i) => {
-                // Sprint 3 Fix 12: month index (1-12) for the row.
-                const monthIdx = MN.indexOf(r.month) + 1;
-                return <tr key={i} className={i % 2 === 0 ? "bg-gray-800/20" : ""}>
+            <th className="py-1 px-1 text-left">Mo</th>
+            {uYrs.map((y) => <th key={y} className="py-1 px-1 text-right" style={{ color: YC[y] || "#6b7280" }}>{y}</th>)}
+            {uYrs.length >= 2 && <th className="py-1 px-1 text-right text-gray-500">Var %<br/>{String(uYrs[uYrs.length - 1]).slice(-2)} vs {String(uYrs[uYrs.length - 2]).slice(-2)}</th>}
+          </tr></thead>
+          <tbody>
+            {yD.map((r, i) => {
+              const monthIdx = MN.indexOf(r.month) + 1;
+              return <tr key={i} className={i % 2 === 0 ? "bg-gray-800/20" : ""}>
                 <td className="py-0.5 px-1 text-gray-300">{r.month}</td>
-              {uYrs.map((y) => {
+                {uYrs.map((y) => {
                   const raw = r["u_" + y];
-                  // Past month with no recorded sales → render explicit 0
-                  // (avoids confusion with "no data"). Future month → "—".
                   let display;
                   if (raw != null) display = R(raw);
                   else if (isMonthInFuture(y, monthIdx)) display = "—";
@@ -437,7 +480,6 @@ export default function BundleTab({ data, stg, vendorRecs, hist, daily, bundleId
                 {uYrs.length >= 2 && (() => {
                   const curY = uYrs[uYrs.length - 1];
                   const prevY = uYrs[uYrs.length - 2];
-                  // Treat past-month nulls as 0 for the variance calc, future as null.
                   const norm = (raw, y) => {
                     if (raw != null) return raw;
                     if (isMonthInPast(y, monthIdx)) return 0;
@@ -450,23 +492,23 @@ export default function BundleTab({ data, stg, vendorRecs, hist, daily, bundleId
                   return <td className={`py-0.5 px-1 text-right ${pct == null ? "text-gray-600" : pct >= 0 ? "text-emerald-400" : "text-red-400"}`} title={prev != null ? `${curY}: ${cur ?? "—"} vs ${prevY}: ${prev}` : ""}>{pct != null ? (pct >= 0 ? "+" : "") + pct.toFixed(0) : "—"}</td>;
                 })()}
               </tr>;
-              })}
-            <tr className="border-t border-gray-700 font-semibold">
-                <td className="py-1 px-1">Total</td>
-                {uYrs.map(y => <SC key={y} v={uYTot[y]} className="py-1 px-1 text-right text-white">{R(uYTot[y])}</SC>)}
-                {uYrs.length >= 2 && (() => {
-                  const curY = uYrs[uYrs.length - 1];
-                  const prevY = uYrs[uYrs.length - 2];
-                  const cur = uYTot[curY];
-                  const prev = uYTot[prevY];
-                  const pct = prev > 0 ? ((cur - prev) / prev * 100) : null;
-                  return <td className={`py-1 px-1 text-right ${pct == null ? "text-gray-600" : pct >= 0 ? "text-emerald-400" : "text-red-400"}`}>{pct != null ? (pct >= 0 ? "+" : "") + pct.toFixed(0) : "—"}</td>;
-                })()}
-              </tr>
-            </tbody>
-          </table>
-        </div>
+            })}
+           <tr className="border-t border-gray-700 font-semibold">
+              <td className="py-1 px-1">Total</td>
+              {uYrs.map(y => <SC key={y} v={uYTot[y]} className="py-1 px-1 text-right text-white">{R(uYTot[y])}</SC>)}
+              {uYrs.length >= 2 && (() => {
+                const curY = uYrs[uYrs.length - 1];
+                const prevY = uYrs[uYrs.length - 2];
+                const cur = uYTot[curY];
+                const prev = uYTot[prevY];
+                const pct = prev > 0 ? ((cur - prev) / prev * 100) : null;
+                return <td className={`py-1 px-1 text-right ${pct == null ? "text-gray-600" : pct >= 0 ? "text-emerald-400" : "text-red-400"}`}>{pct != null ? (pct >= 0 ? "+" : "") + pct.toFixed(0) : "—"}</td>;
+              })()}
+            </tr>
+          </tbody>
+        </table>
       </div>
+
     </div>}
   </div>;
 }
