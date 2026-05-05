@@ -349,7 +349,12 @@ export function calcVendorRecommendationV4({
       if (!r || !r.core) continue;
       const rv = (r.vendor || '').toLowerCase().trim();
       if (rv !== vNameLower) continue;
-      const pcs = Number(r.pieces);
+      // Sprint 8 Fix 1: receiving rows expose `pcs`, not `pieces`. Reading
+      // `r.pieces` (undefined) made the guard skip every row, leaving
+      // typicalPoSizeByCore empty for all 1097 cores. With the field name
+      // corrected, the median-of-last-5 logic finally has data to work on
+      // and downstream Sprint 3 Fix 8 / Sprint 8 Fix 3 actually fire.
+      const pcs = Number(r.pcs);
       if (!(pcs > 0)) continue;
       const cid = r.core;
       let arr = byCore.get(cid);
@@ -572,6 +577,54 @@ export function calcVendorRecommendationV4({
     void moqDocThresh; // legacy v3 threshold no longer used; kept import path stable
   }
 
+  // ─── STEP 8.5: Core sanity cap (Sprint 8 Fix 2) ──────────────
+  // Restored from v3.2; silently dropped in v4 PR4. If a core's
+  // all-in already covers more than targetDoc * 1.1 days, force
+  // dependent bundles' buyNeed to 0 BEFORE aggregation. Excludes
+  // SEASONAL_PEAKED (their flat targetDoc underestimates upcoming
+  // peak demand). For bundle-mode buys, only caps when ALL cores
+  // of the bundle are healthy — partial coverage doesn't justify
+  // cancelling the assembled-bundle order.
+  //
+  // The narrower 1.2-ratio check that follows aggregation
+  // (~30 lines below) is left in place: it operates on
+  // coreNeedMap post-aggregation and is complementary, not
+  // redundant — STEP 8.5 zeros at the bundle level so its effect
+  // propagates into coreNeedMap; the 1.2 check then mops up any
+  // residual aggregation that still over-covers.
+  const CORE_SANITY_CAP_RATIO = 1.1;
+  for (const c of vendorCores) {
+    const cAllIn = num(c.raw) + num(c.pp) + num(c.inb) + num(c.fba);
+    const cDsr = num(c.dsr);
+    if (cDsr <= 0) continue;
+    const cDoc = cAllIn / cDsr;
+    if (cDoc <= targetDoc * CORE_SANITY_CAP_RATIO) continue;
+    for (const b of prepped) {
+      if (b.buyNeed <= 0) continue;
+      if (b.segment === 'SEASONAL_PEAKED') continue;
+      const usesThisCore = b.coresUsed.some(({ coreId }) => coreId === c.id);
+      if (!usesThisCore) continue;
+      if (b.buyMode === 'bundle') {
+        const allCoresHealthy = b.coresUsed.every(({ coreId }) => {
+          const oc = vCoreById[coreId];
+          if (!oc) return false;
+          const ocAllIn = num(oc.raw) + num(oc.pp) + num(oc.inb) + num(oc.fba);
+          const ocDsr = num(oc.dsr);
+          return ocDsr > 0 && (ocAllIn / ocDsr) > targetDoc * CORE_SANITY_CAP_RATIO;
+        });
+        if (!allCoresHealthy) continue;
+      }
+      b.coreSanityCap = {
+        reason: 'core_already_covered',
+        coreId: c.id,
+        coreDoc: Math.round(cDoc),
+        targetDoc,
+        cappedFromBuyNeed: b.buyNeed,
+      };
+      b.buyNeed = 0;
+    }
+  }
+
   // aggregate to core
   const coreNeedMap = {};
   const coreBundlesMap = {};
@@ -670,8 +723,56 @@ export function calcVendorRecommendationV4({
     // Sprint 3 Fix 8: Below-typical-PO warning. Fires only when the
     // engine actually recommends a buy (finalQty>0), there's PO history
     // (typicalPoSize defined), and the recommendation falls below 30%
-    // of the typical size. Doesn't affect finalQty.
+    // of the typical size. Doesn't affect finalQty by itself.
     const typicalPoSize = typicalPoSizeByCore[coreId] ?? null;
+
+    // Sprint 8 Fix 3: typical-PO enforcement. The vendor's median PO
+    // size is an implicit MOQ — buying below it produces token orders
+    // (a $1 buy of 2 pieces is the canonical bug). Two outcomes:
+    //   - overshootRatio (typical / need) <= 3.0 → raise finalQty to
+    //     typicalPoSize. Cost recomputed at the same per-piece rate
+    //     so the moqInflated / excess fields stay coherent.
+    //   - overshootRatio > 3.0 → defer (finalQty=0, cost=0). Same
+    //     threshold as moqInflationHardCap so we apply a single
+    //     overshoot policy across MOQ and typical-PO. Skips when
+    //     finalQty already meets/exceeds typical, when there's no
+    //     PO history, when needPieces=0, or when MOQ already
+    //     rejected the buy (finalQty=0 from moq_cap_exceeded).
+    const TYPICAL_PO_OVERSHOOT_CAP = 3.0;
+    let typicalPoEnforced = null;
+    if (typicalPoSize && typicalPoSize > 0 && finalQty > 0 && needPieces > 0) {
+      if (finalQty < typicalPoSize) {
+        const overshootRatio = typicalPoSize / needPieces;
+        if (overshootRatio > TYPICAL_PO_OVERSHOOT_CAP) {
+          typicalPoEnforced = {
+            action: 'deferred',
+            reason: 'typical_po_overshoot',
+            typicalPoSize,
+            needPieces,
+            overshootRatio: +overshootRatio.toFixed(2),
+            originalFinalQty: finalQty,
+            originalCost: costApplied,
+          };
+          finalQty = 0;
+          costApplied = 0;
+          excessFromMoq = 0;
+          excessCostFromMoq = 0;
+        } else {
+          const newCost = (costApplied / Math.max(1, finalQty)) * typicalPoSize;
+          typicalPoEnforced = {
+            action: 'raised',
+            reason: 'matched_typical_po',
+            typicalPoSize,
+            needPieces,
+            previousFinalQty: finalQty,
+            previousCost: costApplied,
+          };
+          finalQty = typicalPoSize;
+          costApplied = newCost;
+        }
+      }
+    }
+
     const poSizeWarning = !!(
       typicalPoSize && typicalPoSize > 0 && finalQty > 0 &&
       finalQty < typicalPoSize * 0.3
@@ -703,6 +804,7 @@ export function calcVendorRecommendationV4({
       moqCapDetail,
       typicalPoSize,
       poSizeWarning,
+      typicalPoEnforced,
     });
   }
 
@@ -795,6 +897,9 @@ export function calcVendorRecommendationV4({
     bundleMoqExtraDOC: b.bundleMoqExtraDOC || 0,
     bundleMoqOriginalNeed: b.bundleMoqOriginalNeed ?? b.buyNeed,
     bundleMoqOptions: b.bundleMoqOptions || null,
+    // Sprint 8 Fix 2: present when STEP-8.5 zeroed the bundle's
+    // buyNeed because its core(s) already cover > targetDoc * 1.1.
+    coreSanityCap: b.coreSanityCap || null,
     forecast: {
       level: b.forecast.level,
       trend: b.forecast.trend,
@@ -906,6 +1011,10 @@ export function calcVendorRecommendationV4({
       moqCapDetail: item?.moqCapDetail || null,
       typicalPoSize: item?.typicalPoSize ?? null,
       poSizeWarning: !!item?.poSizeWarning,
+      // Sprint 8 Fix 3: 'raised' or 'deferred' when the typical-PO
+      // policy modified finalQty; null when the engine's number is
+      // unchanged.
+      typicalPoEnforced: item?.typicalPoEnforced ?? null,
     };
   });
 
